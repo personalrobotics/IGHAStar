@@ -1,0 +1,52 @@
+# ROS IGHAStar Kinodynamic Planner Configuration
+# Based on hound_mppi_planner.yaml but simplified for ROS example
+
+# Path to the IGHAStar source folder
+folder_path: /home/stark/catkin_ws/src/ighastar
+
+# Map processing parameters
+generate_corridor: false
+blur_kernel: 0
+lethal_slope: 45  # Maximum slope angle in degrees
+
+# Planner configuration
+experiment_info_default:
+  resolution: 2.0
+  epsilon: [2.0, 2.0, 0.2, 5.0]  # ate, cte, heading, vel
+  tolerance: 0.5
+  max_level: 5
+  division_factor: 2
+  max_expansions: 5000
+  hysteresis: 1000
+  node_info:
+    node_type: "kinodynamic"
+    length: 2.6  # Vehicle length in meters
+    width: 1.6   # Vehicle width in meters
+    map_res: 0.1  # Map resolution in meters per pixel
+    dt: 0.05     # Time step for simulation
+    timesteps: 10
+    step_size: 1.0
+    steering_list: [-25.0, -10.0, 0.0, 10.0, 25.0]  # Steering angles in degrees
+    throttle_list: [-5.0, -2.0, 0.0, 2.0, 5.0]     # Throttle values
+    del_theta: 90.0  # Angular resolution in degrees
+    del_vel: 2.5     # Velocity resolution
+    RI: 0.8          # Rollover index threshold
+    max_vert_acc: 3.0  # Maximum vertical acceleration
+    min_vel: -10.0   # Minimum velocity
+    max_vel: 10.0    # Maximum velocity
+    max_theta: 30.0  # Maximum pitch/roll angle in degrees
+    gear_switch_time: 1.0  # Cost for gear switching
+
+# ROS topics (can be overridden via parameters)
+ros_topics:
+  odometry: "/odom"
+  grid_map: "/elevation_mapping/elevation_map_cropped_cv2"
+  path: "/ighastar/path"
+  goal_marker: "/ighastar/goal"
+  status: "/ighastar/status"
+
+# Planning parameters
+planning:
+  frequency: 1.0  # Hz
+  goal_tolerance: 2.0  # meters
+  max_planning_time: 5.0  # seconds 

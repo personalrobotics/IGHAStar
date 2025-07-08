@@ -1,0 +1,38 @@
+map: 
+  name: "Berlin_0_1024.png"
+  dir: "Maps/street-png"
+  start: [94.5, 19.5, 2.8284062641509644]
+  goal: [38.7, 81.6, 0.6324707282184407]
+  # uncomment for the second test case
+  # start: [17.6, 72.0, 0.9402905929256757]
+  # goal: [40.3, 16.9, 1.0911003058968491]
+  size: [1024, 1024]
+  res: &map_res 0.1
+
+experiment_info_default:
+  resolution: 4.0
+  epsilon: [5, 5, 0.2, 5.0] # ate, cte, heading, vel
+  tolerance: 0.5
+  max_level: 5
+  division_factor: 2  # Example division factor
+  max_expansions: 100000
+  hysteresis: 20000
+  node_info:
+    node_type: "kinematic"
+    length: 2.6
+    width: 1.6
+    map_res: *map_res
+    dt: 0.05
+    timesteps: 10
+    step_size: 1.0
+    steering_list: [-25.0, -10.0, 0.0, 10.0, 25.0] # in degrees.
+    throttle_list: [-5.0, 5.0]
+    del_theta: 90.0 # in degrees
+    max_theta: 30.0 # in degrees
+    # the following parameters are not used in kinematic planning, they're here for compatibility/may be removed.
+    del_vel: 2.5
+    RI: 0.8
+    max_vert_acc: 3.0
+    min_vel: -10.0
+    max_vel:  10.0
+    gear_switch_time: 0.0 # multiply the distance in the reverse direction

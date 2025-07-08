@@ -1,0 +1,328 @@
+# IGHAStar Project .gitignore
+
+Global_Planning_Waypoints/
+MPC/
+src/IGHAStarClass.py
+src/Nodes.py
+src/analytical_bicycle.cpp
+scripts/map_generation.py
+scripts/Planner_vis.py
+scripts/IGHAStarCpp.py
+scripts/test_case_generation.py
+examples/ros_kinodynamic_example.py
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyTorch JIT compilation
+*.pt
+*.pth
+
+# PyTorch C++ extensions
+*.so
+*.dylib
+*.dll
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Conda
+.conda/
+conda-meta/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# C++ and CUDA
+*.o
+*.obj
+*.exe
+*.out
+*.app
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.dSYM/
+*.su
+*.idb
+*.pdb
+*.ilk
+*.exp
+*.manifest
+*.spec
+
+# CUDA specific
+*.cubin
+*.ptx
+*.fatbin
+*.cubin.bin
+*.ptx.bin
+*.fatbin.bin
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# Build directories
+build/
+bin/
+lib/
+obj/
+Debug/
+Release/
+x64/
+x86/
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ROS
+*.bag
+*.bag.active
+*.bag.bak
+*.bag.info
+*.bag.orig.active
+*.bag.orig.bak
+*.bag.orig.info
+*.bag.orig.meta
+*.bag.orig.yaml
+*.bag.yaml
+*.bag.meta
+
+# ROS build artifacts
+build/
+devel/
+install/
+logs/
+.catkin_tools/
+
+# ROS package specific
+*.launch.bak
+*.yaml.bak
+*.xml.bak
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.pid
+*.seed
+*.pid.lock
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows
+*.lnk
+
+# Linux
+*~
+
+# macOS
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Project specific
+# Compiled C++ extensions
+src/*.so
+src/*.dylib
+src/*.dll
+
+# Temporary test files
+test_*.py
+*_test.py
+test_*.cpp
+*_test.cpp
+
+# Large data files
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.mat
+
+# Model files (if they're large)
+*.pth
+*.pt
+*.onnx
+*.pb
+
+# Configuration files with sensitive data
+config/local_*.yml
+config/local_*.yaml
+config/private_*.yml
+config/private_*.yaml
+
+# Debug and profiling
+*.prof
+*.trace
+*.callgrind
+*.cache
+
+# Coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Documentation builds
+docs/_build/
+docs/build/
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+
+# Large experiment results
+results/
+experiments/
+outputs/
+logs/
+
+# Temporary directories
+tmp/
+temp/
+scratch/
+
+# Docker
+.dockerignore
+Dockerfile.bak
+
+# Git
+.git/
+.gitignore.bak
+
+# Archive files
+*.tar
+*.tar.gz
+*.tar.bz2
+*.zip
+*.rar
+*.7z
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Network files
+*.pcap
+*.cap
+
+# Security
+*.key
+*.pem
+*.crt
+*.csr
+*.p12
+*.pfx
+*.pwd
+
+# Local environment files
+.env.local
+.env.development
+.env.test
+.env.production 
