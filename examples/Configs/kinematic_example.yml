@@ -3,11 +3,15 @@ map:
   dir: "Maps/street-png"
   start: [94.5, 19.5, 2.8284062641509644]
   goal: [38.7, 81.6, 0.6324707282184407]
-  # uncomment for the second test case
-  # start: [17.6, 72.0, 0.9402905929256757]
-  # goal: [40.3, 16.9, 1.0911003058968491]
   size: [1024, 1024]
   res: &map_res 0.1
+  test_cases:
+    case1:
+      start: [94.5, 19.5, 2.8284062641509644]
+      goal: [38.7, 81.6, 0.6324707282184407]
+    case2:
+      start: [17.6, 72.0, 0.9402905929256757]
+      goal: [40.3, 16.9, 1.0911003058968491]
 
 experiment_info_default:
   resolution: 4.0

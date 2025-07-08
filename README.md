@@ -1,6 +1,6 @@
 # IGHAStar
 
-A hierarchical A* path planning library with support for both kinematic and kinodynamic planning, featuring GPU acceleration via CUDA and CPU fallback.
+## TODO: add a nice description of what the planner is about
 
 ## Installation
 
@@ -10,74 +10,52 @@ git clone https://github.com/your-username/ighastar.git
 cd ighastar
 ```
 
-### 2. Set Up Conda Environment (Recommended)
-The project includes a conda environment file for easy dependency management:
-
+### 2. Set Up Conda Environment
 ```bash
 conda env create -f ighastar.yml
 conda activate ighastar
 ```
 
-This will install all required dependencies including:
-- Python 3.8.13
-- PyTorch 1.13.1
-- NumPy 1.24.3
-- Cython 0.29.34
-- matplotlib 3.7.1
-- tqdm
-
-### 3. Build the C++ Extensions
-The project uses dynamic compilation, so no separate build step is required. The C++ extensions will be compiled automatically when you run the examples.
+The project uses dynamic compilation, so C++ extensions will be compiled automatically when you run the examples.
 
 ## Usage
 
-### Running Examples
+### Running the Standalone Example
 
-The project includes several example scripts demonstrating different use cases:
+The main example script supports different planning modes through configuration files:
 
-#### Basic Examples
 ```bash
-# Kinematic planning example
-python examples/kinematic_example.py
+# Use default kinematic configuration
+python examples/standalone_example.py
 
-# Kinodynamic planning example  
-python examples/kinodynamic_example.py
+# Specify a different configuration file
+python examples/standalone_example.py --config examples/Configs/kinodynamic_example.yml
 
-# Simple planning example
-python examples/simple_example.py
-```
+# Use simple planning configuration
+python examples/standalone_example.py --config examples/Configs/simple_example.yml
 
-#### Benchmarking
-```bash
-# Run performance benchmarks
-python examples/benchmark.py
-```
-
-#### PyTorch Integration Test
-```bash
-# Test PyTorch and CUDA integration
-python examples/pytorch_C_test.py
+# Use a specific test case
+python examples/standalone_example.py --config examples/Configs/kinematic_example.yml --test-case case2
 ```
 
 ### ROS Integration Example
 
-For ROS integration, a minimal ROS example is provided that demonstrates how to use IGHAStar with ROS topics:
+For ROS integration, a minimal ROS example is provided:
 
 ```bash
-# Run the ROS example directly
 python examples/ros_kinodynamic_example.py
 ```
 
 This example:
 1. Subscribes to `/odom` for vehicle state
-2. Subscribes to `/elevation_mapping/elevation_map_cropped_cv2` for terrain data
+2. Subscribes to `/elevation_map` for terrain data
 3. Publishes planned paths to `/ighastar/path`
 4. Publishes goal markers to `/ighastar/goal`
 5. Uses kinodynamic planning with real-time map updates
 
 **Required ROS Topics:**
 - **Input**: `/odom` (nav_msgs/Odometry) - Vehicle pose and velocity
-- **Input**: `/elevation_mapping/elevation_map_cropped_cv2` (grid_map_msgs/GridMap) - Terrain elevation map
+- **Input**: `/elevation_map` (grid_map_msgs/GridMap) - Terrain elevation map
 - **Output**: `/ighastar/path` (nav_msgs/Path) - Planned trajectory
 - **Output**: `/ighastar/goal` (visualization_msgs/MarkerArray) - Goal visualization
 
@@ -85,7 +63,7 @@ This example:
 
 ### Configuration
 
-The examples use configuration files located in `examples/Configs/`. The configuration includes:
+Configuration files are located in `examples/Configs/` and include:
 
 - **Vehicle Parameters**: Length, width, maximum velocity, steering limits
 - **Planning Parameters**: Resolution, tolerance, epsilon values
@@ -99,7 +77,12 @@ The examples use configuration files located in `examples/Configs/`. The configu
 
 #### Modifying Start and Goal Points
 
-To change the start and goal positions for path planning, edit the configuration file:
+To change the start and goal positions for path planning, you can either:
+
+1. **Edit the configuration file** to modify the default start/goal or add test cases
+2. **Use the `--test-case` argument** to select from predefined test cases
+
+**Configuration file structure:**
 
 **For Kinematic Planning:**
 ```yaml
@@ -110,6 +93,13 @@ map:
   goal: [38.7, 81.6, 0.6324707282184407]   # [x, y, heading]
   size: [1024, 1024]
   res: 0.1
+  test_cases:
+    case1:
+      start: [94.5, 19.5, 2.8284062641509644]
+      goal: [38.7, 81.6, 0.6324707282184407]
+    case2:
+      start: [17.6, 72.0, 0.9402905929256757]
+      goal: [40.3, 16.9, 1.0911003058968491]
 ```
 
 **For Kinodynamic Planning:**
@@ -121,6 +111,13 @@ map:
   goal: [21.1, 46.1, 0.608009209539623, 4.516091247319389, 0] # [x, y, heading, velocity, unused]
   size: [512, 512]
   res: 0.1
+  test_cases:
+    case1:
+      start: [5.6, 8.9, 1.5844149127199794, 4.935323678240241, 0]
+      goal: [21.1, 46.1, 0.608009209539623, 4.516091247319389, 0]
+    case2:
+      start: [11.9, 16.8, 1.3574384016819936, 3.317266656251059, 0]
+      goal: [46.6, 25.0, 0.19076360687480998, 3.2507584385704855, 0]
 ```
 
 **Coordinate System:**
@@ -146,30 +143,15 @@ The system automatically detects CUDA availability:
 ```
 ighastar/
 ├── src/                    # Core C++/CUDA source files
-│   ├── kinematic.cu       # CUDA kinematic implementation
-│   ├── kinodynamic.cu     # CUDA kinodynamic implementation
-│   ├── kinematic_cpu.cpp  # CPU kinematic implementation
-│   ├── kinodynamic_cpu.cpp # CPU kinodynamic implementation
-│   ├── kinematic_cpu.h    # CPU kinematic header
-│   ├── kinodynamic_cpu.h  # CPU kinodynamic header
-│   ├── astar.cpp          # A* implementation
-│   ├── ighastar.cpp       # IGHAStar implementation
-│   └── *.h               # Other header files
+│   ├── *.cu              # CUDA implementations
+│   ├── *_cpu.cpp         # CPU implementations  
+│   ├── *.h               # Header files
+│   └── *.cpp             # C++ implementations
 ├── examples/              # Example scripts and configurations
 │   ├── Configs/          # Configuration files
 │   ├── Maps/             # Map files
-│   ├── kinematic_example.py
-│   ├── kinodynamic_example.py
-│   ├── simple_example.py
-│   ├── benchmark.py
-│   ├── pytorch_C_test.py
-│   └── ros_kinodynamic_example.py
+│   └── *.py              # Example scripts
 ├── scripts/              # Utility scripts
-│   ├── map_generation.py # Map generation utilities
-│   ├── plotting.py       # Visualization utilities
-│   └── utils.py          # General utilities
-├── MPC/                  # Model Predictive Control configurations
-├── Dynamics/             # Vehicle dynamics models
 ├── ighastar.yml         # Conda environment file
 └── README.md            # This file
 ```

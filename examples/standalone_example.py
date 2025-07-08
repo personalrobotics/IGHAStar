@@ -8,6 +8,7 @@ import cv2
 import pathlib
 import sys
 import os
+import argparse
 BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
 sys.path.append(str(BASE_DIR / 'scripts'))
 sys.path.append(str(BASE_DIR / 'src'))
@@ -15,50 +16,20 @@ from plotting import show_map, plot_car
 from utils import get_map
 import matplotlib.pyplot as plt
 
-def check_cuda_available():
-    """Check if CUDA is available for compilation and execution"""
-    try:
-        # Check if CUDA is available in PyTorch
-        if not torch.cuda.is_available():
-            print("PyTorch CUDA not available")
-            return False
-        
-        # Check if we have CUDA devices
-        if torch.cuda.device_count() == 0:
-            print("No CUDA devices found")
-            return False
-        
-        # Check if CUDA toolkit is available by trying to import torch.utils.cpp_extension
-        # and checking if CUDA compilation would work
-        try:
-            # This is a simple check - if we can import and CUDA is available in PyTorch,
-            # we assume CUDA toolkit is available
-            print(f"CUDA available: {torch.cuda.get_device_name(0)}")
-            return True
-        except Exception as e:
-            print(f"CUDA toolkit check failed: {e}")
-            return False
-            
-    except Exception as e:
-        print(f"CUDA availability check failed: {e}")
-        return False
-
 def create_planner(configs):
     env_name = configs["experiment_info_default"]["node_info"]["node_type"]
     # Check CUDA availability
-    cuda_available = check_cuda_available()
+    cuda_available = torch.cuda.is_available()
 
     if not cuda_available:
-        print("CUDA not available, using CPU versions of environments")
-        # Use CPU versions
+        print("CUDA not available, using CPU versions")
         env_macro = {
             'simple': '-DUSE_SIMPLE_ENV',
             'kinematic': '-DUSE_KINEMATIC_CPU_ENV',
             'kinodynamic': '-DUSE_KINODYNAMIC_CPU_ENV',
         }[env_name]
     else:
-        print("CUDA available, using GPU versions of environments")
-        # Use CUDA versions
+        print("CUDA available, using GPU versions")
         env_macro = {
             'simple': '-DUSE_SIMPLE_ENV',
             'kinematic': '-DUSE_KINEMATIC_ENV',
@@ -117,8 +88,20 @@ def main(yaml_path="", test_case=None):
     map_dir = map_info["dir"]
     map_name = map_info["name"]
     map_size = map_info["size"]
-    start = torch.tensor(map_info["start"], dtype=torch.float32)
-    goal = torch.tensor(map_info["goal"], dtype=torch.float32)
+    
+    # Handle test case selection
+    if test_case and "test_cases" in map_info and test_case in map_info["test_cases"]:
+        test_config = map_info["test_cases"][test_case]
+        start = torch.tensor(test_config["start"], dtype=torch.float32)
+        goal = torch.tensor(test_config["goal"], dtype=torch.float32)
+        print(f"Using test case: {test_case}")
+    else:
+        start = torch.tensor(map_info["start"], dtype=torch.float32)
+        goal = torch.tensor(map_info["goal"], dtype=torch.float32)
+        if test_case:
+            print(f"Test case '{test_case}' not found, using default start/goal")
+        else:
+            print("Using default start/goal")
     experiment_info = configs["experiment_info_default"]
     node_info = experiment_info["node_info"]
     node_type = node_info["node_type"]
@@ -193,5 +176,12 @@ def main(yaml_path="", test_case=None):
         print("no path found")
     
 if __name__ == "__main__":
-    yaml_path = BASE_DIR / 'examples' /'Configs' / 'kinematic_example.yml'
-    main(yaml_path=str(yaml_path))
+    parser = argparse.ArgumentParser(description='IGHAStar Path Planning Example')
+    parser.add_argument('--config', '-c', type=str, 
+                       default=str(BASE_DIR / 'examples' / 'Configs' / 'kinematic_example.yml'),
+                       help='Path to YAML configuration file')
+    parser.add_argument('--test-case', type=str, default="case1",
+                       help='Test case identifier (optional)')
+    
+    args = parser.parse_args()
+    main(yaml_path=args.config, test_case=args.test_case)
