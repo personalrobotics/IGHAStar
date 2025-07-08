@@ -63,74 +63,9 @@ This example:
 
 ### Configuration
 
-Configuration files are located in `examples/Configs/` and include:
+Configuration files are located in `examples/Configs/` and include vehicle parameters, planning parameters, and environment settings.
 
-- **Vehicle Parameters**: Length, width, maximum velocity, steering limits
-- **Planning Parameters**: Resolution, tolerance, epsilon values
-- **Environment Settings**: Map resolution, timesteps, control discretization
-
-#### Available Configuration Files
-- `kinematic_example.yml` - Kinematic planning configuration
-- `kinodynamic_example.yml` - Kinodynamic planning configuration  
-- `simple_example.yml` - Simple planning configuration
-- `ros_kinodynamic_example.yml` - ROS integration configuration
-
-#### Modifying Start and Goal Points
-
-To change the start and goal positions for path planning, you can either:
-
-1. **Edit the configuration file** to modify the default start/goal or add test cases
-2. **Use the `--test-case` argument** to select from predefined test cases
-
-**Configuration file structure:**
-
-**For Kinematic Planning:**
-```yaml
-map:
-  name: "Berlin_0_1024.png"
-  dir: "Maps/street-png"
-  start: [94.5, 19.5, 2.8284062641509644]  # [x, y, heading]
-  goal: [38.7, 81.6, 0.6324707282184407]   # [x, y, heading]
-  size: [1024, 1024]
-  res: 0.1
-  test_cases:
-    case1:
-      start: [94.5, 19.5, 2.8284062641509644]
-      goal: [38.7, 81.6, 0.6324707282184407]
-    case2:
-      start: [17.6, 72.0, 0.9402905929256757]
-      goal: [40.3, 16.9, 1.0911003058968491]
-```
-
-**For Kinodynamic Planning:**
-```yaml
-map:
-  name: "race-2"
-  dir: "Maps/Offroad"
-  start: [5.6, 8.9, 1.5844149127199794, 4.935323678240241, 0]  # [x, y, heading, velocity, unused]
-  goal: [21.1, 46.1, 0.608009209539623, 4.516091247319389, 0] # [x, y, heading, velocity, unused]
-  size: [512, 512]
-  res: 0.1
-  test_cases:
-    case1:
-      start: [5.6, 8.9, 1.5844149127199794, 4.935323678240241, 0]
-      goal: [21.1, 46.1, 0.608009209539623, 4.516091247319389, 0]
-    case2:
-      start: [11.9, 16.8, 1.3574384016819936, 3.317266656251059, 0]
-      goal: [46.6, 25.0, 0.19076360687480998, 3.2507584385704855, 0]
-```
-
-**Coordinate System:**
-- **x, y**: Position coordinates in meters
-- **heading**: Orientation in radians (0 = east, π/2 = north, π = west, -π/2 = south)
-- **velocity**: Speed in m/s (kinodynamic only)
-
-### Map Files
-
-Map files are stored in `examples/Maps/` with the following structure:
-- `generated_maps/` - Procedurally generated test maps
-- `street-png/` - Street network maps
-- `Offroad/` - Off-road terrain maps
+For detailed configuration and usage instructions, see [examples/EXAMPLE_USAGE.md](examples/EXAMPLE_USAGE.md).
 
 ### Compute Environment Selection
 
