@@ -7,7 +7,7 @@
 ### 1. Clone the Repository
 ```bash
 git clone https://github.com/sidtalia/IGHAStar.git
-cd ighastar
+cd IGHAStar
 ```
 
 ### 2. Set Up Conda Environment

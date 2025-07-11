@@ -227,7 +227,6 @@ test_*.cpp
 *_test.cpp
 
 # Large data files
-*.npy
 *.npz
 *.pkl
 *.pickle

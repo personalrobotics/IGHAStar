@@ -95,9 +95,9 @@ If no test case is specified, the default start/goal from the configuration file
 
 ### Planning Parameters
 - `resolution`: Planning resolution
-- `epsilon`: Tolerance values [ate, cte, heading, vel]
-- `tolerance`: Goal tolerance
-- `max_level`: Maximum hierarchy level
+- `epsilon`: Goal tolerance
+- `tolerance`: Minimum separation between any two vertices
+- `max_level`: Maximum level to
 - `division_factor`: Division factor for hierarchy
 - `max_expansions`: Maximum node expansions
 - `hysteresis`: Hysteresis value for level switching

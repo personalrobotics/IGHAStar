@@ -10,3 +10,6 @@ dependencies:
     - numpy==1.24.3
     - torch==1.13.1
     - tqdm
+    - pyyaml
+    - opencv-python
+    - seaborn

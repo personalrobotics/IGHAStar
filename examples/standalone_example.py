@@ -154,26 +154,52 @@ def main(yaml_path="", test_case=None):
     print(f"Expansion list: {expansion_list}")
     
     if success:
+        print("✓ Optimal path found!")
         print("Getting best path...")
         path = planner.get_best_path().numpy()
+        
+        # Create visualization
         show_map(plt, bitmap, node_type)
-        plt.plot(path[:, 0]/map_res, path[:, 1]/map_res, color='black', linewidth=2)
+        
+        # Plot path
+        plt.plot(path[:, 0]/map_res, path[:, 1]/map_res, color='blue', linewidth=3, label='Path')
+        
+        plt.scatter(goal[0].item()/map_res, goal[1].item()/map_res, 
+                   color='red', s=200, marker='*', edgecolors='black', linewidth=2, 
+                   label='Goal', zorder=10)
+        
         if node_type == "kinodynamic" or node_type == "kinematic":
-            plot_car(plt, start[0].item()/map_res, start[1].item()/map_res, start[2].item(), color='black')
-            for i in range(len(path)):
+            # Plot car orientations along the path
+            plot_car(plt, start[0].item()/map_res, start[1].item()/map_res, start[2].item(), color='green', label='Start')
+            for i in range(len(path)-1):
                 if i % node_info["timesteps"] == 0:
-                    plot_car(plt, path[i, 0]/map_res, path[i, 1]/map_res, path[i, 2], color='black')
+                    plot_car(plt, path[i, 0]/map_res, path[i, 1]/map_res, path[i, 2], color='blue')
+            # plot_car(plt, path[-1, 0]/map_res, path[-1, 1]/map_res, path[-1, 2], color='blue')
         else:
-            # simple environment, just plot the path and place circles at each vertex:
+            # Simple environment - plot path vertices
             for i in range(len(path)):
-                plt.scatter(path[i, 0]/map_res, path[i, 1]/map_res, color='black', s=10)
-        goal_circle = plt.Circle((goal[0]/map_res, goal[1]/map_res),facecolor='gray', edgecolor='black', radius=epsilon/map_res, alpha=0.75, zorder=100)
+                plt.scatter(path[i, 0]/map_res, path[i, 1]/map_res, color='blue', s=20, alpha=0.6)
+        
+        # Add goal region circle
+        goal_circle = plt.Circle((goal[0]/map_res, goal[1]/map_res),
+                               facecolor='red', edgecolor='black', radius=epsilon/map_res, 
+                               alpha=0.3, zorder=5, label='Goal Region')
         plt.gca().add_patch(goal_circle)
-        # vertically flip the plot
+        
+        # Add legend and labels
+        plt.legend(loc='upper right')
+        plt.title(f'IGHAStar Path Planning - {node_type.capitalize()} Environment')
+        plt.xlabel('X Position')
+        plt.ylabel('Y Position')
+        
+        # Vertically flip the plot (image coordinates)
         plt.gca().invert_yaxis()
+        
+        print("Displaying visualization...")
         plt.show()
+        print("✓ Visualization complete!")
     else:
-        print("no path found")
+        print("✗ No path found - the goal may be unreachable")
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='IGHAStar Path Planning Example')
