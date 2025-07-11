@@ -1,6 +1,7 @@
 #include <torch/extension.h>
 #include <boost/functional/hash.hpp>
 #include <cuda_runtime.h>
+#include <memory>
 
 using namespace std;
 
@@ -47,15 +48,15 @@ public:
     int rank, level;
     size_t hash;
     std::vector<size_t> index;
-    Node* parent;
+    std::shared_ptr<Node> parent;
     // Constructor
-    Node(const float* pose_in, const float* intermediate_poses_, Node* parent_in, float g_in, const float* resolution_, float* tolerance, int max_level, float division_factor, int timesteps)
-        : g(g_in), f(0), parent(parent_in), active(true), rank(0), level(0)
+    Node(const float* pose_in, const float* intermediate_poses_, std::shared_ptr<Node> parent_in, float g_in, const float* resolution_, float* tolerance, int max_level, float division_factor, int timesteps)
+        : g(g_in), f(0), parent(parent_in), active(true), rank(0), level(0), intermediate_poses(nullptr)
     {
         for (int i = 0; i < n_dims; i++) {
             pose[i] = pose_in[i];
         }
-        if (parent_in != nullptr) {
+        if (parent_in != nullptr && intermediate_poses_ != nullptr) {
             // intermediate poses are the poses between the parent and the current node, they come in the shape timestep x n_dims
             intermediate_poses = new float[timesteps * n_dims];
             memcpy(intermediate_poses, intermediate_poses_, timesteps * n_dims * sizeof(float));
@@ -72,9 +73,17 @@ public:
             }
         }
     }
+    
+    // Destructor to clean up intermediate_poses
+    ~Node() {
+        if (intermediate_poses) {
+            delete[] intermediate_poses;
+        }
+    }
 };
+
 struct NodePtrCompare {
-    bool operator()(const Node* a, const Node* b) const {
+    bool operator()(const std::shared_ptr<Node>& a, const std::shared_ptr<Node>& b) const {
         return a->f > b->f;  // min-heap: smaller f has higher priority
     }
 };
@@ -88,7 +97,7 @@ class Environment {
     float max_vel, min_vel, RI, max_theta, max_vert_acc, gear_switch_time;
 public:
     int max_level;
-    Environment(const py::dict& config) {
+    Environment(const py::dict& config) : d_heightmap(nullptr), d_costmap(nullptr) {
         auto info = config["experiment_info_default"].cast<py::dict>();
         auto node_info = info["node_info"].cast<py::dict>();
         // Top-level fields
@@ -105,8 +114,14 @@ public:
     // destructor
     ~Environment() {
         cuda_cleanup();
-        if (d_costmap) cudaFree(d_costmap);
-        if (d_heightmap) cudaFree(d_heightmap);
+        if (d_costmap != nullptr) {
+            cudaFree(d_costmap);
+            d_costmap = nullptr;
+        }
+        if (d_heightmap != nullptr) {
+            cudaFree(d_heightmap);
+            d_heightmap = nullptr;
+        }
     }
 
     // Sets resolution, tolerance, and epsilon values for different dimensions
@@ -164,8 +179,15 @@ public:
 
     // Sets the world map (costmap and heightmap) from a PyTorch tensor
     void set_world(torch::Tensor world) {
-        if (d_costmap) cudaFree(d_costmap);
-        if (d_heightmap) cudaFree(d_heightmap);
+        // Clean up existing CUDA memory
+        if (d_costmap != nullptr) {
+            cudaFree(d_costmap);
+            d_costmap = nullptr;
+        }
+        if (d_heightmap != nullptr) {
+            cudaFree(d_heightmap);
+            d_heightmap = nullptr;
+        }
 
         TORCH_CHECK(world.dim() == 3, "World tensor must be 3D (H x W x 2)");
         TORCH_CHECK(world.size(2) == 2, "Last dimension must have size 2 (costmap + heightmap)");
@@ -181,10 +203,21 @@ public:
         auto heightmap = world.index({torch::indexing::Slice(), torch::indexing::Slice(), 1}).contiguous();
 
         // Allocate and copy to device
-        if (d_costmap) cudaFree(d_costmap);
-        if (d_heightmap) cudaFree(d_heightmap);
-        cudaMalloc(&d_costmap, map_size * sizeof(float));
-        cudaMalloc(&d_heightmap, map_size * sizeof(float));
+        cudaError_t costmap_alloc = cudaMalloc(&d_costmap, map_size * sizeof(float));
+        cudaError_t heightmap_alloc = cudaMalloc(&d_heightmap, map_size * sizeof(float));
+        
+        if (costmap_alloc != cudaSuccess || heightmap_alloc != cudaSuccess) {
+            // Clean up on allocation failure
+            if (d_costmap != nullptr) {
+                cudaFree(d_costmap);
+                d_costmap = nullptr;
+            }
+            if (d_heightmap != nullptr) {
+                cudaFree(d_heightmap);
+                d_heightmap = nullptr;
+            }
+            throw std::runtime_error("CUDA memory allocation failed");
+        }
 
         cudaMemcpy(d_costmap, costmap.data_ptr<float>(), map_size * sizeof(float), cudaMemcpyHostToDevice);
         cudaMemcpy(d_heightmap, heightmap.data_ptr<float>(), map_size * sizeof(float), cudaMemcpyHostToDevice);
@@ -200,8 +233,8 @@ public:
     }
 
     // Creates a new Node with the given pose
-    Node* create_Node(float *pose) {
-        return new Node(pose, nullptr, nullptr, 0, resolution, tolerance, max_level, division_factor, timesteps);
+    std::shared_ptr<Node> create_Node(float *pose) {
+        return std::make_shared<Node>(pose, nullptr, nullptr, 0, resolution, tolerance, max_level, division_factor, timesteps);
     }
 
     // Calculates Euclidean distance between two poses
@@ -212,7 +245,7 @@ public:
     }
 
     // Checks if a node has reached the goal region within epsilon tolerance
-    bool reached_goal_region(Node* v, Node* goal) {
+    bool reached_goal_region(std::shared_ptr<Node> v, std::shared_ptr<Node> goal) {
         // float dist = distance(v->pose, goal->pose);
         // cross-track error
         float dx = v->pose[0] - goal->pose[0];
@@ -237,6 +270,14 @@ public:
 
     // Checks validity of start and goal positions
     void check_validity(float *start, float *goal, bool *result) {
+        // Check if CUDA memory is allocated
+        if (d_costmap == nullptr || d_heightmap == nullptr) {
+            std::cerr << "Error: CUDA memory not allocated. Call set_world() first." << std::endl;
+            result[0] = false;
+            result[1] = false;
+            return;
+        }
+        
         // put start and goal into an array called states
         float states[2 * n_dims];
         memcpy(states, start, n_dims * sizeof(float));
@@ -251,10 +292,16 @@ public:
     }
 
     // function that returns a vector of nodes:
-    std::vector<Node*> Succ(Node* node, Node* goal) {
-        std::vector<Node*> neighbors;
-        Node* neighbor;
-        float new_pose[n_dims], f, new_intermediate_pose[timesteps * n_dims];
+    std::vector<std::shared_ptr<Node>> Succ(std::shared_ptr<Node> node, std::shared_ptr<Node> goal) {
+        std::vector<std::shared_ptr<Node>> neighbors;
+        std::shared_ptr<Node> neighbor;
+        float new_pose[n_dims], f;
+        
+        // Check if CUDA memory is allocated
+        if (d_costmap == nullptr || d_heightmap == nullptr) {
+            std::cerr << "Error: CUDA memory not allocated. Call set_world() first." << std::endl;
+            return neighbors;
+        }
         
         // state is a copy of the node pose repeated for each thread
         // this variable creation can be optimized.
@@ -283,8 +330,10 @@ public:
         {
             if(valid[i]){
                 memcpy(new_pose, &state[i * n_dims], n_dims * sizeof(float));
+                // Allocate intermediate poses dynamically
+                float* new_intermediate_pose = new float[timesteps * n_dims];
                 memcpy(new_intermediate_pose, &intermediate_states[i * timesteps * n_dims], timesteps * n_dims * sizeof(float));
-                neighbor = new Node(new_pose, new_intermediate_pose, node, node->g + cost[i], resolution, tolerance, max_level, division_factor, timesteps);
+                neighbor = std::make_shared<Node>(new_pose, new_intermediate_pose, node, node->g + cost[i], resolution, tolerance, max_level, division_factor, timesteps);
                 f = neighbor->g + heuristic(neighbor->pose, goal->pose);
                 neighbor->f = f;
                 neighbors.push_back(neighbor);
@@ -295,7 +344,7 @@ public:
         return neighbors;
     }
 
-    torch::Tensor convert_node_list_to_path_tensor(std::vector<Node*> node_list) {
+    torch::Tensor convert_node_list_to_path_tensor(std::vector<std::shared_ptr<Node>> node_list) {
         int path_length = node_list.size();
         auto path_tensor = torch::zeros({1+(path_length-1)*timesteps, n_dims + 1}, torch::TensorOptions().dtype(torch::kFloat32));
         for (int i = 0; i < path_length; i++) {

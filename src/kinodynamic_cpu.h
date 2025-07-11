@@ -46,16 +46,16 @@ public:
     int rank, level;
     size_t hash;
     std::vector<size_t> index;
-    Node* parent;
+    std::shared_ptr<Node> parent;
     
     // Constructor
-    Node(const float* pose_in, const float* intermediate_poses_, Node* parent_in, float g_in, const float* resolution_, float* tolerance, int max_level, float division_factor, int timesteps)
-        : g(g_in), f(0), parent(parent_in), active(true), rank(0), level(0)
+    Node(const float* pose_in, const float* intermediate_poses_, std::shared_ptr<Node> parent_in, float g_in, const float* resolution_, float* tolerance, int max_level, float division_factor, int timesteps)
+        : intermediate_poses(nullptr), g(g_in), f(0), parent(parent_in), active(true), rank(0), level(0)
     {
         for (int i = 0; i < n_dims; i++) {
             pose[i] = pose_in[i];
         }
-        if (parent_in != nullptr) {
+        if (parent_in != nullptr && intermediate_poses_ != nullptr) {
             intermediate_poses = new float[timesteps * n_dims];
             memcpy(intermediate_poses, intermediate_poses_, timesteps * n_dims * sizeof(float));
         }
@@ -72,6 +72,7 @@ public:
         }
     }
     
+    // Destructor to clean up intermediate_poses
     ~Node() {
         if (intermediate_poses) {
             delete[] intermediate_poses;
@@ -80,7 +81,7 @@ public:
 };
 
 struct NodePtrCompare {
-    bool operator()(const Node* a, const Node* b) const {
+    bool operator()(const std::shared_ptr<Node>& a, const std::shared_ptr<Node>& b) const {
         return a->f > b->f;  // min-heap: smaller f has higher priority
     }
 };
@@ -213,8 +214,8 @@ public:
     }
 
     // Creates a new Node with the given pose
-    Node* create_Node(float *pose) {
-        return new Node(pose, nullptr, nullptr, 0, resolution, tolerance, max_level, division_factor, timesteps);
+    std::shared_ptr<Node> create_Node(float *pose) {
+        return std::make_shared<Node>(pose, nullptr, nullptr, 0, resolution, tolerance, max_level, division_factor, timesteps);
     }
 
     // Calculates Euclidean distance between two poses
@@ -225,7 +226,7 @@ public:
     }
 
     // Checks if a node has reached the goal region within epsilon tolerance
-    bool reached_goal_region(Node* v, Node* goal) {
+    bool reached_goal_region(std::shared_ptr<Node> v, std::shared_ptr<Node> goal) {
         float dx = v->pose[0] - goal->pose[0];
         float dy = v->pose[1] - goal->pose[1];
         float cte = dx * cosf(goal->pose[2]) + dy * sinf(goal->pose[2]);
@@ -260,10 +261,11 @@ public:
         );
     }
 
-    std::vector<Node*> Succ(Node* node, Node* goal) {
-        std::vector<Node*> neighbors;
-        Node* neighbor;
-        float new_pose[n_dims], f, new_intermediate_pose[timesteps * n_dims];
+    // function that returns a vector of nodes:
+    std::vector<std::shared_ptr<Node>> Succ(std::shared_ptr<Node> node, std::shared_ptr<Node> goal) {
+        std::vector<std::shared_ptr<Node>> neighbors;
+        std::shared_ptr<Node> neighbor;
+        float new_pose[n_dims], f;
         
         // Individual safety checks for initialized maps
         if (!h_costmap) {
@@ -299,8 +301,10 @@ public:
         for (int i = 0; i < n_succ; i++) {
             if(valid[i]){
                 memcpy(new_pose, &state[i * n_dims], n_dims * sizeof(float));
+                // Allocate intermediate poses dynamically
+                float* new_intermediate_pose = new float[timesteps * n_dims];
                 memcpy(new_intermediate_pose, &intermediate_states[i * timesteps * n_dims], timesteps * n_dims * sizeof(float));
-                neighbor = new Node(new_pose, new_intermediate_pose, node, node->g + cost[i], resolution, tolerance, max_level, division_factor, timesteps);
+                neighbor = std::make_shared<Node>(new_pose, new_intermediate_pose, node, node->g + cost[i], resolution, tolerance, max_level, division_factor, timesteps);
                 f = neighbor->g + heuristic(neighbor->pose, goal->pose);
                 neighbor->f = f;
                 neighbors.push_back(neighbor);
@@ -310,17 +314,18 @@ public:
         return neighbors;
     }
 
-    torch::Tensor convert_node_list_to_path_tensor(std::vector<Node*> node_list) {
+    torch::Tensor convert_node_list_to_path_tensor(std::vector<std::shared_ptr<Node>> node_list) {
         int path_length = node_list.size();
         auto path_tensor = torch::zeros({1+(path_length-1)*timesteps, n_dims + 1}, torch::TensorOptions().dtype(torch::kFloat32));
         for (int i = 0; i < path_length; i++) {
             int base_index = i * timesteps;
             if(node_list[i]->parent == nullptr) {
+                // start node doesn't have any intermediates:
                 path_tensor[base_index][0] = node_list[i]->pose[0];
                 path_tensor[base_index][1] = node_list[i]->pose[1];
                 path_tensor[base_index][2] = node_list[i]->pose[2];
                 path_tensor[base_index][3] = node_list[i]->pose[3];
-                path_tensor[base_index][4] = node_list[i]->g;
+                path_tensor[base_index][4] = node_list[i]->g; // this is the timestamp of that node
                 break;
             }
             for (int j = 0; j < timesteps; j++) {
@@ -329,9 +334,9 @@ public:
                 path_tensor[base_index + j][1] = node_list[i]->intermediate_poses[intermediate_index + 1];
                 path_tensor[base_index + j][2] = node_list[i]->intermediate_poses[intermediate_index + 2];
                 path_tensor[base_index + j][3] = node_list[i]->intermediate_poses[intermediate_index + 3];
-                path_tensor[base_index + j][4] = node_list[i]->g;
+                path_tensor[base_index + j][4] = node_list[i]->g; // this is the timestamp of that node
             }
         }
-        return path_tensor;
+        return path_tensor; // this might cause segfault
     }
 }; 

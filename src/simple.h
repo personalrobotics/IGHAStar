@@ -23,10 +23,10 @@ public:
     int rank, level;
     size_t hash;
     std::vector<size_t> index;
-    Node* parent;
+    std::shared_ptr<Node> parent;
     
     // Constructor matching kinodynamic pattern
-    Node(const float* pose_in, Node* parent_in, float g_in, const float* resolution_, const float* tolerance, int max_level, float division_factor)
+    Node(const float* pose_in, std::shared_ptr<Node> parent_in, float g_in, const float* resolution_, const float* tolerance, int max_level, float division_factor)
         : g(g_in), f(0), parent(parent_in), active(true), rank(0), level(0)
     {
         for (int i = 0; i < n_dims; i++) {
@@ -47,7 +47,7 @@ public:
 };
 
 struct NodePtrCompare {
-    bool operator()(const Node* a, const Node* b) const {
+    bool operator()(const std::shared_ptr<Node>& a, const std::shared_ptr<Node>& b) const {
         return a->f > b->f;  // min-heap: smaller f has higher priority
     }
 };
@@ -125,23 +125,24 @@ public:
         }
     }
 
-    Node* create_Node(float *pose) {
-        return new Node(pose, nullptr, 0, resolution, tolerance, max_level, division_factor);
+    // Creates a new Node with the given pose
+    std::shared_ptr<Node> create_Node(float *pose) {
+        return std::make_shared<Node>(pose, nullptr, 0, resolution, tolerance, max_level, division_factor);
     }
 
     float distance(float *pose, float *goal) {
-        float dx = pose[0] - goal[0];
-        float dy = pose[1] - goal[1];
-        return std::sqrt(dx*dx + dy*dy);
-    }
+    float dx = pose[0] - goal[0];
+    float dy = pose[1] - goal[1];
+    return std::sqrt(dx*dx + dy*dy);
+}
 
-    bool reached_goal_region(Node* v, Node* goal) {
-        return distance(v->pose, goal->pose) < epsilon[0];
-    }
+    bool reached_goal_region(std::shared_ptr<Node> v, std::shared_ptr<Node> goal) {
+    return distance(v->pose, goal->pose) < epsilon[0];
+}
 
-    float heuristic(float *pose, float *goal){
-        return distance(pose, goal);
-    }
+float heuristic(float *pose, float *goal){
+    return distance(pose, goal);
+}
 
     void check_validity(float *start, float *goal, bool *result) {
         // For simple environment, just check if both points are valid
@@ -153,70 +154,70 @@ public:
         float x = pose[0];
         float y = pose[1];
         if (!in_bounds(x, y)) {
-            return false;
-        }
-        if (costmap[m_to_px(x, y)] < 254) {
-            return false;
-        }
-        return true;
+        return false;
     }
+        if (costmap[m_to_px(x, y)] < 254) {
+        return false;
+    }
+    return true;
+}
 
     bool in_bounds(float x, float y) {
         if (x < 0 || x >= map_size_px) {
-            return false;
-        }
-        if (y < 0 || y >= map_size_px) {
-            return false;
-        }
-        return true;
+        return false;
     }
+        if (y < 0 || y >= map_size_px) {
+        return false;
+    }
+    return true;
+}
 
     inline int m_to_px(float x, float y) {
         return int(x/map_res) + int(y/map_res) * map_size_px;
     }
 
-    // function that returns a vector of nodes:
-    std::vector<Node*> Succ(Node* node, Node* goal) {
-        std::vector<Node*> neighbors;
-        float x, y, theta, L, f;
-        bool valid;
-        Node* neighbor;
+// function that returns a vector of nodes:
+    std::vector<std::shared_ptr<Node>> Succ(std::shared_ptr<Node> node, std::shared_ptr<Node> goal) {
+    std::vector<std::shared_ptr<Node>> neighbors;
+    float x, y, theta, L, f;
+    bool valid;
+    std::shared_ptr<Node> neighbor;
 
-        for (int i = 0; i < n_succ; i++) 
-        {
-            theta = i * (2 * M_PI / n_succ);
-            float new_pose[n_dims];
-            valid = true;
-            for (float t = 0; t <= timesteps; t++) {
-                L = step_size * t/timesteps;
-                x = node->pose[0] + cosf(theta)*L;
-                y = node->pose[1] + sinf(theta)*L;
+    for (int i = 0; i < n_succ; i++) 
+    {
+        theta = i * (2 * M_PI / n_succ);
+        float new_pose[n_dims];
+        valid = true;
+        for (float t = 0; t <= timesteps; t++) {
+            L = step_size * t/timesteps;
+            x = node->pose[0] + cosf(theta)*L;
+            y = node->pose[1] + sinf(theta)*L;
                 if ( (costmap[m_to_px(x, y)] != 255.0f) || !in_bounds(x, y) )
-                {
-                    valid=false;
-                    break;
-                }
-            }
-            if(valid){
-                new_pose[0] = x;
-                new_pose[1] = y;
-                
-                neighbor = new Node(new_pose, node, node->g + step_size, resolution, tolerance, max_level, division_factor);
-                f = neighbor->g + heuristic(neighbor->pose, goal->pose);
-                neighbor->f = f;
-                neighbors.push_back(neighbor);
+            {
+                valid=false;
+                break;
             }
         }
-        return neighbors;
+        if(valid){
+            new_pose[0] = x;
+            new_pose[1] = y;
+            
+                neighbor = std::make_shared<Node>(new_pose, node, node->g + step_size, resolution, tolerance, max_level, division_factor);
+            f = neighbor->g + heuristic(neighbor->pose, goal->pose);
+            neighbor->f = f;
+            neighbors.push_back(neighbor);
+            }
     }
+    return neighbors;
+}
 
-    torch::Tensor convert_node_list_to_path_tensor(std::vector<Node*> node_list) {
-        int path_length = node_list.size();
-        auto path_tensor = torch::zeros({path_length, n_dims}, torch::TensorOptions().dtype(torch::kFloat32));
-        for (int i = 0; i < path_length; i++) {
-            path_tensor[i][0] = node_list[i]->pose[0];
-            path_tensor[i][1] = node_list[i]->pose[1];
-        }
-        return path_tensor;
+torch::Tensor convert_node_list_to_path_tensor(std::vector<std::shared_ptr<Node>> node_list) {
+    int path_length = node_list.size();
+    auto path_tensor = torch::zeros({path_length, n_dims}, torch::TensorOptions().dtype(torch::kFloat32));
+    for (int i = 0; i < path_length; i++) {
+        path_tensor[i][0] = node_list[i]->pose[0];
+        path_tensor[i][1] = node_list[i]->pose[1];
     }
+    return path_tensor;
+}
 };
