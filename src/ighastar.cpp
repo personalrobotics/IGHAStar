@@ -4,6 +4,7 @@
 #include <unordered_set>
 #include <tuple>
 #include <boost/functional/hash.hpp>
+#include <memory>
 // BEGIN ENVIRONMENT
 #if defined(USE_SIMPLE_ENV)
 #include <simple.h>
@@ -29,20 +30,20 @@ using namespace std;
 
 class IGHAStar {
 public:
-    std::priority_queue<Node*, std::vector<Node*>, NodePtrCompare> Q_v;
+    std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>, NodePtrCompare> Q_v;
     std::unordered_set<size_t> Q_v_hash; // set of hashes for quick lookup
-    std::unordered_set<Node*> inactive_Q_v; // inactive_Qv vector
+    std::unordered_set<std::shared_ptr<Node>> inactive_Q_v; // inactive_Qv vector
     std::unordered_set<size_t> inactive_Q_v_hash; // set of hashes for quick lookup
-    std::unordered_set<Node*> Seen;
+    std::unordered_set<std::shared_ptr<Node>> Seen;
     std::unordered_set<size_t> Seen_hash;
-    std::vector<std::unordered_map<int, Node*>> V;
+    std::vector<std::unordered_map<int, std::shared_ptr<Node>>> V;
     std::vector<std::unordered_map<int, float>> G;
     
     bool SUCCESS;
     int next_level, level, expansion_limit, expansion_counter, hysteresis;
     int hysteresis_threshold;
-    std::vector<Node*> best_path;
-    std::vector<std::vector<Node*>> best_path_list;
+    std::vector<std::shared_ptr<Node>> best_path;
+    std::vector<std::vector<std::shared_ptr<Node>>> best_path_list;
     float Omega;
     Environment* env;
     bool debug;
@@ -64,9 +65,17 @@ public:
         env = new Environment(config);
         debug = debug_;
     }
+    
+    ~IGHAStar() {
+        if (env) {
+            env->cleanup();  // Ensure CUDA cleanup is called
+            delete env;
+            env = nullptr;
+        }
+    }
 
     void reset() {
-        Q_v = std::priority_queue<Node*, std::vector<Node*>, NodePtrCompare>();
+        Q_v = std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>, NodePtrCompare>();
         Q_v_hash.clear();
         inactive_Q_v.clear();
         inactive_Q_v_hash.clear();
@@ -93,8 +102,8 @@ public:
         expansion_list.clear();
     }
 
-    void naive(Node* start_node) {
-        Q_v = std::priority_queue<Node*, std::vector<Node*>, NodePtrCompare>();
+    void naive(std::shared_ptr<Node> start_node) {
+        Q_v = std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>, NodePtrCompare>();
         Q_v_hash.clear();
         inactive_Q_v.clear();
         inactive_Q_v_hash.clear();
@@ -108,10 +117,10 @@ public:
         Q_v_hash.insert(start_node->hash);
     }
 
-    void initialize(Node* start_node) {
+    void initialize(std::shared_ptr<Node> start_node) {
         Q_v.push(start_node);
         Q_v_hash.insert(start_node->hash);
-        std::unordered_map<int, Node*> v;
+        std::unordered_map<int, std::shared_ptr<Node>> v;
         v[start_node->index[level]] = start_node;
         V.push_back(v);
         std::unordered_map<int, float> g;
@@ -119,9 +128,9 @@ public:
         G.push_back(g);
     }
 
-    void Freeze(Node* v) {
+    void Freeze(std::shared_ptr<Node> v) {
         if (G[level].count(v->index[level]) && V[level].count(v->index[level])) {
-            Node* v_p = V[level][v->index[level]];
+            std::shared_ptr<Node> v_p = V[level][v->index[level]];
 
             // Check presence in Q_v via hash
             if (Q_v_hash.count(v_p->hash) && v_p->active == true) {
@@ -134,7 +143,7 @@ public:
         V[level][v->index[level]] = v;
     }
 
-    void GUpdate(Node *v) {
+    void GUpdate(std::shared_ptr<Node> v) {
         for (int l = 0; l < level; l++) {
             if (v->g < get_G(l, v->index[l])) {
                 v->level = l;
@@ -156,7 +165,7 @@ public:
 
     void bubbleActive() {
         while (!Q_v.empty() && Q_v.top()->active != true) {
-            Node* v = Q_v.top();
+            std::shared_ptr<Node> v = Q_v.top();
             Q_v.pop();
             Q_v_hash.erase(v->hash);
             inactive_Q_v.insert(v);
@@ -164,9 +173,9 @@ public:
         }
     }
 
-    std::vector<Node*> reconstruct_path(Node* start, Node* goal) {
-        std::vector<Node*> path;
-        Node* v = goal;
+    std::vector<std::shared_ptr<Node>> reconstruct_path(std::shared_ptr<Node> start, std::shared_ptr<Node> goal) {
+        std::vector<std::shared_ptr<Node>> path;
+        std::shared_ptr<Node> v = goal;
         path.push_back(v);
         while (v->parent != nullptr) {
             // print pose of parent
@@ -195,7 +204,7 @@ public:
         return run;
     }
 
-    inline void local_g_update(Node* node)
+    inline void local_g_update(std::shared_ptr<Node> node)
     {
         if (node->g < get_G(level, node->index[level])) {
             G[level][node->index[level]] = node->g;
@@ -205,11 +214,11 @@ public:
 
     void combine_Q_v_and_prune() {
         // combine Q_v and inactive_Q_v
-        std::unordered_set<Node*> new_inactive_Q_v;
+        std::unordered_set<std::shared_ptr<Node>> new_inactive_Q_v;
         std::unordered_set<size_t> new_inactive_Q_v_hash;
         // this step "empties" the Q_v, so everything is now only in the inactive set.
         while(!Q_v.empty()){
-            Node* node = Q_v.top();
+            std::shared_ptr<Node> node = Q_v.top();
             Q_v.pop();
             Q_v_hash.erase(node->hash); // always remember to erase the hash!
             node->active = false;
@@ -218,7 +227,7 @@ public:
                 new_inactive_Q_v_hash.insert(node->hash);
             }
         }
-        for (Node* node : inactive_Q_v) {
+        for (std::shared_ptr<Node> node : inactive_Q_v) {
             if (node->f < Omega) {
                 // put it into new_inactive_Q_v and new inactive_Q_v_hash
                 new_inactive_Q_v.insert(node);
@@ -238,27 +247,27 @@ public:
         // // Extend G and V if new level hasn't been seen yet
         if (G.size() <= level) {
             G.emplace_back();  // std::unordered_map<int, float>
-            V.emplace_back();  // std::unordered_map<int, Node*>
+            V.emplace_back();  // std::unordered_map<int, std::shared_ptr<Node>>
             // reserve 100000 for both:
             G[level].reserve(100000); // consider pre-reserving this memeory at the beginning of the search.
             V[level].reserve(100000);
         }
 
         // TODO: this could happen "in the loop" so we don't have to do it every time, just like how we cache the level indices.
-        for (Node* node : Seen) {
+        for (std::shared_ptr<Node> node : Seen) {
             // project Seen nodes to the new resolution
             local_g_update(node);
         }
         // find rank of all nodes in Q_v
-        std::unordered_map<int, std::vector<Node*>> grid_cells;
-        for (Node* node : inactive_Q_v) {
+        std::unordered_map<int, std::vector<std::shared_ptr<Node>>> grid_cells;
+        for (std::shared_ptr<Node> node : inactive_Q_v) {
             grid_cells[node->index[level]].push_back(node);
             // project Q_v nodes to the new resolution
             local_g_update(node);
         }
 
         for (auto& [idx, nodes] : grid_cells) {
-            std::sort(nodes.begin(), nodes.end(), [](Node* a, Node* b) {return a->g < b->g;});
+            std::sort(nodes.begin(), nodes.end(), [](std::shared_ptr<Node> a, std::shared_ptr<Node> b) {return a->g < b->g;});
 
             for (int i = 0; i < nodes.size(); i++) {
                 nodes[i]->rank = i;
@@ -268,9 +277,9 @@ public:
     }
 
     void Activate() {
-        std::vector<Node*> unsorted_Q_v;
+        std::vector<std::shared_ptr<Node>> unsorted_Q_v;
         for (auto it = inactive_Q_v.begin(); it != inactive_Q_v.end(); ) {
-            Node* node = *it;
+            std::shared_ptr<Node> node = *it;
             node->level = level;
             if (node->rank == 0 && node->g <= get_G(level, node->index[level])) {
             // if (node->g <= get_G(level, node->index[level])) {
@@ -290,7 +299,7 @@ public:
         // // sort the Q_v based on f value
         std::make_heap(unsorted_Q_v.begin(), unsorted_Q_v.end(), NodePtrCompare{}); // make a sorted heap from unsorted_Q_v
         // // set the Q_v to the sorted heap
-        Q_v = std::priority_queue<Node*, std::vector<Node*>, NodePtrCompare>(NodePtrCompare{}, std::move(unsorted_Q_v));
+        Q_v = std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>, NodePtrCompare>(NodePtrCompare{}, std::move(unsorted_Q_v));
     }
 
     // function to do hybrid A* search and return a path as a tensor I guess:
@@ -326,8 +335,8 @@ public:
                 return;
             }
         }
-        Node* start_node = env->create_Node(start);
-        Node* goal_node = env->create_Node(goal);
+        std::shared_ptr<Node> start_node = env->create_Node(start);
+        std::shared_ptr<Node> goal_node = env->create_Node(goal);
         start_node->f = env->heuristic(start_node->pose, goal_node->pose);
 
         initialize(start_node);
@@ -335,7 +344,7 @@ public:
         // Extend G and V if new level hasn't been seen yet
         // for (int i = 0; i < env->max_level + 1; i++) {
         //     G.emplace_back();  // std::unordered_map<int, float>
-        //     V.emplace_back();  // std::unordered_map<int, Node*>
+        //     V.emplace_back();  // std::unordered_map<int, std::shared_ptr<Node>>
         //     // reserve 100000 for both:
         //     G[i].reserve(expansion_limit); // consider pre-reserving this memeory at the beginning of the search.
         //     V[i].reserve(expansion_limit);
@@ -356,7 +365,7 @@ public:
 
                 run = shift(run); // update next candidate resolution and whether we should continue running
 
-                Node* v = Q_v.top();
+                std::shared_ptr<Node> v = Q_v.top();
                 Q_v.pop();
                 Q_v_hash.erase(v->hash);
                 Seen.insert(v);
@@ -394,7 +403,7 @@ public:
                 goal_check_time += std::chrono::duration<float, std::micro>(end_time - start_time).count();
 
                 start_time = std::chrono::high_resolution_clock::now();
-                std::vector<Node*> neighbors = env->Succ(v, goal_node);
+                std::vector<std::shared_ptr<Node>> neighbors = env->Succ(v, goal_node);
                 end_time = std::chrono::high_resolution_clock::now();
                 successor_time += std::chrono::duration<float, std::micro>(end_time - start_time).count();
 
