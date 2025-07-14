@@ -10,6 +10,8 @@ scripts/Planner_vis.py
 scripts/IGHAStarCpp.py
 scripts/test_case_generation.py
 examples/ros_kinodynamic_example.py
+examples/ROS/
+examples/BeamNG/
 # Python
 __pycache__/
 *.py[cod]

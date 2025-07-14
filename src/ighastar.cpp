@@ -102,6 +102,7 @@ public:
         expansion_list.clear();
     }
 
+    // activate method for HA*M
     void naive(std::shared_ptr<Node> start_node) {
         Q_v = std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>, NodePtrCompare>();
         Q_v_hash.clear();
@@ -128,22 +129,8 @@ public:
         G.push_back(g);
     }
 
-    void Freeze(std::shared_ptr<Node> v) {
-        if (G[level].count(v->index[level]) && V[level].count(v->index[level])) {
-            std::shared_ptr<Node> v_p = V[level][v->index[level]];
-
-            // Check presence in Q_v via hash
-            if (Q_v_hash.count(v_p->hash) && v_p->active == true) {
-                v_p->active = false;
-            }
-        }
-
-        // Update the structures
-        G[level][v->index[level]] = v->g;
-        V[level][v->index[level]] = v;
-    }
-
     void GUpdate(std::shared_ptr<Node> v) {
+        // find the lowest resolution level at which the vertex is dominant
         for (int l = 0; l < level; l++) {
             if (v->g < get_G(l, v->index[l])) {
                 v->level = l;
@@ -152,7 +139,18 @@ public:
                 break;
             }
         }
-        Freeze(v);
+        // perform the approximate dominance check and freeze existing vertex if it is dominated
+        if (G[level].count(v->index[level]) && V[level].count(v->index[level])) {
+            std::shared_ptr<Node> v_p = V[level][v->index[level]];
+
+            // Check presence in Q_v via hash
+            if (Q_v_hash.count(v_p->hash) && v_p->active == true) {
+                v_p->active = false;
+            }
+        }
+        // Update the \hat{g} \hat{v} structures
+        G[level][v->index[level]] = v->g;
+        V[level][v->index[level]] = v;
     }
 
     float get_G(int level, int index) {
@@ -163,6 +161,7 @@ public:
         }
     }
 
+    // bubble the active nodes to the top of the Q_v while throwing inactive nodes into inactive_Q_v
     void bubbleActive() {
         while (!Q_v.empty() && Q_v.top()->active != true) {
             std::shared_ptr<Node> v = Q_v.top();
@@ -178,7 +177,6 @@ public:
         std::shared_ptr<Node> v = goal;
         path.push_back(v);
         while (v->parent != nullptr) {
-            // print pose of parent
             v = v->parent;
             path.push_back(v);
         }
@@ -197,7 +195,6 @@ public:
                     next_level = Q_v.top()->level;
                     hysteresis = 0;
                     run = false;
-                    // hysteresis_threshold *= 2;
                 } 
             }
         }
@@ -253,7 +250,6 @@ public:
             V[level].reserve(100000);
         }
 
-        // TODO: this could happen "in the loop" so we don't have to do it every time, just like how we cache the level indices.
         for (std::shared_ptr<Node> node : Seen) {
             // project Seen nodes to the new resolution
             local_g_update(node);
@@ -277,13 +273,12 @@ public:
     }
 
     void Activate() {
+        // for performance reasons, we are branching-bounding the nodes in the activate method.
         std::vector<std::shared_ptr<Node>> unsorted_Q_v;
         for (auto it = inactive_Q_v.begin(); it != inactive_Q_v.end(); ) {
             std::shared_ptr<Node> node = *it;
             node->level = level;
             if (node->rank == 0 && node->g <= get_G(level, node->index[level])) {
-            // if (node->g <= get_G(level, node->index[level])) {
-            // if (G[level].count(node->index[level])) {
                 node->active = true;
                 unsorted_Q_v.push_back(node);
                 Q_v_hash.insert(node->hash);
@@ -319,7 +314,7 @@ public:
 
         bool valid[2] = {true, true};
         env->check_validity(start, goal, valid);
-        // print start goal validity:
+        // check start goal validity:
         if (debug) {
             std::cout << "Start node validity: " << valid[0] << std::endl;
             std::cout << "Goal node validity: " << valid[1] << std::endl;
@@ -341,21 +336,13 @@ public:
 
         initialize(start_node);
 
-        // Extend G and V if new level hasn't been seen yet
-        // for (int i = 0; i < env->max_level + 1; i++) {
-        //     G.emplace_back();  // std::unordered_map<int, float>
-        //     V.emplace_back();  // std::unordered_map<int, std::shared_ptr<Node>>
-        //     // reserve 100000 for both:
-        //     G[i].reserve(expansion_limit); // consider pre-reserving this memeory at the beginning of the search.
-        //     V[i].reserve(expansion_limit);
-        // }
-
+        // main search loop:
         bool goal_reached = false;
         
         while (expansion_counter < expansion_limit && (!Q_v.empty() or !inactive_Q_v.empty())){
             int inactive_insertions = 0;
             while (expansion_counter < expansion_limit) {
-                // total inner time measurement:
+                // inner time measurement:
                 start_time = std::chrono::high_resolution_clock::now();
                 bubbleActive();
                 bool run = !Q_v.empty() && Q_v.top()->active == true && Q_v.top()->f < Omega;
@@ -370,16 +357,7 @@ public:
                 Q_v_hash.erase(v->hash);
                 Seen.insert(v);
                 Seen_hash.insert(v->hash);
-                // if (debug) {
-                //     std::cout << "active node: ";
-                //     for (int i = 0; i < n_dims; i++) {
-                //         std::cout << std::fixed << std::setprecision(4) << v->pose[i];
-                //         if (i != n_dims - 1) {
-                //             std::cout << ", ";
-                //         }
-                //     }
-                //     std::cout << ", " << v->index[level] << std::endl;
-                // }
+
                 goal_reached = env->reached_goal_region(v, goal_node);
 
                 if (goal_reached) {
@@ -398,7 +376,7 @@ public:
                 if(!run) {
                     break;
                 }
-
+                // profiling:
                 end_time = std::chrono::high_resolution_clock::now();
                 goal_check_time += std::chrono::duration<float, std::micro>(end_time - start_time).count();
 
@@ -410,20 +388,13 @@ public:
                 expansion_counter++;
 
                 start_time = std::chrono::high_resolution_clock::now();
+                // get successors:
                 for (auto& neighbor : neighbors) {
-                    // if(debug){
-                    //     std::cout << "successor node: ";
-                    //     for (int i = 0; i < n_dims; i++) {
-                    //         std::cout << std::fixed << std::setprecision(4) << neighbor->pose[i];
-                    //         if (i != n_dims - 1) {
-                    //             std::cout << ", ";
-                    //         }
-                    //     }
-                    //     std::cout << ", " << neighbor->index[level] << std::endl;
-                    // }
+                    // tolerance check is useful in practice to eliminate vertices that are too close to be practically distinguishable (closer than map resolution)
+                    // you can disable this by setting the tolerance to a very small value (1e-5), but it is not recommended.
                     bool tolerance_check = Q_v_hash.count(neighbor->hash) == 0 && Seen_hash.count(neighbor->hash) == 0 && inactive_Q_v_hash.count(neighbor->hash) == 0;
                     if (tolerance_check) {
-                        // print the indices in the G[level] and the neighbor index
+                        // approximate dominance check:
                         if (neighbor->g < get_G(level, neighbor->index[level])) {
                             GUpdate(neighbor);
                             neighbor->active = true;
@@ -433,7 +404,6 @@ public:
                             neighbor->active = false;
                             inactive_Q_v.insert(neighbor);
                             inactive_Q_v_hash.insert(neighbor->hash);
-                            // std::cout << "froze node: " << std::fixed << std::setprecision(4) << neighbor->pose[0] << ", " << neighbor->pose[1] <<", " << neighbor->index[level] << std::endl;
                         }
                     }
                 }
@@ -464,7 +434,9 @@ public:
         }
     }
 
-    bool search_adapter(torch::Tensor start_tensor, torch::Tensor goal_tensor, torch::Tensor world_tensor, int expansion_limit, int hysteresis_threshold, bool ignore_goal_validity=false) {
+    bool search_adapter(torch::Tensor start_tensor, torch::Tensor goal_tensor, torch::Tensor world_tensor, int expansion_limit, 
+                        int hysteresis_threshold, bool ignore_goal_validity=false, bool debug_=false) {
+        debug = debug_;
         env->set_world(world_tensor);
         auto start = start_tensor.contiguous().data_ptr<float>();
         auto goal = goal_tensor.contiguous().data_ptr<float>();
@@ -497,7 +469,8 @@ public:
         float avg_goal_check_time = goal_check_time / expansion_counter;
         float avg_overhead_time = overhead_time / switches;
         float avg_g_update_time = g_update_time / expansion_counter;
-        return std::make_tuple(avg_successor_time, avg_goal_check_time, avg_overhead_time, avg_g_update_time, switches, max_level_profile, Q_v_size, expansion_counter, expansion_list);
+        return std::make_tuple(avg_successor_time, avg_goal_check_time, avg_overhead_time, avg_g_update_time, 
+                                switches, max_level_profile, Q_v_size, expansion_counter, expansion_list);
     }
 };
 
