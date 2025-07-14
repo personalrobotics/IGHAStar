@@ -54,8 +54,13 @@ We use [Pytorch C++/CUDA](https://docs.pytorch.org/tutorials/advanced/cpp_custom
 to handle all of the compilation and python binding.
 This allows us to get the performance of C++/CUDA with the abstraction of Python/Pytorch.
 The first time you run the planner, it will cache all the compiled objects for future use.
-While we recommend the GPU accelerated edge expansion and evaluation, 
-the standalone example will automatically switch to CPU backend if an Nvidia GPU is not available.
+
+### Compute Environment Selection
+
+For the standalone examples, the system automatically detects CUDA availability:
+- If CUDA is available: Uses GPU-accelerated planning
+- If CUDA is not available: Falls back to CPU implementation
+
 
 ## Installation
 
@@ -70,8 +75,6 @@ cd IGHAStar
 conda env create -f ighastar.yml
 conda activate ighastar
 ```
-
-The project uses dynamic compilation, so C++ extensions will be compiled automatically when you run the examples.
 
 ## Usage
 
@@ -103,20 +106,12 @@ Configuration files are located in `examples/standalone/Configs/` and include:
 
 For detailed configuration and usage instructions, see [examples/standalone/README.md](examples/standalone/README.md).
 
-### Compute Environment Selection
-
-The system automatically detects CUDA availability:
-- If CUDA is available: Uses GPU-accelerated planning
-- If CUDA is not available: Falls back to CPU implementation
-
 ## Project Structure
 
 ```
 IGHAStar/
 ├── src/                  # Core C++/CUDA source files
 │   ├── ighastar.cpp      # Main IGHA* implementation
-│   ├── IGHAStarClass.py  # Python wrapper class
-│   ├── Nodes.py          # Node definitions
 │   └── Environments/     # Environment implementations
 │       ├── *.h           # Header files
 │       ├── *.cu          # CUDA implementations
