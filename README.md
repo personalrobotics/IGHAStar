@@ -3,10 +3,11 @@
 ## IGHAStar: Incremental Generalized Hybrid A* Search
 
 <figure align="center">
-  <img src="Content/IGHAStar_main_fig.png" alt="IGHAStar Main Figure" width="600"/>
+  <img src="Content/IGHAStar_main_fig.png" alt="IGHAStar Main Figure" width="1000"/>
   <figcaption><b>Fig. 1:</b> The issue with Hybrid A* Search. Too coarse grid resolution risks failure (a), while too fine leads to excessive expansions and slow planning (e).</figcaption>
 </figure>
-
+<br>
+<br>
 We address the problem of efficiently organizing
 search over very large trees, which arises in many applications
 such as autonomous driving, aerial vehicles, and so on; here, we
@@ -29,11 +30,19 @@ without rigid pruning.
 IGHA* provably matches or outperforms HA*, and has been tested in both simulation (Fig. 2, left) and in the real world on a 
 small scale off-road platform (Fig. 2, right).
 
-<figure align="center">
-  <img src="Content/ighastar_sim.gif" alt="IGHAStar Simulation" width="300"/>
-  <img src="Content/ighastar_real.gif" alt="IGHAStar Real-World" width="300"/>
-  <figcaption><b>Fig. 2:</b> IGHAStar in simulation (left) and real-world testing on a small-scale off-road platform (right).</figcaption>
-</figure>
+<p align="center">
+  
+<table>
+  <tr>
+    <td><img src="Content/ighastar_sim.gif" alt="IGHAStar Simulation" width="470"/></td>
+    <td><img src="Content/ighastar_real.gif" alt="IGHAStar Real-World" width="470"/></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><b>Fig. 2:</b> IGHAStar in simulation (left) and real-world testing on a small-scale off-road platform (right).</td>
+  </tr>
+</table>
+
+</p>
 Generally speaking, IGHA* will find better paths given the same compute budget, 
 compared to a smart multi-resolution version of HA* (HA*M), 
 which produces suboptimal (looping) paths, visible in the simulation comparison.<br><br>
