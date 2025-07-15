@@ -346,11 +346,10 @@ public:
                 start_time = std::chrono::high_resolution_clock::now();
                 bubbleActive();
                 bool run = !Q_v.empty() && Q_v.top()->active == true && Q_v.top()->f < Omega;
+                bool shift_run = shift(run); // update next candidate resolution and whether we should continue running
                 if(!run){
                     break;
-                }     
-
-                run = shift(run); // update next candidate resolution and whether we should continue running
+                }
 
                 std::shared_ptr<Node> v = Q_v.top();
                 Q_v.pop();
@@ -373,7 +372,7 @@ public:
                     expansion_list.push_back(expansion_counter);
                     break;
                 }
-                if(!run) {
+                if(!shift_run) {
                     break;
                 }
                 // profiling:
