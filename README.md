@@ -79,12 +79,18 @@ conda activate ighastar
 ## Usage
 
 ### Running the Standalone Example
-<figure align="center">
-  <img src="Content/standalone/Berlin_0_1024.png_kinematic.png" alt="Kinematic Planning Example" width="300"/>
-  <img src="Content/standalone/race-2_kinodynamic.png" alt="Kinodynamic Planning Example" width="300"/>
-  <img src="Content/standalone/17_512.png_simple.png" alt="Simple Planning Example" width="300"/>
-  <figcaption><b>Fig. 3:</b> Example planning results: Kinematic planning on urban streets (left), Kinodynamic planning on off-road terrain (middle), and Simple planning on generated maps (right).</figcaption>
-</figure>
+<p align="center">
+  <table>
+    <tr>
+      <td><img src="Content/standalone/Berlin_0_1024.png_kinematic.png" alt="Kinematic Planning Example" width="300"/></td>
+      <td><img src="Content/standalone/race-2_kinodynamic.png" alt="Kinodynamic Planning Example" width="300"/></td>
+      <td><img src="Content/standalone/17_512.png_simple.png" alt="Simple Planning Example" width="300"/></td>
+    </tr>
+    <tr>
+      <td colspan="3" align="center"><b>Fig. 3:</b> Example planning results: Kinematic planning on urban streets (left), Kinodynamic planning on off-road terrain (middle), and Simple planning on generated maps (right).</td>
+    </tr>
+  </table>
+</p>
 The main example script supports different planning modes through configuration files:
 
 ```bash
