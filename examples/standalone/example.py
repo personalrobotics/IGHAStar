@@ -196,6 +196,9 @@ def main(yaml_path="", test_case=None):
         plt.gca().invert_yaxis()
         
         print("Displaying visualization...")
+        if not os.path.exists(f'{BASE_DIR}/Content/standalone'):
+            os.makedirs(f'{BASE_DIR}/Content/standalone')
+        plt.savefig(f'{BASE_DIR}/Content/standalone/{map_name}_{node_type}.png')
         plt.show()
         print("✓ Visualization complete!")
     else:
@@ -204,7 +207,7 @@ def main(yaml_path="", test_case=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='IGHAStar Path Planning Example')
     parser.add_argument('--config', '-c', type=str, 
-                       default=str(BASE_DIR / 'Configs' / 'kinematic_example.yml'),
+                       default=str('Configs/kinematic_example.yml'),
                        help='Path to YAML configuration file')
     parser.add_argument('--test-case', type=str, default="case1",
                        help='Test case identifier (optional)')
