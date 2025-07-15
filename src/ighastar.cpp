@@ -434,9 +434,7 @@ public:
         }
     }
 
-    bool search_adapter(torch::Tensor start_tensor, torch::Tensor goal_tensor, torch::Tensor world_tensor, int expansion_limit, 
-                        int hysteresis_threshold, bool ignore_goal_validity=false, bool debug_=false) {
-        debug = debug_;
+    bool search_adapter(torch::Tensor start_tensor, torch::Tensor goal_tensor, torch::Tensor world_tensor, int expansion_limit, int hysteresis_threshold, bool ignore_goal_validity=false) {
         env->set_world(world_tensor);
         auto start = start_tensor.contiguous().data_ptr<float>();
         auto goal = goal_tensor.contiguous().data_ptr<float>();

@@ -79,7 +79,12 @@ conda activate ighastar
 ## Usage
 
 ### Running the Standalone Example
-
+<figure align="center">
+  <img src="Content/standalone/Berlin_0_1024.png_kinematic.png" alt="Kinematic Planning Example" width="300"/>
+  <img src="Content/standalone/race-2_kinodynamic.png" alt="Kinodynamic Planning Example" width="300"/>
+  <img src="Content/standalone/17_512.png_simple.png" alt="Simple Planning Example" width="300"/>
+  <figcaption><b>Fig. 3:</b> Example planning results: Kinematic planning on urban streets (left), Kinodynamic planning on off-road terrain (middle), and Simple planning on generated maps (right).</figcaption>
+</figure>
 The main example script supports different planning modes through configuration files:
 
 ```bash
@@ -96,15 +101,8 @@ python examples/standalone/example.py --config Configs/simple_example.yml
 python examples/standalone/example.py --config Configs/kinematic_example.yml --test-case case2
 ```
 
-### Configuration
-
-Configuration files are located in `examples/standalone/Configs/` and include:
-
-- **Vehicle Parameters**: Length, width, steering limits, velocity constraints
-- **Planning Parameters**: Resolution, tolerance, epsilon values, expansion limits
-- **Environment Settings**: Map resolution, timesteps, control discretization
-
 For detailed configuration and usage instructions, see [examples/standalone/README.md](examples/standalone/README.md).
+
 
 ## Project Structure
 
