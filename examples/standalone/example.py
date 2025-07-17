@@ -3,70 +3,10 @@ import time
 import yaml
 import torch
 from torch.utils.cpp_extension import load
-import pathlib
 import os
 import argparse
-BASE_DIR = pathlib.Path(__file__).resolve().parent.parent.parent
 from utils import *
-
-def create_planner(configs):
-    env_name = configs["experiment_info_default"]["node_info"]["node_type"]
-    # Check CUDA availability
-    cuda_available = torch.cuda.is_available()
-
-    if not cuda_available:
-        print("CUDA not available, using CPU versions")
-        env_macro = {
-            'simple': '-DUSE_SIMPLE_ENV',
-            'kinematic': '-DUSE_KINEMATIC_CPU_ENV',
-            'kinodynamic': '-DUSE_KINODYNAMIC_CPU_ENV',
-        }[env_name]
-    else:
-        print("CUDA available, using GPU versions")
-        env_macro = {
-            'simple': '-DUSE_SIMPLE_ENV',
-            'kinematic': '-DUSE_KINEMATIC_ENV',
-            'kinodynamic': '-DUSE_KINODYNAMIC_ENV',
-        }[env_name]
-    
-    cpp_path = BASE_DIR / 'src' / 'ighastar.cpp'
-    header_path = BASE_DIR / 'src' / 'Environments'
-
-    if env_name != "simple":
-        if cuda_available:
-            # Use CUDA version
-            cuda_path = BASE_DIR / 'src' / 'Environments' / f'{env_name}.cu'
-            kernel = load(
-                name="ighastar",
-                sources=[str(cpp_path), str(cuda_path)],
-                extra_include_paths=[str(header_path)],
-                extra_cflags=['-std=c++17', '-O3', env_macro],
-                extra_cuda_cflags=['-O3'],
-                verbose=True,
-            )
-        else:
-            # Use CPU version - compile with CPU header and .cpp file included
-            cpu_cpp_path = BASE_DIR / 'src' / 'Environments' / f'{env_name}_cpu.cpp'
-            kernel = load(
-                name="ighastar",
-                sources=[str(cpp_path), str(cpu_cpp_path)],
-                extra_include_paths=[str(header_path)],
-                extra_cflags=['-std=c++17', '-O3', env_macro],
-                verbose=True,
-            )
-    else:
-        # Simple environment (already CPU-based)
-        kernel = load(
-            name="ighastar",
-            sources=[str(cpp_path)],
-            extra_include_paths=[str(header_path)],
-            extra_cflags=['-std=c++17', '-O3', env_macro],
-            verbose=True,
-        )
-    
-    planner = kernel.IGHAStar(configs, False)
-    return planner
-
+from ighastar.scripts.common_utils import create_planner, BASE_DIR
 
 def main(yaml_path="", test_case=None):
     assert yaml_path, "Please provide a valid YAML configuration file path."
@@ -108,7 +48,7 @@ def main(yaml_path="", test_case=None):
     print("Loading bitmap...")
     # Fix the map directory path to be relative to the examples directory
     if not os.path.isabs(map_dir):
-        map_dir = os.path.join(BASE_DIR, "examples/standalone", map_dir)
+        map_dir = os.path.join(BASE_DIR.parent, "examples/standalone", map_dir)
     print(f"Map directory: {map_dir}")
     bitmap = get_map(map_name, map_dir=map_dir, map_size=map_size, node_info=node_info)
     print(f"Bitmap loaded, shape: {bitmap.shape}")
@@ -189,10 +129,6 @@ def main(yaml_path="", test_case=None):
         plt.gca().invert_yaxis()
         
         print("Displaying visualization...")
-        # we only use this once for generating the visuals for the Content folder:
-        # if not os.path.exists(f'{BASE_DIR}/Content/standalone'):
-        #     os.makedirs(f'{BASE_DIR}/Content/standalone')
-        # plt.savefig(f'{BASE_DIR}/Content/standalone/{map_name}_{node_type}.png')
         plt.show()
         print("✓ Visualization complete!")
     else:
@@ -207,5 +143,5 @@ if __name__ == "__main__":
                        help='Test case identifier (optional)')
     # we assume the config is from examples/standalone folder:
     args = parser.parse_args()
-    yaml_path = os.path.join(BASE_DIR, "examples", "standalone", args.config)
+    yaml_path = os.path.join(BASE_DIR.parent, "examples", "standalone", args.config)
     main(yaml_path=yaml_path, test_case=args.test_case)

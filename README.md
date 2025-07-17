@@ -76,6 +76,14 @@ conda env create -f ighastar.yml
 conda activate ighastar
 ```
 
+### 3. Install the Package
+Install the IGHAStar package in editable mode:
+```bash
+pip install -e .
+```
+
+**Note:** This step is required to make the IGHAStar modules importable from anywhere in your environment.
+
 ## Usage
 
 ### Running the Standalone Example
@@ -114,22 +122,26 @@ For detailed configuration and usage instructions, see [examples/standalone/READ
 
 ```
 IGHAStar/
-├── src/                  # Core C++/CUDA source files
-│   ├── ighastar.cpp      # Main IGHA* implementation
-│   └── Environments/     # Environment implementations
-│       ├── *.h           # Header files
-│       ├── *.cu          # CUDA implementations
-│       └── *.cpp         # CPU implementations
+├── ighastar/             # Main package directory
+│   ├── src/              # Core C++/CUDA source files and Python modules
+│   │   ├── ighastar.cpp  # Main IGHA* C++ implementation
+│   │   └── Environments/ # Environment implementations
+│   │       ├── *.h       # Header files
+│   │       ├── *.cu      # CUDA implementations
+│   │       └── *.cpp     # CPU implementations
+│   └── scripts/          # Utility scripts
+│       ├── common_utils.py # Common utilities (create_planner, etc.)
 ├── examples/             # Example scripts and configurations
 │   ├── standalone/       # Standalone examples
 │   │   ├── example.py    # Main example script
 │   │   ├── README.md     # Detailed usage guide
 │   │   ├── Configs/      # Configuration files
 │   │   └── Maps/         # Map files
-│   └── *.py              # Other example scripts
-├── scripts/              # Utility scripts
+│   └── *              # Other example folders
 ├── Content/              # Figures and media files
 ├── ighastar.yml          # Conda environment file
+├── pyproject.toml        # Package configuration
+├── setup.py              # Package setup (for editable installs)
 └── README.md             # This file
 ```
 
