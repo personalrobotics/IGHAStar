@@ -7,8 +7,9 @@ import os
 import argparse
 from utils import *
 from ighastar.scripts.common_utils import create_planner, BASE_DIR
+from typing import Optional
 
-def main(yaml_path="", test_case=None):
+def main(yaml_path: str = "", test_case: Optional[str] = None) -> None:
     assert yaml_path, "Please provide a valid YAML configuration file path."
     print("Loading config from:", yaml_path)
     with open(yaml_path, 'r') as file:

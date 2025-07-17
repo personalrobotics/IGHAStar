@@ -1,9 +1,10 @@
 import torch
 from torch.utils.cpp_extension import load
 import pathlib
+from typing import Any, Dict
 BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
 
-def create_planner(configs):
+def create_planner(configs: Dict[str, Any]) -> Any:
     env_name = configs["experiment_info_default"]["node_info"]["node_type"]
     # Check CUDA availability
     cuda_available = torch.cuda.is_available()

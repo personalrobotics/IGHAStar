@@ -4,8 +4,9 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from math import cos, sin, tan, pi
+from typing import Any, Optional, List, Tuple
 
-def get_map(map_name, map_dir="", map_size=[512, 512], node_info=None):
+def get_map(map_name: str, map_dir: str = "", map_size: List[int] = [512, 512], node_info: Optional[dict] = None) -> torch.Tensor:
     assert map_dir != "", "Map directory must be specified."
     assert node_info is not None, "node_info must be provided."
     node = node_info["node_type"]
@@ -50,7 +51,7 @@ def get_map(map_name, map_dir="", map_size=[512, 512], node_info=None):
         bitmap[..., 0] = torch.from_numpy(costmap)
         return bitmap
 
-def compute_surface_normals(elevation, threshold_deg):
+def compute_surface_normals(elevation: np.ndarray, threshold_deg: float) -> np.ndarray:
     BEV_normal = np.copy(elevation)
     BEV_normal = cv2.resize(BEV_normal, (int(BEV_normal.shape[0]*4), int(BEV_normal.shape[0]*4)), cv2.INTER_AREA)
     BEV_normal = cv2.GaussianBlur(BEV_normal, (3,3), 0)
@@ -71,7 +72,7 @@ def compute_surface_normals(elevation, threshold_deg):
     costmap = costmap.astype(np.float32)
     return costmap
 
-def show_map(plt, bitmap, node_type, alpha=0.6):
+def show_map(plt: Any, bitmap: torch.Tensor, node_type: str, alpha: float = 0.6) -> None:
     if node_type == "simple":
         plt.imshow(bitmap, cmap='gray', alpha=alpha)
     elif node_type == "kinodynamic":
@@ -98,12 +99,12 @@ def show_map(plt, bitmap, node_type, alpha=0.6):
         costmap = bitmap[..., 0]
         plt.imshow(costmap, cmap='gray', alpha=alpha)
 
-def rot_mat_2d(angle):
+def rot_mat_2d(angle: float) -> np.ndarray:
     c = np.cos(angle)
     s = np.sin(angle)
     return np.array([[c, -s], [s, c]])
 
-def plot_arrow(x, y, yaw, length=1.0, width=0.5, fc="r", ec="k"):
+def plot_arrow(x: float, y: float, yaw: float, length: float = 1.0, width: float = 0.5, fc: str = "r", ec: str = "k") -> None:
     """Plot arrow."""
     if not isinstance(x, float):
         for (i_x, i_y, i_yaw) in zip(x, y, yaw):
@@ -112,7 +113,7 @@ def plot_arrow(x, y, yaw, length=1.0, width=0.5, fc="r", ec="k"):
         plt.arrow(x, y, length * cos(yaw), length * sin(yaw),
                   fc=fc, ec=ec, head_width=width, head_length=width, alpha=0.4)
 
-def plot_car(plt, x, y, yaw, color="-r", map_res=0.1, W=1.5, LF = 1.3, LB = 1.3, label=None, width=1, zorder=0):
+def plot_car(plt: Any, x: float, y: float, yaw: float, color: str = "-r", map_res: float = 0.1, W: float = 1.5, LF: float = 1.3, LB: float = 1.3, label: Optional[str] = None, width: int = 1, zorder: int = 0) -> None:
     VRX = [LF, LF, -LB, -LB, LF]
     VRY = [W / 2, -W / 2, -W / 2, W / 2, W / 2]
     car_color = color
@@ -132,10 +133,10 @@ def plot_car(plt, x, y, yaw, color="-r", map_res=0.1, W=1.5, LF = 1.3, LB = 1.3,
     else:
         plt.plot(car_outline_x, car_outline_y, car_color, linewidth=width,zorder=zorder)
 
-def pi_2_pi(angle):
+def pi_2_pi(angle: float) -> float:
     return (angle + pi) % (2 * pi) - pi
 
-def move(x, y, yaw, distance, steer, L=3.0):
+def move(x: float, y: float, yaw: float, distance: float, steer: float, L: float = 3.0) -> Tuple[float, float, float]:
     x += distance * cos(yaw)
     y += distance * sin(yaw)
     yaw += pi_2_pi(distance * tan(steer) / L)  # distance/2
