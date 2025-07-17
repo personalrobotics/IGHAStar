@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ighastar"
+version = "0.1"
+description = "IGHAStar path planning library and tools"
+authors = [
+    { name = "Sidharth Talia" }
+]
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "torch",
+    "matplotlib",
+    "opencv-python"
+]
+
+[tool.setuptools.packages.find]
+include = ["ighastar*"]
+exclude = ["Content*", "examples*", "scripts*"]
