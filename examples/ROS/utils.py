@@ -14,8 +14,6 @@ from mavros_msgs.msg import WaypointList
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from nav_msgs.msg import Odometry
 import os
-import time
-import threading
 
 def find_ighastar_base_dir():
     # Start from the current file's directory and walk up until 'src/ighastar.cpp' is found
@@ -28,61 +26,6 @@ def find_ighastar_base_dir():
         if parent == cur_dir:
             raise RuntimeError("Could not find ighastar base directory (src/ighastar.cpp not found)")
         cur_dir = parent
-
-def create_planner(configs, Debug=False):
-    env_name = configs["experiment_info_default"]["node_info"]["node_type"]
-    BASE_DIR = find_ighastar_base_dir()
-    cuda_available = torch.cuda.is_available()
-
-    if not cuda_available:
-        print("CUDA not available, using CPU versions")
-        env_macro = {
-            'simple': '-DUSE_SIMPLE_ENV',
-            'kinematic': '-DUSE_KINEMATIC_CPU_ENV',
-            'kinodynamic': '-DUSE_KINODYNAMIC_CPU_ENV',
-        }[env_name]
-    else:
-        print("CUDA available, using GPU versions")
-        env_macro = {
-            'simple': '-DUSE_SIMPLE_ENV',
-            'kinematic': '-DUSE_KINEMATIC_ENV',
-            'kinodynamic': '-DUSE_KINODYNAMIC_ENV',
-        }[env_name]
-
-    cpp_path = os.path.join(BASE_DIR, 'src/ighastar.cpp')
-    header_path = os.path.join(BASE_DIR, 'src/Environments')
-
-    if env_name != "simple":
-        if cuda_available:
-            cuda_path = os.path.join(BASE_DIR, f'src/Environments/{env_name}.cu')
-            kernel = load(
-                name="ighastar",
-                sources=[cpp_path, cuda_path],
-                extra_include_paths=[header_path],
-                extra_cflags=['-std=c++17', '-O3', env_macro],
-                extra_cuda_cflags=['-O3'],
-                verbose=True,
-            )
-        else:
-            cpu_cpp_path = os.path.join(BASE_DIR, f'src/Environments/{env_name}_cpu.cpp')
-            kernel = load(
-                name="ighastar",
-                sources=[cpp_path, cpu_cpp_path],
-                extra_include_paths=[header_path],
-                extra_cflags=['-std=c++17', '-O3', env_macro],
-                verbose=True,
-            )
-    else:
-        kernel = load(
-            name="ighastar",
-            sources=[cpp_path],
-            extra_include_paths=[header_path],
-            extra_cflags=['-std=c++17', '-O3', env_macro],
-            verbose=True,
-        )
-    planner = kernel.IGHAStar(configs, Debug)
-    print("planner loaded")
-    return planner
     
 def generate_normal( elev, k=3):
     dzdx = -cv2.Sobel(elev, cv2.CV_32F, 1, 0, ksize=k)
