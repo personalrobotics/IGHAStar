@@ -15,18 +15,6 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from nav_msgs.msg import Odometry
 import os
 
-def find_ighastar_base_dir():
-    # Start from the current file's directory and walk up until 'src/ighastar.cpp' is found
-    cur_dir = os.path.abspath(os.path.dirname(__file__))
-    while True:
-        candidate = os.path.join(cur_dir, 'src', 'ighastar.cpp')
-        if os.path.isfile(candidate):
-            return cur_dir
-        parent = os.path.dirname(cur_dir)
-        if parent == cur_dir:
-            raise RuntimeError("Could not find ighastar base directory (src/ighastar.cpp not found)")
-        cur_dir = parent
-    
 def generate_normal( elev, k=3):
     dzdx = -cv2.Sobel(elev, cv2.CV_32F, 1, 0, ksize=k)
     dzdy = -cv2.Sobel(elev, cv2.CV_32F, 0, 1, ksize=k)
