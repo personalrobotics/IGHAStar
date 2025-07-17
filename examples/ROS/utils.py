@@ -14,8 +14,10 @@ from mavros_msgs.msg import WaypointList
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from nav_msgs.msg import Odometry
 import os
+from typing import Any, Optional, List, Tuple
 
-def generate_normal( elev, k=3):
+
+def generate_normal(elev: np.ndarray, k: int = 3) -> np.ndarray:
     dzdx = -cv2.Sobel(elev, cv2.CV_32F, 1, 0, ksize=k)
     dzdy = -cv2.Sobel(elev, cv2.CV_32F, 0, 1, ksize=k)
     dzdz = np.ones_like(elev)
@@ -24,7 +26,8 @@ def generate_normal( elev, k=3):
     normal = normal / norm
     return normal
 
-def map_from_gridmap(matrix):
+
+def map_from_gridmap(matrix: Any) -> np.ndarray:
     return np.float32(
         cv2.flip(
             np.reshape(
@@ -38,8 +41,10 @@ def map_from_gridmap(matrix):
 
 
 def generate_costmap_from_BEVmap(
-    BEV_lethal, BEV_normal, costmap_cosine_thresh=np.cos(np.radians(60))
-):
+    BEV_lethal: np.ndarray,
+    BEV_normal: np.ndarray,
+    costmap_cosine_thresh: float = np.cos(np.radians(60)),
+) -> np.ndarray:
     """Generate a costmap from BEV lethal and normal maps."""
     dot_product = BEV_normal[:, :, 2]
     angle_cost = np.where(dot_product >= costmap_cosine_thresh, 255, 0).astype(
@@ -51,7 +56,13 @@ def generate_costmap_from_BEVmap(
     return costmap
 
 
-def process_grid_map(heightmap, lethalmap=None, map_res=0.1, blur_kernel=0, costmap_cosine_thresh=np.cos(np.radians(60))):
+def process_grid_map(
+    heightmap: np.ndarray,
+    lethalmap: Optional[np.ndarray] = None,
+    map_res: float = 0.1,
+    blur_kernel: int = 0,
+    costmap_cosine_thresh: float = np.cos(np.radians(60)),
+) -> Tuple[torch.Tensor, np.ndarray]:
     if lethalmap is None:
         lethalmap = np.zeros_like(heightmap, dtype=np.float32)
     normal = generate_normal(heightmap)
@@ -59,17 +70,26 @@ def process_grid_map(heightmap, lethalmap=None, map_res=0.1, blur_kernel=0, cost
     if blur_kernel != 0:
         costmap = cv2.GaussianBlur(costmap, (blur_kernel, blur_kernel), 0)
         costmap[costmap < 255.0] = 0.0
-    bitmap = torch.ones((heightmap.shape[0], heightmap.shape[1], 2), dtype=torch.float32)
+    bitmap = torch.ones(
+        (heightmap.shape[0], heightmap.shape[1], 2), dtype=torch.float32
+    )
     bitmap[..., 0] = torch.from_numpy(costmap)
     bitmap[..., 1] = torch.from_numpy(heightmap)
     offset = map_res * np.array(bitmap.shape[:2]) * 0.5
     return bitmap, offset
 
-def clip_goal_to_map(bitmap, map_res=0.25, start=None, goal=None, num_samples=200):
+
+def clip_goal_to_map(
+    bitmap: torch.Tensor,
+    map_res: float = 0.25,
+    start: Optional[np.ndarray] = None,
+    goal: Optional[np.ndarray] = None,
+    num_samples: int = 200,
+) -> np.ndarray:
     H, W = bitmap.shape[:2]
     H *= map_res
     W *= map_res
-    
+
     x0, y0 = start[:2]
     x1, y1 = goal[:2]
 
@@ -93,8 +113,9 @@ def clip_goal_to_map(bitmap, map_res=0.25, start=None, goal=None, num_samples=20
         goal[0] = x0
         goal[1] = y0
     return goal
-    
-def obtain_state(odom, state):
+
+
+def obtain_state(odom: Odometry, state: np.ndarray) -> np.ndarray:
     ## obtain the state from the odometry and imu messages:
     quaternion = (
         odom.pose.pose.orientation.x,
@@ -114,7 +135,8 @@ def obtain_state(odom, state):
     state[8] = odom.twist.twist.linear.z
     return state
 
-def publish_goal(goal, marker_pub):
+
+def publish_goal(goal: np.ndarray, marker_pub: Any) -> None:
     marker_array = MarkerArray()
     marker = Marker()
     marker.header.frame_id = "odom"
@@ -135,7 +157,8 @@ def publish_goal(goal, marker_pub):
     marker_array.markers.append(marker)
     marker_pub.publish(marker_array)
 
-def publish_path(path, path_publisher):
+
+def publish_path(path: np.ndarray, path_publisher: Any) -> None:
     ros_path = Path()
     ros_path.header.stamp = rospy.Time.now()
     ros_path.header.frame_id = "map"  # or whatever your fixed frame is
@@ -147,7 +170,7 @@ def publish_path(path, path_publisher):
 
         pose.pose.position.x = waypoint[0]
         pose.pose.position.y = waypoint[1]
-        pose.pose.position.z = 1 # would be nice to get the extended state here...
+        pose.pose.position.z = 1  # would be nice to get the extended state here...
 
         # Convert theta to quaternion
         quat = quaternion_from_euler(0, 0, waypoint[2])
@@ -157,20 +180,34 @@ def publish_path(path, path_publisher):
 
     path_publisher.publish(ros_path)
 
-def diagnostic_publisher(status, expansion_counter, time_taken, hysteresis, diagnostics_pub):
+
+def diagnostic_publisher(
+    status: Any,
+    expansion_counter: int,
+    time_taken: float,
+    hysteresis: float,
+    diagnostics_pub: Any,
+) -> None:
     diagnostics_array = DiagnosticArray()
     diagnostics_status = DiagnosticStatus()
     diagnostics_status.name = "planner"
     diagnostics_status.level = status
-    diagnostics_status.values.append(KeyValue(key="Expansion Count", value=str(expansion_counter)))
-    diagnostics_status.values.append(KeyValue(key="Time Taken (s)", value=f"{time_taken:.4f}"))
-    diagnostics_status.values.append(KeyValue(key="Expansions/second", value=f"{expansion_counter/time_taken:.4f}"))
+    diagnostics_status.values.append(
+        KeyValue(key="Expansion Count", value=str(expansion_counter))
+    )
+    diagnostics_status.values.append(
+        KeyValue(key="Time Taken (s)", value=f"{time_taken:.4f}")
+    )
+    diagnostics_status.values.append(
+        KeyValue(key="Expansions/second", value=f"{expansion_counter/time_taken:.4f}")
+    )
     diagnostics_status.values.append(KeyValue(key="Hysteresis", value=f"{hysteresis}"))
 
     diagnostics_array.status.append(diagnostics_status)
     diagnostics_pub.publish(diagnostics_array)
 
-def set_headings(local_waypoints):
+
+def set_headings(local_waypoints: np.ndarray) -> np.ndarray:
     target_Vhat = np.zeros_like(local_waypoints)  # 0 out everything
     for i in range(1, len(local_waypoints) - 1):  # all points except first and last
         V_prev = local_waypoints[i] - local_waypoints[i - 1]
@@ -182,21 +219,26 @@ def set_headings(local_waypoints):
     target_Vhat[-1] /= np.linalg.norm(target_Vhat[-1])
 
     waypoints = np.zeros((len(local_waypoints), 4))
-    waypoints[:, :2] = local_waypoints[:,:2]
+    waypoints[:, :2] = local_waypoints[:, :2]
     waypoints[:, 2] = np.arctan2(target_Vhat[:, 1], target_Vhat[:, 0])
     waypoints[:, 3] = 2.0
     return waypoints
+
 
 earthRadius = 6378145.0
 DEG_TO_RAD = 0.01745329252
 RAD_TO_DEG = 57.2957795131
 
-def calcposLLH( lat, lon, dX, dY):
+
+def calcposLLH(lat: float, lon: float, dX: float, dY: float) -> Tuple[float, float]:
     lat += dY / (earthRadius * DEG_TO_RAD)
     lon += dX / (earthRadius * np.cos(lat * DEG_TO_RAD) * DEG_TO_RAD)
     return lat, lon
 
-def calcposNED( lat, lon, latReference, lonReference):
+
+def calcposNED(
+    lat: float, lon: float, latReference: float, lonReference: float
+) -> Tuple[float, float]:
     Y = earthRadius * (lat - latReference) * DEG_TO_RAD
     X = (
         earthRadius
@@ -206,7 +248,16 @@ def calcposNED( lat, lon, latReference, lonReference):
     )
     return X, Y
 
-def start_goal_logic(bitmap, map_res, start_state, goal, map_center, offset, stop=False):
+
+def start_goal_logic(
+    bitmap: torch.Tensor,
+    map_res: float,
+    start_state: np.ndarray,
+    goal: np.ndarray,
+    map_center: np.ndarray,
+    offset: np.ndarray,
+    stop: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor]:
     start = np.zeros(4, dtype=np.float32)
     goal_ = np.zeros(4, dtype=np.float32)
     start[:2] = start_state[:2] + offset - map_center[:2]
@@ -216,9 +267,14 @@ def start_goal_logic(bitmap, map_res, start_state, goal, map_center, offset, sto
     start[3] = start_state[3]
     goal_[2] = goal[2]
     goal_[3] = 0.0 if stop else 2.0
-    return torch.from_numpy(start).to(dtype=torch.float32), torch.from_numpy(goal_).to(dtype=torch.float32)
+    return torch.from_numpy(start).to(dtype=torch.float32), torch.from_numpy(goal_).to(
+        dtype=torch.float32
+    )
 
-def get_local_frame_waypoints(waypoint_list, gps_origin):
+
+def get_local_frame_waypoints(
+    waypoint_list: Any, gps_origin: Tuple[float, float]
+) -> np.ndarray:
     local_waypoints = []
     for waypoint in waypoint_list:
         if waypoint.frame != 3:
@@ -231,7 +287,18 @@ def get_local_frame_waypoints(waypoint_list, gps_origin):
     local_waypoints = set_headings(np.array(local_waypoints))
     return local_waypoints
 
-def visualize_map_with_path(costmap, elevation_map, path, goal, state, wp_radius, map_center, map_size, resolution_inv):
+
+def visualize_map_with_path(
+    costmap: np.ndarray,
+    elevation_map: np.ndarray,
+    path: Optional[np.ndarray],
+    goal: np.ndarray,
+    state: np.ndarray,
+    wp_radius: float,
+    map_center: np.ndarray,
+    map_size: int,
+    resolution_inv: float,
+) -> np.ndarray:
     """
     Visualize the costmap and elevation map with the path, goal, and optionally the current state.
     Args:
@@ -270,8 +337,12 @@ def visualize_map_with_path(costmap, elevation_map, path, goal, state, wp_radius
 
     # Draw goal (convert to local map frame)
     goal_disp = np.array(goal[:2]) - np.array(map_center[:2])
-    goal_x = int(np.clip((goal_disp[0] * resolution_inv) + map_size // 2, 0, map_size - 1))
-    goal_y = int(np.clip((goal_disp[1] * resolution_inv) + map_size // 2, 0, map_size - 1))
+    goal_x = int(
+        np.clip((goal_disp[0] * resolution_inv) + map_size // 2, 0, map_size - 1)
+    )
+    goal_y = int(
+        np.clip((goal_disp[1] * resolution_inv) + map_size // 2, 0, map_size - 1)
+    )
     radius = max(2, int(wp_radius * resolution_inv))
     cv2.circle(display_img, (goal_x, goal_y), radius, (255, 255, 255), 2)
 
@@ -279,17 +350,29 @@ def visualize_map_with_path(costmap, elevation_map, path, goal, state, wp_radius
     if path is not None and len(path) > 0:
         path_disp = np.copy(path)
         path_disp[..., :2] -= np.array(map_center[:2])
-        path_X = np.clip((path_disp[..., 0] * resolution_inv) + map_size // 2, 0, map_size - 1).astype(int)
-        path_Y = np.clip((path_disp[..., 1] * resolution_inv) + map_size // 2, 0, map_size - 1).astype(int)
+        path_X = np.clip(
+            (path_disp[..., 0] * resolution_inv) + map_size // 2, 0, map_size - 1
+        ).astype(int)
+        path_Y = np.clip(
+            (path_disp[..., 1] * resolution_inv) + map_size // 2, 0, map_size - 1
+        ).astype(int)
         car_width_px = max(1, int(0.15 * resolution_inv))
         if path.shape[1] > 3:
             velocity = path[..., 3]
-            velocity_norm = (velocity - np.min(velocity)) / (np.max(velocity) - np.min(velocity) + 1e-6)
+            velocity_norm = (velocity - np.min(velocity)) / (
+                np.max(velocity) - np.min(velocity) + 1e-6
+            )
             velocity_color = np.clip((velocity_norm * 255), 0, 255).astype(int)
         else:
             velocity_color = np.full(len(path_X), 128, dtype=int)
         for i in range(len(path_X) - 1):
-            cv2.line(display_img, (path_X[i], path_Y[i]), (path_X[i + 1], path_Y[i + 1]), (0, int(velocity_color[i]), 0), car_width_px)
+            cv2.line(
+                display_img,
+                (path_X[i], path_Y[i]),
+                (path_X[i + 1], path_Y[i + 1]),
+                (0, int(velocity_color[i]), 0),
+                car_width_px,
+            )
 
     # Draw current state as a rectangle (if provided)
     if state is not None and len(state) >= 3:
@@ -302,15 +385,20 @@ def visualize_map_with_path(costmap, elevation_map, path, goal, state, wp_radius
         car_height_px = max(2, int(0.15 * resolution_inv))
         half_width = car_width_px // 2
         half_height = car_height_px // 2
-        corners = np.array([
-            [x_px - half_width, y_px - half_height],
-            [x_px + half_width, y_px - half_height],
-            [x_px + half_width, y_px + half_height],
-            [x_px - half_width, y_px + half_height]
-        ], dtype=np.int32)
+        corners = np.array(
+            [
+                [x_px - half_width, y_px - half_height],
+                [x_px + half_width, y_px - half_height],
+                [x_px + half_width, y_px + half_height],
+                [x_px - half_width, y_px + half_height],
+            ],
+            dtype=np.int32,
+        )
         rotation_matrix = cv2.getRotationMatrix2D((x_px, y_px), np.degrees(theta), 1.0)
         rotated_corners = cv2.transform(np.array([corners]), rotation_matrix)[0]
-        cv2.polylines(display_img, [rotated_corners], isClosed=True, color=(0, 0, 0), thickness=2)
+        cv2.polylines(
+            display_img, [rotated_corners], isClosed=True, color=(0, 0, 0), thickness=2
+        )
 
     # Flip for visualization
     display_img = cv2.flip(display_img, 0)

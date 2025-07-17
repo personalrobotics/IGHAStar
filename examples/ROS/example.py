@@ -18,6 +18,8 @@ import cv2
 import time
 import os
 from ighastar.scripts.common_utils import create_planner
+from typing import Any, Optional, Tuple
+
 
 class PlannerNode:
     """
@@ -25,7 +27,8 @@ class PlannerNode:
     Handles all ROS communication, map/state/waypoint management, and planning logic.
     Can be used live or with rosbag replay by calling the callbacks directly.
     """
-    def __init__(self, config):
+
+    def __init__(self, config: dict) -> None:
         # --- Planner config ---
         planner_cfg = config["Planner_config"]
         self.map_res = planner_cfg["experiment_info_default"]["node_info"]["map_res"]
@@ -49,16 +52,26 @@ class PlannerNode:
         # --- ROS publishers ---
         topics = config["topics"]
         self.path_pub = rospy.Publisher(topics["path"], Path, queue_size=1, latch=True)
-        self.marker_pub = rospy.Publisher(topics["goal_marker"], MarkerArray, queue_size=1)
-        self.diagnostics_pub = rospy.Publisher(topics["diagnostics"], DiagnosticArray, queue_size=1)
+        self.marker_pub = rospy.Publisher(
+            topics["goal_marker"], MarkerArray, queue_size=1
+        )
+        self.diagnostics_pub = rospy.Publisher(
+            topics["diagnostics"], DiagnosticArray, queue_size=1
+        )
         # --- ROS subscribers ---
-        rospy.Subscriber(topics["elevation_map"], GridMap, self.map_callback, queue_size=1)
+        rospy.Subscriber(
+            topics["elevation_map"], GridMap, self.map_callback, queue_size=1
+        )
         rospy.Subscriber(topics["odom"], Odometry, self.odom_callback, queue_size=1)
-        rospy.Subscriber(topics["waypoints"], WaypointList, self.waypoint_callback, queue_size=1)
-        rospy.Subscriber(topics["global_position"], NavSatFix, self.global_pos_callback, queue_size=1)
+        rospy.Subscriber(
+            topics["waypoints"], WaypointList, self.waypoint_callback, queue_size=1
+        )
+        rospy.Subscriber(
+            topics["global_position"], NavSatFix, self.global_pos_callback, queue_size=1
+        )
         self.plan_loop()
 
-    def map_callback(self, grid_map):
+    def map_callback(self, grid_map: GridMap) -> None:
         self.grid_map = grid_map
         if self.height_index is None or self.layers is None:
             self.layers = self.grid_map.layers
@@ -70,18 +83,46 @@ class PlannerNode:
         if np.any(np.isnan(self.heightmap)):
             self.map_init = False
         else:
-            self.bitmap, self.offset = process_grid_map(self.heightmap, lethalmap=None, map_res=self.map_res, blur_kernel=self.blur_kernel, costmap_cosine_thresh=self.costmap_cosine_thresh)
+            self.bitmap, self.offset = process_grid_map(
+                self.heightmap,
+                lethalmap=None,
+                map_res=self.map_res,
+                blur_kernel=self.blur_kernel,
+                costmap_cosine_thresh=self.costmap_cosine_thresh,
+            )
             self.map_init = True
 
-    def plan(self, start_state, goal_, stop=False):
+    def plan(
+        self, start_state: np.ndarray, goal_: np.ndarray, stop: bool = False
+    ) -> Tuple[Optional[np.ndarray], bool, int, float, np.ndarray]:
         if self.bitmap is None:
             return None, False, 0, 0.0, goal_
         bitmap = torch.clone(self.bitmap)
-        start, goal = start_goal_logic(bitmap, self.map_res, start_state, goal_, self.map_center, self.offset, stop=stop)
+        start, goal = start_goal_logic(
+            bitmap,
+            self.map_res,
+            start_state,
+            goal_,
+            self.map_center,
+            self.offset,
+            stop=stop,
+        )
         now = time.perf_counter()
-        success = self.planner.search(start, goal, bitmap, self.expansion_limit, self.hysteresis, True)
+        success = self.planner.search(
+            start, goal, bitmap, self.expansion_limit, self.hysteresis, True
+        )
         time_taken = time.perf_counter() - now
-        avg_successor_time, avg_goal_check_time, avg_overhead_time, avg_g_update_time, switches, max_level_profile, Q_v_size, expansion_counter, expansion_list= self.planner.get_profiler_info()
+        (
+            avg_successor_time,
+            avg_goal_check_time,
+            avg_overhead_time,
+            avg_g_update_time,
+            switches,
+            max_level_profile,
+            Q_v_size,
+            expansion_counter,
+            expansion_list,
+        ) = self.planner.get_profiler_info()
         output_goal = goal[:2] - (self.offset - self.map_center[:2])
         if success:
             path = self.planner.get_best_path().numpy()
@@ -92,40 +133,75 @@ class PlannerNode:
         else:
             return None, False, expansion_counter, time_taken, output_goal
 
-    def odom_callback(self, msg):
+    def odom_callback(self, msg: Odometry) -> None:
         """Update local position from Odometry message."""
         self.state = obtain_state(msg, self.state)
-    
-    def global_pos_callback(self, msg):
+
+    def global_pos_callback(self, msg: Any) -> None:
         self.global_pos = msg
 
-    def waypoint_callback(self, msg):
+    def waypoint_callback(self, msg: WaypointList) -> None:
         """Update local waypoints from WaypointList message."""
         print("Got waypoints")
         self.waypoint_list = msg.waypoints
         while self.global_pos is None or self.state is None:
             time.sleep(1)
-        gps_origin = calcposLLH(self.global_pos.latitude, self.global_pos.longitude, -self.state[0], -self.state[1])
+        gps_origin = calcposLLH(
+            self.global_pos.latitude,
+            self.global_pos.longitude,
+            -self.state[0],
+            -self.state[1],
+        )
         self.local_waypoints = get_local_frame_waypoints(self.waypoint_list, gps_origin)
 
-    def plan_loop(self):
+    def plan_loop(self) -> None:
         rate = rospy.Rate(20)
         while not rospy.is_shutdown():
             rate.sleep()
-            if self.local_waypoints is not None and self.state is not None and self.bitmap is not None and len(self.local_waypoints):
+            if (
+                self.local_waypoints is not None
+                and self.state is not None
+                and self.bitmap is not None
+                and len(self.local_waypoints)
+            ):
                 self.local_waypoints = np.array(self.local_waypoints)
-                plan_state = np.array([self.state[0], self.state[1], self.state[5], np.linalg.norm(self.state[6:8])])
+                plan_state = np.array(
+                    [
+                        self.state[0],
+                        self.state[1],
+                        self.state[5],
+                        np.linalg.norm(self.state[6:8]),
+                    ]
+                )
                 goal = self.local_waypoints[0]
-                path, success, expansions, time_taken, output_goal = self.plan(plan_state, goal, stop=len(self.local_waypoints) == 0)
-                expansions_per_second = max(expansions/time_taken, 1000)
+                path, success, expansions, time_taken, output_goal = self.plan(
+                    plan_state, goal, stop=len(self.local_waypoints) == 0
+                )
+                expansions_per_second = max(expansions / time_taken, 1000)
                 self.expansion_limit = int(expansions_per_second * 0.5)
                 if success:
                     publish_path(path, self.path_pub)
                     publish_goal(output_goal, self.marker_pub)
                     # Visualize map with path
 
-                diagnostic_publisher(success, expansions, time_taken, self.hysteresis, self.diagnostics_pub)
-                display_map = visualize_map_with_path(self.bitmap[..., 0].numpy(), self.bitmap[..., 1].numpy(), path, output_goal, plan_state, self.wp_radius, self.map_center, 480, 7.5/self.map_res)
+                diagnostic_publisher(
+                    success,
+                    expansions,
+                    time_taken,
+                    self.hysteresis,
+                    self.diagnostics_pub,
+                )
+                display_map = visualize_map_with_path(
+                    self.bitmap[..., 0].numpy(),
+                    self.bitmap[..., 1].numpy(),
+                    path,
+                    output_goal,
+                    plan_state,
+                    self.wp_radius,
+                    self.map_center,
+                    480,
+                    7.5 / self.map_res,
+                )
                 cv2.imshow("planner_vis", display_map)
                 cv2.waitKey(1)
                 # reduce length of local waypoints:
@@ -133,7 +209,7 @@ class PlannerNode:
                 if dist < self.wp_radius:
                     if len(self.local_waypoints) > 1:
                         self.local_waypoints = self.local_waypoints[1:]
-                
+
 
 if __name__ == "__main__":
     rospy.init_node("ighastar_planner_node")
