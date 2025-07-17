@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
+import numpy as np
 import time
 import yaml
 import torch
 from torch.utils.cpp_extension import load
+import cv2
 import pathlib
+import sys
 import os
 import argparse
 BASE_DIR = pathlib.Path(__file__).resolve().parent.parent.parent
-from utils import *
+sys.path.append(str(BASE_DIR / 'scripts'))
+sys.path.append(str(BASE_DIR / 'src'))
+from plotting import show_map, plot_car
+from utils import get_map
+import matplotlib.pyplot as plt
 
 def create_planner(configs):
     env_name = configs["experiment_info_default"]["node_info"]["node_type"]
@@ -29,28 +36,28 @@ def create_planner(configs):
             'kinodynamic': '-DUSE_KINODYNAMIC_ENV',
         }[env_name]
     
-    cpp_path = BASE_DIR / 'src' / 'ighastar.cpp'
-    header_path = BASE_DIR / 'src' / 'Environments'
+    cpp_path = f'{BASE_DIR}/src/ighastar.cpp'
+    header_path = f'{BASE_DIR}/src/Environments'
 
     if env_name != "simple":
         if cuda_available:
             # Use CUDA version
-            cuda_path = BASE_DIR / 'src' / 'Environments' / f'{env_name}.cu'
+            cuda_path = f'{BASE_DIR}/src/Environments/{env_name}.cu'
             kernel = load(
                 name="ighastar",
-                sources=[str(cpp_path), str(cuda_path)],
-                extra_include_paths=[str(header_path)],
+                sources=[cpp_path, cuda_path],
+                extra_include_paths=[header_path],
                 extra_cflags=['-std=c++17', '-O3', env_macro],
                 extra_cuda_cflags=['-O3'],
                 verbose=True,
             )
         else:
             # Use CPU version - compile with CPU header and .cpp file included
-            cpu_cpp_path = BASE_DIR / 'src' / 'Environments' / f'{env_name}_cpu.cpp'
+            cpu_cpp_path = f'{BASE_DIR}/src/Environments/{env_name}_cpu.cpp'
             kernel = load(
                 name="ighastar",
-                sources=[str(cpp_path), str(cpu_cpp_path)],
-                extra_include_paths=[str(header_path)],
+                sources=[cpp_path, cpu_cpp_path],
+                extra_include_paths=[header_path],
                 extra_cflags=['-std=c++17', '-O3', env_macro],
                 verbose=True,
             )
@@ -58,8 +65,8 @@ def create_planner(configs):
         # Simple environment (already CPU-based)
         kernel = load(
             name="ighastar",
-            sources=[str(cpp_path)],
-            extra_include_paths=[str(header_path)],
+            sources=[cpp_path],
+            extra_include_paths=[header_path],
             extra_cflags=['-std=c++17', '-O3', env_macro],
             verbose=True,
         )
@@ -189,10 +196,9 @@ def main(yaml_path="", test_case=None):
         plt.gca().invert_yaxis()
         
         print("Displaying visualization...")
-        # we only use this once for generating the visuals for the Content folder:
-        # if not os.path.exists(f'{BASE_DIR}/Content/standalone'):
-        #     os.makedirs(f'{BASE_DIR}/Content/standalone')
-        # plt.savefig(f'{BASE_DIR}/Content/standalone/{map_name}_{node_type}.png')
+        if not os.path.exists(f'{BASE_DIR}/Content/standalone'):
+            os.makedirs(f'{BASE_DIR}/Content/standalone')
+        plt.savefig(f'{BASE_DIR}/Content/standalone/{map_name}_{node_type}.png')
         plt.show()
         print("✓ Visualization complete!")
     else:
