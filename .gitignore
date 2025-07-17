@@ -2,13 +2,13 @@
 
 Global_Planning_Waypoints/
 MPC/
-src/IGHAStarClass.py
-src/Nodes.py
+ighastar/src/IGHAStarClass.py
+ighastar/src/Nodes.py
 src/analytical_bicycle.cpp
-scripts/map_generation.py
-scripts/Planner_vis.py
-scripts/IGHAStarCpp.py
-scripts/test_case_generation.py
+ighastar/scripts/map_generation.py
+ighastar/scripts/Planner_vis.py
+ighastar/scripts/IGHAStarCpp.py
+ighastar/scripts/test_case_generation.py
 examples/ros_kinodynamic_example.py
 examples/ROS/
 examples/BeamNG/
