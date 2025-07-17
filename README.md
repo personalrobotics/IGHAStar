@@ -150,5 +150,11 @@ IGHAStar/
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Test with both CPU and GPU environments
-5. Submit a pull request
+4. Format your code:
+   - For C++ files, use [clang-format](https://clang.llvm.org/docs/ClangFormat.html) to ensure consistent style.
+     - Example: `clang-format -i path/to/file.cpp`
+   - For Python files, use [black](https://black.readthedocs.io/en/stable/) for code formatting.
+     - Example: `black path/to/file.py`
+   - Use [PEP 484](https://peps.python.org/pep-0484/) type hints for all Python functions and methods.
+5. Test with both CPU and GPU environments (if that applies)
+6. Submit a pull request
