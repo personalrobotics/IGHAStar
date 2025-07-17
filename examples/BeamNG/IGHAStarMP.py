@@ -4,7 +4,6 @@ import time
 import traceback
 from queue import Empty
 
-
 class IGHAStarMP:
     """
     Multiprocessing wrapper for the IGHA* planner. Runs the planner in a separate process and communicates via queues.
@@ -30,38 +29,9 @@ class IGHAStarMP:
         """
         import torch
         import numpy as np
-        import os
-        import sys
-        import pathlib
+        from ighastar.scripts.common_utils import create_planner
 
-        BASE_DIR = pathlib.Path(__file__).resolve().parent
-        sys.path.append(str(BASE_DIR / "src"))
-        from torch.utils.cpp_extension import load
-
-        env_name = configs["experiment_info_default"]["node_info"]["node_type"]
-        env_macro = {
-            "simple": "-DUSE_SIMPLE_ENV",
-            "kinematic": "-DUSE_KINEMATIC_ENV",
-            "kinodynamic": "-DUSE_KINODYNAMIC_ENV",
-        }[env_name]
-        folder_name = os.getcwd()
-        for path in sys.path:
-            folder_path = os.path.join(path, folder_name)
-            if os.path.exists(folder_path):
-                break
-        cpp_path = f"{folder_path}/src/ighastar.cpp"
-        cuda_path = f"{folder_path}/src/Environments/{env_name}.cu"
-        header_path = f"{folder_path}/src/Environments"
-
-        kernel = load(
-            name="ighastar",
-            sources=[cpp_path, cuda_path],
-            extra_include_paths=[header_path],
-            extra_cflags=["-std=c++17", "-O3", env_macro],
-            extra_cuda_cflags=["-O3"],
-            verbose=True,
-        )
-        planner = kernel.IGHAStar(configs, False)
+        planner = create_planner(configs["Planner_config"])
         print("[IGHAStarMP] Planner loaded.")
 
         map_res = configs["experiment_info_default"]["node_info"]["map_res"]
