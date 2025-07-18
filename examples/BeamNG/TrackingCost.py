@@ -1,4 +1,5 @@
 import torch
+from typing import Any, Optional, Dict
 
 
 class SimpleCarCost(torch.nn.Module):
@@ -8,11 +9,11 @@ class SimpleCarCost(torch.nn.Module):
 
     def __init__(
         self,
-        Cost_config,
-        Map_config,
-        dtype=torch.float32,
-        device=torch.device("cuda"),
-    ):
+        Cost_config: Dict[str, Any],
+        Map_config: Dict[str, Any],
+        dtype: torch.dtype = torch.float32,
+        device: torch.device = torch.device("cuda"),
+    ) -> None:
         super(SimpleCarCost, self).__init__()
         self.dtype = dtype
         self.d = device
@@ -67,7 +68,12 @@ class SimpleCarCost(torch.nn.Module):
         self.constraint_violation = False
 
     @torch.jit.export
-    def set_BEV(self, BEVmap_height, BEVmap_normal, BEVmap_cost):
+    def set_BEV(
+        self,
+        BEVmap_height: torch.Tensor,
+        BEVmap_normal: torch.Tensor,
+        BEVmap_cost: torch.Tensor,
+    ) -> None:
         """
         Set BEV (bird's-eye view) map data for cost calculation.
         """
@@ -76,17 +82,17 @@ class SimpleCarCost(torch.nn.Module):
         self.BEVmap_cost = (255 - BEVmap_cost) / 255
 
     @torch.jit.export
-    def set_goal(self, goal_state):
+    def set_goal(self, goal_state: torch.Tensor) -> None:
         self.goal_state = goal_state[:2]
 
-    def set_path(self, path):
+    def set_path(self, path: torch.Tensor) -> None:
         self.path = torch.tensor(path, dtype=self.dtype, device=self.d)
 
     @torch.jit.export
-    def set_speed_limit(self, speed_lim):
+    def set_speed_limit(self, speed_lim: float) -> None:
         self.speed_target = torch.tensor(speed_lim, dtype=self.dtype, device=self.d)
 
-    def meters_to_px(self, meters):
+    def meters_to_px(self, meters: torch.Tensor) -> torch.Tensor:
         px = ((meters + self.BEVmap_size * 0.5) / self.BEVmap_res).to(
             dtype=torch.long, device=self.d
         )
@@ -94,7 +100,7 @@ class SimpleCarCost(torch.nn.Module):
         px = torch.minimum(px, self.BEVmap_size_px - 1)
         return px
 
-    def forward(self, state, controls):
+    def forward(self, state: torch.Tensor, controls: torch.Tensor) -> torch.Tensor:
         # Unpack state
         x = state[..., 0]
         y = state[..., 1]

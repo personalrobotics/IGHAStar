@@ -3,13 +3,15 @@ import numpy as np
 import time
 import traceback
 from queue import Empty
+from typing import Any, Optional, Tuple, Dict
+
 
 class IGHAStarMP:
     """
     Multiprocessing wrapper for the IGHA* planner. Runs the planner in a separate process and communicates via queues.
     """
 
-    def __init__(self, configs):
+    def __init__(self, configs: Dict[str, Any]) -> None:
         mp.set_start_method("spawn", force=True)  # Safe for CUDA
         self.query_queue = mp.Queue(5)
         self.result_queue = mp.Queue(5)
@@ -23,7 +25,9 @@ class IGHAStarMP:
         self.completed = True
         self.expansion_counter = 0
 
-    def _planner_process(self, configs, query_queue, result_queue):
+    def _planner_process(
+        self, configs: Dict[str, Any], query_queue: Any, result_queue: Any
+    ) -> None:
         """
         Planner process: loads the CUDA/C++ kernel and runs the IGHA* planner in response to queries.
         """
@@ -113,16 +117,16 @@ class IGHAStarMP:
 
     def set_query(
         self,
-        map_center,
-        start_state,
-        goal_,
-        costmap,
-        heightmap,
-        hysteresis,
-        expansion_limit,
-        stop=False,
-        disable=False,
-    ):
+        map_center: np.ndarray,
+        start_state: np.ndarray,
+        goal_: np.ndarray,
+        costmap: np.ndarray,
+        heightmap: np.ndarray,
+        hysteresis: float,
+        expansion_limit: int,
+        stop: bool = False,
+        disable: bool = False,
+    ) -> None:
         """
         Submit a new planning query. Returns immediately; results are available via update().
         """
@@ -148,14 +152,14 @@ class IGHAStarMP:
         self.completed = False
         self.success = False
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset planner state."""
         self.path = None
         self.success = False
         self.completed = True
         self.expansion_counter = 0
 
-    def update(self):
+    def update(self) -> Tuple[bool, Optional[np.ndarray], int]:
         """
         Call this periodically in your main loop to check for planner results.
         Returns (success, path, expansion_counter).
@@ -176,7 +180,7 @@ class IGHAStarMP:
         except Empty:
             return False, self.path, self.expansion_counter
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """Shut down the planner process."""
         self.query_queue.put(None)
         self.process.terminate()

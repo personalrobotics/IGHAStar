@@ -3,11 +3,14 @@ import cv2
 import time
 import threading
 import torch
+from typing import Any, Optional, List, Tuple, Dict
 
 
 def generate_costmap_from_BEVmap(
-    BEV_lethal, BEV_normal, costmap_cosine_thresh=np.cos(np.radians(60))
-):
+    BEV_lethal: np.ndarray,
+    BEV_normal: np.ndarray,
+    costmap_cosine_thresh: float = np.cos(np.radians(60)),
+) -> np.ndarray:
     """Generate a costmap from BEV lethal and normal maps."""
     dot_product = BEV_normal[:, :, 2]
     angle_cost = np.where(dot_product >= costmap_cosine_thresh, 255, 0).astype(
@@ -20,7 +23,11 @@ def generate_costmap_from_BEVmap(
     return costmap
 
 
-def convert_global_path_to_bng(bng_interface=None, path=None, Map_config=None):
+def convert_global_path_to_bng(
+    bng_interface: Optional[Any] = None,
+    path: Optional[np.ndarray] = None,
+    Map_config: Optional[Dict[str, Any]] = None,
+) -> np.ndarray:
     """Convert a global path to BeamNG waypoints with elevation and quaternion."""
     target_wp = []
     map_res = Map_config["map_res"]
@@ -44,7 +51,14 @@ def convert_global_path_to_bng(bng_interface=None, path=None, Map_config=None):
     return np.array(target_wp)
 
 
-def update_goal(goal, pos, target_WP, current_wp_index, lookahead, wp_radius=1.0):
+def update_goal(
+    goal: Optional[np.ndarray],
+    pos: np.ndarray,
+    target_WP: np.ndarray,
+    current_wp_index: int,
+    lookahead: float,
+    wp_radius: float = 1.0,
+) -> Tuple[np.ndarray, bool, int]:
     """Update the goal position based on lookahead and proximity to final waypoint."""
     final_wp = target_WP[-1]
     dx = final_wp[0] - pos[0]
@@ -65,7 +79,9 @@ def update_goal(goal, pos, target_WP, current_wp_index, lookahead, wp_radius=1.0
     return goal, success, current_wp_index
 
 
-def steering_limiter(steer, state, RPS_config):
+def steering_limiter(
+    steer: float, state: np.ndarray, RPS_config: Dict[str, Any]
+) -> float:
     """Limit steering to prevent rollovers and respect physical constraints."""
     steering_setpoint = steer * RPS_config["steering_max"]
     whspd2 = max(1.0, np.linalg.norm(state[6:8])) ** 2  # speed squared in world frame
@@ -125,7 +141,7 @@ def steering_limiter(steer, state, RPS_config):
 
 
 class PlannerVis:
-    def __init__(self, map_size, resolution_inv):
+    def __init__(self, map_size: int, resolution_inv: float) -> None:
         self.map_size = map_size
         self.resolution_inv = resolution_inv
         self.costmap = None
@@ -140,15 +156,15 @@ class PlannerVis:
 
     def update_vis(
         self,
-        states,
-        path,
-        costmap,
-        elevation_map,
-        resolution_inv,
-        goal,
-        expansion_counter,
-        hysteresis,
-    ):
+        states: np.ndarray,
+        path: Optional[np.ndarray],
+        costmap: np.ndarray,
+        elevation_map: np.ndarray,
+        resolution_inv: float,
+        goal: np.ndarray,
+        expansion_counter: int,
+        hysteresis: float,
+    ) -> None:
         with self.lock:
             if isinstance(states, torch.Tensor):
                 self.states = states.cpu().numpy()
@@ -162,12 +178,12 @@ class PlannerVis:
             self.hysteresis = hysteresis
             self.expansion_counter = expansion_counter
 
-    def generate_costmap_from_BEVmap(self, normal):
+    def generate_costmap_from_BEVmap(self, normal: np.ndarray) -> np.ndarray:
         dot_product = normal[:, :, 2]
         costmap = np.where(dot_product >= self.cosine_thresh, 255, 0).astype(np.float32)
         return costmap
 
-    def costmap_vis(self):
+    def costmap_vis(self) -> None:
         while True:
             if (
                 self.states is not None

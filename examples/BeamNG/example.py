@@ -11,6 +11,8 @@ import cv2
 import argparse
 import sys
 import pathlib
+import os
+from typing import Any, Optional, Dict, List
 
 BASE_DIR = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(BASE_DIR / "scripts"))
@@ -28,12 +30,12 @@ torch.manual_seed(0)
 
 
 def main(
-    config_path=None,
-    hal_config_path=None,
-    waypoint_folder=None,
-    output_folder=None,
-    args=None,
-):
+    config_path: Optional[str] = None,
+    hal_config_path: Optional[str] = None,
+    waypoint_folder: Optional[str] = None,
+    output_folder: Optional[str] = None,
+    args: Optional[Any] = None,
+) -> None:
     if config_path is None:
         print("no config file provided!")
         exit()
