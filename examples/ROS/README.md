@@ -3,8 +3,7 @@
 This folder contains a ROS-based example for the IGHA* path planner. The code here is really an example script to demonstrate how one would use the planner in the loop on their robot. 
 It demonstrates how to integrate the IGHA* planner with ROS topics for maps, odometry, waypoints, and visualization.
 For simplicity (not needing to fiddle with rviz), there is a built in visualization in the example.
-
-## TODO: does one need to install all grid-map stuff to get grid-map visuals? Might be useful to get rviz visualizations here.
+It is however not a "ros-package"; one can use the example shown here as a stencil to incorporate IGHA* into their navigation stack.
 
 
 ## Prerequisites
