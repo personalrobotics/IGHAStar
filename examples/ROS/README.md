@@ -10,29 +10,41 @@ For simplicity (not needing to fiddle with rviz), there is a built in visualizat
 ## Prerequisites
 - ROS Noetic
 - Python 3
-- [catkin_tools](https://catkin-tools.readthedocs.io/en/latest/)
-- [PyTorch](https://pytorch.org/)
-- OpenCV (`cv2`)
-- numpy, yaml
-- IGHAStar C++/CUDA requirements (requirements.txt)
-- ROS messages: `nav_msgs`, `geometry_msgs`, `mavros_msgs`, `grid_map_msgs`, `visualization_msgs`, `diagnostic_msgs`
+- IGHAStar C++/CUDA requirements (met with pip install -e .)
 
 ## Setup (confirm these instructions)
-1. **Clone this repository** into your catkin workspace:
+1. **Install ROS dependencies:**
+   Assuming IGHA* has already been installed,
    ```bash
-   cd ~/catkin_ws/src
-   git clone <this-repo>
-   cd ~/catkin_ws
-   catkin_make
-   source devel/setup.bash
-   ```
-2. **Install Python dependencies:**
-   ```bash
-   pip install torch opencv-python numpy pyyaml
-   ```
-3. **Check ROS dependencies:**
-   ```bash
+   # Install ROS packages for message types
+   sudo apt-get update
+   sudo apt-get install ros-noetic-grid-map-msgs \
+                        ros-noetic-mavros-msgs \
+                        ros-noetic-nav-msgs \
+                        ros-noetic-geometry-msgs \
+                        ros-noetic-sensor-msgs \
+                        ros-noetic-visualization-msgs \
+                        ros-noetic-diagnostic-msgs \
+                        ros-noetic-tf
+   
+   # Check for any missing dependencies
    rosdep install --from-paths src --ignore-src -r -y
+   ```
+
+2. **Verify installation:**
+   ```bash
+   # Test that all message types are available
+   python3 -c "
+   import rospy
+   from nav_msgs.msg import Path, Odometry
+   from mavros_msgs.msg import WaypointList
+   from grid_map_msgs.msg import GridMap
+   from visualization_msgs.msg import MarkerArray
+   from sensor_msgs.msg import NavSatFix
+   from diagnostic_msgs.msg import DiagnosticArray
+   from geometry_msgs.msg import PoseStamped, Quaternion
+   print('All ROS message types imported successfully!')
+   "
    ```
 
 ## Configuration
@@ -54,10 +66,8 @@ We provide rosbags that you can use to run the example script. Place them in the
    ```
 2. **Run the planner node:**
    ```bash
-   cd examples/ROS
-   python3 example.py
+   python3 examples/ROS/example.py
    ```
-   Or launch with rosrun/roslaunch if you have a package setup.
 3. **Play a rosbag or run your robot simulation** to publish the required topics.
    ```
    cd examples/ROS/rosbags/
@@ -67,4 +77,3 @@ We provide rosbags that you can use to run the example script. Place them in the
 ## Visualization
 - The planner will open an OpenCV window showing the costmap, elevation map, path, goal, and robot state.
 - Path and goal are also published as ROS topics for use in RViz.
-
