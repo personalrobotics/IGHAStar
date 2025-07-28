@@ -1,8 +1,6 @@
 map: 
   name: "Berlin_0_1024.png"
   dir: "Maps/street-png"
-  start: [94.5, 19.5, 2.8284062641509644]
-  goal: [38.7, 81.6, 0.6324707282184407]
   size: [1024, 1024]
   res: &map_res 0.1
   test_cases:
@@ -15,7 +13,7 @@ map:
 
 experiment_info_default:
   resolution: 4.0 # starting resolution used for discretization.
-  epsilon: [2, 2, 0.2, 5.0] # ate, cte, heading, vel for goal region.
+  epsilon: [2, 2, 0.2, 5.0] # ate, cte, heading, vel for goal region -- the kinematic planner does not use the vel epsilon.
   tolerance: 0.5 # Your perception (map) resolution should be at least this.
   max_level: 5 # maximum level to which you expect the system to go; we use this to cache the hash values.
   division_factor: 2  # factor by which the resolution increases every level.

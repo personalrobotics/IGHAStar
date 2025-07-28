@@ -1,8 +1,6 @@
 map: 
   name: "17_512.png"
   dir: "Maps/generated_maps/multi_bottleneck"
-  start: [41, 141] 
-  goal: [475, 463]
   size: [512, 512]
   res: &map_res 1
   test_cases:
