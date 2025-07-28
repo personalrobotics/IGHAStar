@@ -2,6 +2,7 @@ import torch
 from torch.utils.cpp_extension import load
 import pathlib
 from typing import Any, Dict
+import sys
 
 BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
 
@@ -28,6 +29,13 @@ def create_planner(configs: Dict[str, Any]) -> Any:
 
     cpp_path = BASE_DIR / "src" / "ighastar.cpp"
     header_path = BASE_DIR / "src" / "Environments"
+    extra_includes = [str(header_path)]
+
+    # Detect if running on macOS for Boost include path
+    is_macos = sys.platform == "darwin"
+    if is_macos:
+        boost_include = "/opt/homebrew/opt/boost/include"  # Adjust if needed
+        extra_includes = [str(header_path), boost_include]
 
     if env_name != "simple":
         if cuda_available:
@@ -36,7 +44,7 @@ def create_planner(configs: Dict[str, Any]) -> Any:
             kernel = load(
                 name="ighastar",
                 sources=[str(cpp_path), str(cuda_path)],
-                extra_include_paths=[str(header_path)],
+                extra_include_paths=extra_includes,
                 extra_cflags=["-std=c++17", "-O3", env_macro],
                 extra_cuda_cflags=["-O3"],
                 verbose=True,
@@ -47,16 +55,15 @@ def create_planner(configs: Dict[str, Any]) -> Any:
             kernel = load(
                 name="ighastar",
                 sources=[str(cpp_path), str(cpu_cpp_path)],
-                extra_include_paths=[str(header_path)],
+                extra_include_paths=extra_includes,
                 extra_cflags=["-std=c++17", "-O3", env_macro],
                 verbose=True,
             )
     else:
-        # Simple environment (already CPU-based)
         kernel = load(
             name="ighastar",
             sources=[str(cpp_path)],
-            extra_include_paths=[str(header_path)],
+            extra_include_paths=extra_includes,
             extra_cflags=["-std=c++17", "-O3", env_macro],
             verbose=True,
         )
