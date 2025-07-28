@@ -14,7 +14,7 @@ dependencies = [
     "numpy",
     "torch",
     "matplotlib",
-    "opencv-python"
+    "opencv-python",
     "pyyaml"
 ]
 
