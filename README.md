@@ -70,7 +70,7 @@ git clone https://github.com/sidtalia/IGHAStar.git
 cd IGHAStar
 ```
 
-### 2. Set Up Conda Environment
+### 2. Set Up Conda Environment (Optional; if you want to isolate the environment)
 ```bash
 conda env create -f ighastar.yml
 conda activate ighastar
