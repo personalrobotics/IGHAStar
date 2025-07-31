@@ -84,32 +84,6 @@ __device__ void get_footprint_z(float *fl, float *fr, float *bl, float *br,
   br[2] = map_to_elev(br[0], br[1], elev, map_size_px, res_inv) - z_cent;
 }
 
-/*
-list of constants:
-    NX = 4
-    NC = 2
-    timesteps = 10
-    n_succ = 1000
-    patch_length_px = 20
-    patch_width_px = 20
-    map_size_px = 1000
-    map_res = 0.1
-    car_l2 = 1.0
-    car_w2 = 0.5
-*/
-/*
-list of reused variables:
-    bitmap = BEVmap_cost
-    map_size_px = map_size
-    map_res = map_res
-    d_intermediate_states = d_intermediate_states
-    patch_length_px = patch_length_px
-    patch_width_px = patch_width_px
-    car_l2 = car_l2
-    car_w2 = car_w2
-    d_valid = d_valid
-*/
-
 // Checks validity of multiple states against a bitmap (CUDA kernel)
 __global__ void
 check_validity_batch_kernel(const float *bitmap, int map_size_px, float map_res,
@@ -128,9 +102,7 @@ check_validity_batch_kernel(const float *bitmap, int map_size_px, float map_res,
 
   int intermediate_index =
       k * timesteps * NX +
-      (t - 1) *
-          NX; // NX, NC, timesteps, n_succ are constants. Why are we passing
-              // them in constantly? TODO: set up constants separately.
+      t * NX;
 
   float x = d_intermediate_states[intermediate_index + x_index];
   float y = d_intermediate_states[intermediate_index + y_index];
@@ -143,7 +115,6 @@ check_validity_batch_kernel(const float *bitmap, int map_size_px, float map_res,
 
   float px = offset_x * cy - offset_y * sy + x;
   float py = offset_x * sy + offset_y * cy + y;
-
   if (px < 0 || px >= map_size_px * map_res || py < 0 ||
       py >= map_size_px * map_res) {
     d_valid[k] = false;
@@ -269,7 +240,7 @@ void check_validity_launcher(const float *costmap, int map_size_px,
   float *d_validity_states;
   cudaMalloc(&d_result, n_states * sizeof(bool));
   cudaMalloc(&d_validity_states, NX * n_states * sizeof(float));
-  cudaMemcpy(d_result, &result, n_states * sizeof(bool),
+  cudaMemcpy(d_result, result, n_states * sizeof(bool),
              cudaMemcpyHostToDevice);
   cudaMemcpy(d_validity_states, states, n_states * NX * sizeof(float),
              cudaMemcpyHostToDevice);
@@ -278,7 +249,7 @@ void check_validity_launcher(const float *costmap, int map_size_px,
       costmap, map_size_px, map_res, d_validity_states, patch_length_px,
       patch_width_px, car_l2, car_w2, NX, 1, d_result);
 
-  cudaMemcpy(&result, d_result, sizeof(bool), cudaMemcpyDeviceToHost);
+  cudaMemcpy(result, d_result, n_states * sizeof(bool), cudaMemcpyDeviceToHost);
   cudaFree(d_result);
   cudaFree(d_validity_states);
 }

@@ -128,9 +128,7 @@ check_validity_batch_kernel(const float *bitmap, int map_size_px, float map_res,
 
   int intermediate_index =
       k * timesteps * NX +
-      (t - 1) *
-          NX; // NX, NC, timesteps, n_succ are constants. Why are we passing
-              // them in constantly? TODO: set up constants separately.
+      t * NX;
 
   float x = d_intermediate_states[intermediate_index + x_index];
   float y = d_intermediate_states[intermediate_index + y_index];
@@ -242,8 +240,8 @@ __global__ void kinodynamic_kernel(float *state, float *intermediate_states,
   }
   float gear_switch_cost =
       gear_switch_time * (vx * initial_vx < 0); // change in direction
-  cost[k] = timesteps * dt + gear_switch_cost;  // TODO: multiply by the time it
-                                                // takes to do the gear shift
+  cost[k] = timesteps * dt + gear_switch_cost; 
+                                                
   state[state_base + x_index] = x;
   state[state_base + y_index] = y;
   state[state_base + yaw_index] = yaw;
@@ -291,7 +289,7 @@ void check_validity_launcher(const float *costmap, int map_size_px,
   float *d_validity_states;
   cudaMalloc(&d_result, n_states * sizeof(bool));
   cudaMalloc(&d_validity_states, NX * n_states * sizeof(float));
-  cudaMemcpy(d_result, &result, n_states * sizeof(bool),
+  cudaMemcpy(d_result, result, n_states * sizeof(bool),
              cudaMemcpyHostToDevice);
   cudaMemcpy(d_validity_states, states, n_states * NX * sizeof(float),
              cudaMemcpyHostToDevice);
@@ -300,7 +298,7 @@ void check_validity_launcher(const float *costmap, int map_size_px,
       costmap, map_size_px, map_res, d_validity_states, patch_length_px,
       patch_width_px, car_l2, car_w2, NX, 1, d_result);
 
-  cudaMemcpy(&result, d_result, sizeof(bool), cudaMemcpyDeviceToHost);
+  cudaMemcpy(result, d_result, n_states * sizeof(bool), cudaMemcpyDeviceToHost);
   cudaFree(d_result);
   cudaFree(d_validity_states);
 }

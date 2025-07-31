@@ -8,6 +8,7 @@ src/analytical_bicycle.cpp
 ighastar/scripts/map_generation.py
 ighastar/scripts/Planner_vis.py
 ighastar/scripts/IGHAStarCpp.py
+ighastar/src/Environments/analytical_bicycle.cpp
 ighastar/scripts/test_case_generation.py
 examples/ros_kinodynamic_example.py
 examples/ROS/
@@ -228,6 +229,10 @@ test_*.py
 test_*.cpp
 *_test.cpp
 
+# Exception: Allow our test framework files
+!tests/unit/environments/test_environment.py
+!tests/unit/environments/test.cpp
+
 # Large data files
 *.npz
 *.pkl
@@ -326,4 +331,4 @@ Dockerfile.bak
 .env.local
 .env.development
 .env.test
-.env.production 
+.env.production
