@@ -72,6 +72,7 @@ class PlannerNode:
         self.plan_loop()
 
     def map_callback(self, grid_map: GridMap) -> None:
+        """Update the map from the GridMap message."""
         self.grid_map = grid_map
         if self.height_index is None or self.layers is None:
             self.layers = self.grid_map.layers
@@ -83,6 +84,8 @@ class PlannerNode:
         if np.any(np.isnan(self.heightmap)):
             self.map_init = False
         else:
+            # this function creates the bitmap (costmap, heightmap)
+            # and gets the offset of the map
             self.bitmap, self.offset = process_grid_map(
                 self.heightmap,
                 lethalmap=None,
@@ -95,9 +98,12 @@ class PlannerNode:
     def plan(
         self, start_state: np.ndarray, goal_: np.ndarray, stop: bool = False
     ) -> Tuple[Optional[np.ndarray], bool, int, float, np.ndarray]:
+        """Plan a path from the current state to the goal."""
         if self.bitmap is None:
             return None, False, 0, 0.0, goal_
         bitmap = torch.clone(self.bitmap)
+        # this function effectively projects the start and goal to the
+        # bitmap if it is not already inside the bitmap bounds
         start, goal = start_goal_logic(
             bitmap,
             self.map_res,
@@ -108,10 +114,18 @@ class PlannerNode:
             stop=stop,
         )
         now = time.perf_counter()
+        # this function does the actual planning
+        # it takes in the start, goal, bitmap, expansion limit, hysteresis, and ignore goal validity
+        # it returns a boolean indicating if the goal was reached, the number of expansions, the time taken, and the output goal
+        # the output goal is the goal projected to the bitmap bounds
+        # Map convention: x is east, y is north. 0,0 is the bottom left corner of the map.
+        # if the map was shown using cv2.imshow, the origin would be the top left corner.
+        # Start and goal are relative to the bottom left corner of the map.
         success = self.planner.search(
             start, goal, bitmap, self.expansion_limit, self.hysteresis, True
         )
         time_taken = time.perf_counter() - now
+        # this function gets the profiler info from the planner
         (
             avg_successor_time,
             avg_goal_check_time,
@@ -138,6 +152,7 @@ class PlannerNode:
         self.state = obtain_state(msg, self.state)
 
     def global_pos_callback(self, msg: Any) -> None:
+        """Update global position from NavSatFix message."""
         self.global_pos = msg
 
     def waypoint_callback(self, msg: WaypointList) -> None:
@@ -155,6 +170,7 @@ class PlannerNode:
         self.local_waypoints = get_local_frame_waypoints(self.waypoint_list, gps_origin)
 
     def plan_loop(self) -> None:
+        """Main loop for planning."""
         rate = rospy.Rate(20)
         while not rospy.is_shutdown():
             rate.sleep()
