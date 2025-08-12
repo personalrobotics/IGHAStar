@@ -7,6 +7,13 @@ However, the IGHA* algorithm in of itself does not care about the representation
 
 This document explains how to create your own environment for use with the IGHAStar planner. To integrate with IGHAStar, your environment must implement a specific interface and define a compatible Node structure.
 
+## Quick note about example environment conventions:
+The map convention used here is as follows:
+Map origin (0, 0) is at the bottom left (if visualized using cv2.imshow, then top left).
+X is East, Y is North. We use the [REP103](https://www.ros.org/reps/rep-0103.html) standard conventions.
+
+For custom environments you can pick a convention of your choice.
+
 ## Environment Interface Requirements
 
 Your custom `Environment` class **must** provide the following methods and members:
@@ -68,6 +75,9 @@ Loads the map or world representation from a PyTorch tensor.
                                           std::shared_ptr<Node> goal);
   ```
   Returns a vector of successor nodes for a given node.
+  This function internally performs the forward rollout from the input `node`,
+  then, for the successors that are valid, generates new nodes and assigns
+  their corresponding `f` values.
 
 **convert_node_list_to_path_tensor**
   ```cpp

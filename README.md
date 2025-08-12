@@ -66,11 +66,11 @@ For the standalone examples, the system automatically detects CUDA availability:
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/sidtalia/IGHAStar.git
+git clone https://github.com/personalrobotics/IGHAStar.git
 cd IGHAStar
 ```
 
-### 2. Set Up Conda Environment (Optional; if you want to isolate the environment)
+### 2. Set Up Conda Environment (Optional; only do this if you want to isolate the environment in case a requirement conflicts with your global env.)
 ```bash
 conda env create -f ighastar.yml
 conda activate ighastar
