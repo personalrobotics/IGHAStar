@@ -116,6 +116,7 @@ python examples/standalone/example.py --config Configs/kinematic_example.yml --t
 ```
 
 For detailed configuration and usage instructions, see [examples/standalone/README.md](examples/standalone/README.md).
+For information on how to create your own Environment, see [ighastar/Environments/README.md](ighastar/src/Environments/README.md)
 
 
 ## Project Structure
