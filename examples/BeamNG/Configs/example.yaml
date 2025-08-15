@@ -1,0 +1,118 @@
+MPPI_config:
+  ROLLOUTS: 1024 # 8192 if using 80 timesteps
+  TIMESTEPS: &TIMESTEPS 30 # 80
+  BINS: 1
+  u_per_command: 1
+
+Map_config:
+  map_name: "small_island"
+  map_size: &map_size 100
+  map_res: &map_res 0.25
+  map_res_hitl: 0.25
+  elevation_range: 32.0
+  layers:
+    color: 3
+    elevation: 1
+    semantics: 3
+    costmap: 1
+
+Dynamics_config:
+  wheelbase: &wheelbase 2.6
+  throttle_to_wheelspeed: &throttle_to_wheelspeed 20.0
+  steering_max: &steering_max 0.6
+  dt: &delta_T 0.05
+  D: 0.8
+  B: 6.8
+  C: 1.75
+  lf: 1.3
+  lr: 1.3
+  Iz: 1.7
+  LPF_tau: 0.5
+  LPF_st: 0.5
+  LPF_th: 0.5
+  res_coeff: 0.00
+  drag_coeff: 0.00
+  car_length: *wheelbase
+  car_width: &car_width 1.5
+  cg_height: &cg_height 0.75
+  patch_size: &patch_size 3.0
+  type: "slip3d"
+
+Sampling_config:
+  control_dim: 2
+  noise_0: 1.0 # steering noise
+  noise_1: 1.0
+  scaled_dt: 0.1 ## this is effectively the actuator bandwidth, larger values mean the actuator can move faster.
+  temperature: 0.5
+  max_thr: 0.8
+  min_thr: 0.0
+
+Cost_config:
+  pos_w: 1.0 ## weight on the terminal goal cost
+  speed_w: 0.1 ## weight with which target speed will be tracked
+  heading_w: 0.1
+  scaling_factor: 1.0
+  critical_RI: &RI 0.8
+  critical_vert_acc: &max_vert_acc 4.0
+  roll_ditch_w: 50.0
+  lethal_w: 50.0
+  car_bb_length: 2.6
+  car_bb_width: 1.6
+
+RPS_config:
+  cg_height: *cg_height
+  wheelbase: *wheelbase
+  track_width: *car_width
+  max_speed: *throttle_to_wheelspeed
+  steering_max: *steering_max
+  accel_gain: 0.5
+  roll_rate_gain: 0.5
+  steer_slack: 1.0
+
+Planner_config:
+  unstuck_expansions: 100000 # number of expansions to get the first plan
+  experiment_info_default:
+    resolution: 4.0 # starting resolution used for discretization.
+    epsilon: [5, 5, 3.14, 5.0] # ate, cte, heading, vel for goal region.
+    tolerance: 0.5 # Your perception (map) resolution should be at least this.
+    max_level: 5 # maximum level to which you expect the system to go; we use this to cache the hash values.
+    division_factor: 2  # factor by which the resolution increases every level.
+    max_expansions: 5000 # maximum number of expansions allowed.
+    hysteresis: 1000 # hysteresis threshold for for IGHA*-H
+    node_info:
+      node_type: "kinodynamic"
+      length: 2.6
+      width: 1.6 # actual car width is 1.5
+      map_res: *map_res
+      dt: *delta_T
+      timesteps: 10
+      step_size: 1.0
+      steering_list: [-15.0, -5.0,  0.0, 5.0, 15.0] # in degrees.
+      throttle_list: [-5.0, 0, 5.0]
+      del_theta: 90.0 # in degrees
+      del_vel: 2.5
+      RI: *RI
+      max_vert_acc: *max_vert_acc
+      min_vel: 0.0
+      max_vel: 15.0
+      max_theta: 25.0 # in degrees
+      gear_switch_time: 1.0
+      hash_theta: False
+
+
+hysteresis: [100, -1] # -1 means HA*M
+scenarios: ['0'] # , '1']
+time_limit: [120.0]
+lookahead:  [50.0]
+wp_radius: [10.0]
+
+start_pos: [-67, 336, 34.5]
+start_quat: [0, 0, 0.3826834, 0.9238795]
+
+run_lockstep: True
+burn_time: 0.04
+smooth_map: False
+
+vehicle:
+  make: "sunburst"
+  model: "offroad"
