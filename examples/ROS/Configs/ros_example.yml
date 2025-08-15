@@ -1,0 +1,39 @@
+Planner_config:
+  experiment_info_default:
+    resolution: 2.0
+    epsilon: [2.0, 2.0, 1.57, 5.0] # ate, cte, heading, vel
+    tolerance: 0.125
+    max_level: 5
+    division_factor: 2  # Example division factor
+    max_expansions: 500
+    hysteresis: 100
+    node_info:
+      node_type: "kinodynamic"
+      length: 0.3
+      width: 0.25
+      map_res: 0.25
+      dt: 0.05
+      timesteps: 5
+      step_size: 1.0
+      steering_list: [-15.0, -5.0, 0.0, 5.0, 15.0] # in degrees.
+      throttle_list: [-4.0, -2.0, 0, 2.0, 4.0]
+      del_theta: 90.0 # in degrees
+      del_vel: 1.0
+      RI: 0.5
+      max_vert_acc: 5.0
+      min_vel:  0.0 # don't go in reverse.
+      max_vel:  2.0
+      max_theta: 30.0 # in degrees
+      gear_switch_time: 0.0
+topics:
+  elevation_map: "/elevation_mapping/elevation_map_cropped_cv2"
+  odom: "/mavros/local_position/odom"
+  waypoints: "/mavros/mission/waypoints"
+  path: "/planner_test/path"
+  diagnostics: "/planner_test/diagnostic"
+  goal_marker: "/planner_test/goal_marker"
+  global_position: "/mavros/global_position/global"
+
+blur_kernel: 0
+lethal_slope: 60
+wp_radius: 2.0
