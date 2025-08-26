@@ -63,6 +63,7 @@ For the standalone examples, the system automatically detects CUDA availability:
 
 
 ## Installation
+### Note: This has currently only been tested on Ubuntu 20.04. Use virtual environments for initial testing.
 
 ### 1. Clone the Repository
 ```bash
