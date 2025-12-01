@@ -12,6 +12,9 @@ ighastar/src/Environments/analytical_bicycle.cpp
 ighastar/scripts/test_case_generation.py
 examples/ros_kinodynamic_example.py
 examples/ROS/
+examples/BeamNG/
+ighastar/src/IGHAStarClass.py
+ighastar/src/Nodes.py
 # Python
 __pycache__/
 *.py[cod]
