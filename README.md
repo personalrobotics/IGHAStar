@@ -1,6 +1,4 @@
-# IGHAStar
-
-## IGHAStar: Incremental Generalized Hybrid A* Search
+# IGHA*: Incremental Generalized Hybrid A* Search
 
 <figure align="center">
   <img src="Content/IGHAStar_main_fig.png" alt="IGHAStar Main Figure" width="1000"/>
@@ -38,7 +36,7 @@ small scale off-road platform (Fig. 2, right).
     <td><img src="Content/ighastar_real.gif" alt="IGHAStar Real-World" width="470"/></td>
   </tr>
   <tr>
-    <td colspan="2" align="center"><b>Fig. 2:</b> IGHAStar in simulation (left) and real-world testing on a small-scale off-road platform (right).</td>
+    <td colspan="2" align="center"><b>Fig. 2:</b> IGHA* in simulation (left) and real-world testing on a small-scale off-road platform (right).</td>
   </tr>
 </table>
 
@@ -78,12 +76,12 @@ conda activate ighastar
 ```
 
 ### 3. Install the Package
-Install the IGHAStar package in editable mode:
+Install the IGHA* package in editable mode:
 ```bash
 pip install -e .
 ```
 
-**Note:** This step is required to make the IGHAStar modules importable from anywhere in your environment.
+**Note:** This step is required to make the IGHA* modules importable from anywhere in your environment.
 
 ## Usage
 
