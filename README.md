@@ -1,4 +1,10 @@
-# IGHA*: Incremental Generalized Hybrid A* Search
+<div align="center">
+
+# IGHA*: Incremental Generalized Hybrid A* Search 
+
+## ([Website](https://personalrobotics.github.io/IGHAStar/), Accepted to IEEE RA-L Nov 2025, [Preprint](https://arxiv.org/abs/2508.13392))
+
+</div>
 
 <figure align="center">
   <img src="Content/IGHAStar_main_fig.png" alt="IGHAStar Main Figure" width="1000"/>
@@ -63,13 +69,13 @@ For the standalone examples, the system automatically detects CUDA availability:
 ## Installation
 ### Note: This has currently only been tested on Ubuntu 20.04. Use virtual environments for initial testing.
 
-### 1. Clone the Repository
+### 1. Clone the Repository (recommended way is to clone just the main)
 ```bash
-git clone https://github.com/personalrobotics/IGHAStar.git
+git clone --single-branch --branch main https://github.com/personalrobotics/IGHAStar.git
 cd IGHAStar
 ```
 
-### 2. Set Up Conda Environment (Optional; only do this if you want to isolate the environment in case a requirement conflicts with your global env.)
+### 2. Set Up Conda Environment (Recommended for avoiding version conflicts/spurious re-installs of packages, but not absolutely necessary)
 ```bash
 conda env create -f ighastar.yml
 conda activate ighastar
@@ -116,6 +122,8 @@ python examples/standalone/example.py --config Configs/kinematic_example.yml --t
 
 For detailed configuration and usage instructions, see [examples/standalone/README.md](examples/standalone/README.md).
 For information on how to create your own Environment, see [ighastar/Environments/README.md](ighastar/src/Environments/README.md)
+
+For the ROS and BeamNG examples, see [examples/ROS/README.md](examples/ROS/README.md), and see [examples/BeamNG/README.md](examples/BeamNG/README.md)
 
 
 ## Project Structure
