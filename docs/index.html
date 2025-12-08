@@ -112,6 +112,8 @@
       text-align: center;
       display: flex;
       flex-direction: column;
+      padding: 0;
+      margin: 0;
     }
     
     .multi-figure img, .multi-figure object {
@@ -121,8 +123,11 @@
     }
     
     .multi-figure > div > img {
-      height: 300px;
-      object-fit: contain;
+      width: 100%;
+      height: auto;
+      display: block;
+      margin: 0;
+      padding: 0;
     }
     
     .table-container {
@@ -218,6 +223,9 @@
             <h1 class="title is-1 publication-title"><span style="color: #0050FF;">I</span>ncremental 
                 <span style="color: #0050FF;">G</span>eneralized <span style="color: #0050FF;">H</span>ybrid 
                 <span style="color: #0050FF;">A*</span> (IGHA*)</h1>
+            <div class="is-size-5 publication-authors" style="margin-top: 0.5rem;">
+              <span>Accepted to IEEE RA-L, Nov 2025.</span>
+            </div>
             <div class="is-size-5 publication-authors">
               <span class="author-block">
                 <a href="https://sidharthtalia.com">Sidharth Talia</a><sup>1</sup>,</span>
@@ -322,19 +330,13 @@
             <div class="figure-container" style="margin: 1.5rem 0;">
               <div class="multi-figure">
                 <div>
-                  <video controls style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
-                    <source src="Content/videos/AStar.mp4" type="video/mp4">
-                    Your browser does not support the video tag.
-                  </video>
+                  <img src="Content/gifs/AStar.gif" alt="A* search without any pruning" style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
                   <figcaption style="margin-top: 0.5rem; font-size: 0.85em;">
                     <b>Fig. 1 (a).</b> A* search without any pruning
                   </figcaption>
                 </div>
                 <div>
-                  <video controls style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
-                    <source src="Content/videos/HAStar.mp4" type="video/mp4">
-                    Your browser does not support the video tag.
-                  </video>
+                  <img src="Content/gifs/HAStar.gif" alt="HA* search with grid-based dominance check" style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
                   <figcaption style="margin-top: 0.5rem; font-size: 0.85em;">
                     <b>Fig. 1 (b).</b> HA* search with grid-based dominance check
                   </figcaption>
@@ -364,10 +366,10 @@
             IGHA* provably matches or outperforms HA*, and has been tested in both simulation and in the real world on a small scale off-road platform (Fig. 3 (a),(b)). Fig. 3 shows a sneak peek of the results we show later.
             <div class="figure-container" style="margin: 1.5rem 0;">
               <div class="multi-figure">
-                <div><img src="Content/ighastar_sim.gif" alt="IGHAStar Simulation" style="width: 100%; height: auto; border-radius: 8px;">
+                <div><img src="Content/gifs/ighastar_sim.gif" alt="IGHAStar Simulation" style="width: 100%; height: auto; border-radius: 8px;">
                   <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 3 (a).</b> Simulation</figcaption>
                 </div>
-                <div><img src="Content/ighastar_real.gif" alt="IGHAStar Real-World" style="width: 100%; height: auto; border-radius: 8px;">
+                <div><img src="Content/gifs/ighastar_real.gif" alt="IGHAStar Real-World" style="width: 100%; height: auto; border-radius: 8px;">
                   <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 3 (b).</b> Real-world testing</figcaption>
                 </div>
               </div>
@@ -438,22 +440,16 @@
         </p>
 
        </p>
-         <div class="figure-container" style="margin: 1.5rem 0;">
+         <div class="figure-container" style="margin: 0 0;">
            <div class="multi-figure">
              <div>
-               <video controls muted loop preload="metadata" style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
-                 <source src="Content/videos/HA_M.mp4" type="video/mp4">
-                 Your browser does not support the video tag.
-               </video>
+               <img src="Content/gifs/HA_M.gif" alt="HA*M:Only Increase Resolution" style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
                <figcaption style="margin-top: 0.5rem; font-size: 0.85em;">
                  <b>Fig. 4 (a).</b> HA*M:Only Increase Resolution
                </figcaption>
              </div>
              <div>
-               <video controls muted loop preload="metadata" style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
-                 <source src="Content/videos/IGHAStar.mp4" type="video/mp4">
-                 Your browser does not support the video tag.
-               </video>
+               <img src="Content/gifs/IGHAStar.gif" alt="IGHA*:Increase/Decrease Resolution on the fly" style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
                <figcaption style="margin-top: 0.5rem; font-size: 0.85em;">
                  <b>Fig. 4 (b).</b> IGHA*:Increase/Decrease Resolution on the fly
                </figcaption>
