@@ -398,37 +398,37 @@
         <div class="figure-container" style="margin: 1.5rem 0;">
             <div class="multi-figure" style="flex-wrap: wrap;">
                 <div><img src="Content/gifs/SB_inf.gif" alt="SB, IGHA*-∞" style="width: 100%; height: auto;">
-                    <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (b).</b> SB, IGHA*-∞</figcaption>
+                    <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (a).</b> SB, IGHA*-∞</figcaption>
                 </div>
                 <div><img src="Content/gifs/SB_50.gif" alt="SB, IGHA*-50" style="width: 100%; height: auto;">
-                    <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (c).</b> SB, IGHA*-50</figcaption>
+                    <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (b).</b> SB, IGHA*-50</figcaption>
                 </div>
                 <div><img src="Content/gifs/SB_0.gif" alt="SB, IGHA*-0" style="width: 100%; height: auto;">
-                    <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (d).</b> SB, IGHA*-0</figcaption>
+                    <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (c).</b> SB, IGHA*-0</figcaption>
                 </div>
             </div>
             <div class="multi-figure" style="flex-wrap: wrap; margin-top: 1rem;">
                 <div><img src="Content/gifs/MB_inf.gif" alt="MB, IGHA*-∞" style="width: 100%; height: auto;">
-                    <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (f).</b> MB, IGHA*-∞</figcaption>
+                    <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (d).</b> MB, IGHA*-∞</figcaption>
                 </div>
                 <div><img src="Content/gifs/MB_50.gif" alt="MB, IGHA*-50" style="width: 100%; height: auto;">
-                    <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (g).</b> MB, IGHA*-50</figcaption>
+                    <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (e).</b> MB, IGHA*-50</figcaption>
                 </div>
                 <div><img src="Content/gifs/MB_0.gif" alt="MB, IGHA*-0" style="width: 100%; height: auto;">
-                    <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (h).</b> MB, IGHA*-0</figcaption>
+                    <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (f).</b> MB, IGHA*-0</figcaption>
                 </div>
             </div>
         </div>
         <p>
-            Consider the scenario where the resolution is too low for HA* to find a solution for either the Single-Bottleneck (SB) scenario (Fig. 5 (a-d)),
-            or the Multi-Bottleneck (MB) scenario (Fig. 5 (e-h)).
+            Consider a Single-Bottleneck (SB) scenario (Fig. 5 (a-c)) and a Multi-Bottleneck (MB) scenario (Fig. 5 (d-f)),
+            where the resolution is too low for HA* to find a solution.
             IGHA* variants like IGHA*-∞ (wait for infinite confirmations) only increase resolution and 
-            spend more expansions after escaping a bottleneck (Fig. 5 (b)) 
-            when a lower resolution could suffice (Fig. 5 (c)) -- which is what IGHA*-0 (wait for 0 confirmations) does (Fig. 5 (d)).
+            spend more expansions after escaping a bottleneck (Fig. 5 (a)) 
+            when a lower resolution could suffice -- which is what IGHA*-0 (wait for 0 confirmations) does (Fig. 5 (c)).
             However, variants like IGHA*-0 can prematurely switch back in situations where staying at the higher resolution is necessary 
-            and spend extra expansions (Fig. 5 (h)) by comparison to IGHA*-∞ (Fig. 5 (f)).
+            and spend extra expansions (Fig. 5 (f)) by comparison to IGHA*-∞ (Fig. 5 (d)).
             In both scenarios, an intermediate value for the hysteresis hyperparameter can provide intermediate behavior; doing better than IGHA*-∞ in SB (Fig. 5 (b))
-            and better than IGHA*-0 in MB (Fig. 5 (f)).
+            and better than IGHA*-0 in MB (Fig. 5 (e)).
         </p>
         <p>
             Zooming out, in contrast to HA*M, since IGHA* can both increase and decrease the resolution, 
