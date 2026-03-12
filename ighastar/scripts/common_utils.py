@@ -7,7 +7,17 @@ import sys
 BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def create_planner(configs: Dict[str, Any]) -> Any:
+def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
+    """
+    Create an IGHA* or BiIGHA* planner based on configuration.
+    
+    Args:
+        configs: Configuration dictionary containing experiment_info_default
+        bidirectional: If True, create a BiIGHAStar planner instead of IGHAStar
+    
+    Returns:
+        The created planner instance
+    """
     env_name = configs["experiment_info_default"]["node_info"]["node_type"]
     # Check CUDA availability
     cuda_available = torch.cuda.is_available()
@@ -68,5 +78,8 @@ def create_planner(configs: Dict[str, Any]) -> Any:
             verbose=True,
         )
 
-    planner = kernel.IGHAStar(configs, False)
+    if bidirectional:
+        planner = kernel.BiIGHAStar(configs, True)
+    else:
+        planner = kernel.IGHAStar(configs, False)
     return planner

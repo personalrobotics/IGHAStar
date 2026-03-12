@@ -12,31 +12,6 @@
 #define th_index 1
 #define GRAVITY 9.81f
 
-// using namespace std;
-float *d_controls, *d_state, *d_cost, *d_intermediate_states;
-bool *d_valid;
-
-// Sets up CUDA memory for kinodynamic simulation
-void cuda_setup(float *controls, int n_succ, int NX, int NC, int timesteps) {
-  cudaMalloc(&d_controls, sizeof(float) * n_succ * NC);
-  cudaMalloc(&d_state, n_succ * NX * sizeof(float));
-  cudaMalloc(&d_intermediate_states, n_succ * timesteps * NX * sizeof(float));
-  cudaMalloc(&d_valid, n_succ * sizeof(bool));
-  cudaMalloc(&d_cost, n_succ * sizeof(float));
-  cudaMemcpy(d_controls, controls, sizeof(float) * n_succ * NC,
-             cudaMemcpyHostToDevice);
-  cudaDeviceSynchronize();
-}
-
-// Cleans up CUDA memory for kinodynamic simulation
-void cuda_cleanup() {
-  cudaFree(d_controls);
-  cudaFree(d_state);
-  cudaFree(d_intermediate_states);
-  cudaFree(d_valid);
-  cudaFree(d_cost);
-}
-
 __device__ float nan_to_num(float x, float replace) {
   return (std::isnan(x) || std::isinf(x)) ? replace : x;
 }
@@ -238,9 +213,8 @@ __global__ void kinodynamic_kernel(float *state, float *intermediate_states,
     intermediate_states[intermediate_index + yaw_index] = yaw;
     intermediate_states[intermediate_index + vx_index] = vx;
   }
-  float gear_switch_cost =
-      gear_switch_time * (vx * initial_vx < 0); // change in direction
-  cost[k] = timesteps * dt + gear_switch_cost; 
+  float gear_switch_cost = gear_switch_time * (vx * initial_vx < 0); // change in direction
+  cost[k] = fabsf(timesteps * dt) + gear_switch_cost; 
                                                 
   state[state_base + x_index] = x;
   state[state_base + y_index] = y;
@@ -254,29 +228,30 @@ void kinodynamic_launcher(
     int n_succ, int NX, int NC, const int map_size, float map_res, float car_l2,
     float car_w2, float max_vel, float min_vel, float RI, float max_vert_acc,
     float max_theta, float gear_switch_time, int patch_length_px,
-    int patch_width_px, const int blocks, const int threads) {
+    int patch_width_px, const int blocks, const int threads,
+    float *d_state, float *d_intermediate_states, float *d_controls,
+    bool *d_valid, float *d_cost, cudaStream_t stream) {
   dim3 valid_threads(patch_length_px, patch_width_px);
   dim3 valid_blocks(timesteps, n_succ);
-  cudaMemcpy(d_state, state, sizeof(float) * n_succ * NX,
-             cudaMemcpyHostToDevice);
-  cudaMemcpy(d_valid, valid, n_succ * sizeof(bool), cudaMemcpyHostToDevice);
-  cudaMemcpy(d_cost, cost, n_succ * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpyAsync(d_state, state, sizeof(float) * n_succ * NX,
+             cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(d_valid, valid, n_succ * sizeof(bool), cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(d_cost, cost, n_succ * sizeof(float), cudaMemcpyHostToDevice, stream);
 
-  kinodynamic_kernel<<<blocks, threads>>>(
+  kinodynamic_kernel<<<blocks, threads, 0, stream>>>(
       d_state, d_intermediate_states, d_controls, heightmap, costmap, d_valid,
       d_cost, dt, timesteps, n_succ, NX, NC, map_size, map_res, car_l2, car_w2,
       max_vel, min_vel, RI, max_vert_acc, max_theta, gear_switch_time);
-  cudaDeviceSynchronize();
-  check_validity_batch_kernel<<<valid_blocks, valid_threads>>>(
+  check_validity_batch_kernel<<<valid_blocks, valid_threads, 0, stream>>>(
       costmap, map_size, map_res, d_intermediate_states, patch_length_px,
       patch_width_px, car_l2, car_w2, NX, timesteps, d_valid);
-  cudaDeviceSynchronize();
-  cudaMemcpy(state, d_state, sizeof(float) * n_succ * NX,
-             cudaMemcpyDeviceToHost);
-  cudaMemcpy(valid, d_valid, sizeof(bool) * n_succ, cudaMemcpyDeviceToHost);
-  cudaMemcpy(cost, d_cost, sizeof(float) * n_succ, cudaMemcpyDeviceToHost);
-  cudaMemcpy(intermediate_states, d_intermediate_states,
-             sizeof(float) * n_succ * timesteps * NX, cudaMemcpyDeviceToHost);
+  cudaMemcpyAsync(state, d_state, sizeof(float) * n_succ * NX,
+             cudaMemcpyDeviceToHost, stream);
+  cudaMemcpyAsync(valid, d_valid, sizeof(bool) * n_succ, cudaMemcpyDeviceToHost, stream);
+  cudaMemcpyAsync(cost, d_cost, sizeof(float) * n_succ, cudaMemcpyDeviceToHost, stream);
+  cudaMemcpyAsync(intermediate_states, d_intermediate_states,
+             sizeof(float) * n_succ * timesteps * NX, cudaMemcpyDeviceToHost, stream);
+  cudaStreamSynchronize(stream);
 }
 
 void check_validity_launcher(const float *costmap, int map_size_px,

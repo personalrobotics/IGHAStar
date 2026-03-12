@@ -10,7 +10,7 @@ from ighastar.scripts.common_utils import create_planner, BASE_DIR
 from typing import Optional
 
 
-def main(yaml_path: str = "", test_case: Optional[str] = None) -> None:
+def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bool = False) -> None:
     assert yaml_path, "Please provide a valid YAML configuration file path."
     print("Loading config from:", yaml_path)
     with open(yaml_path, "r") as file:
@@ -59,10 +59,12 @@ def main(yaml_path: str = "", test_case: Optional[str] = None) -> None:
     hysteresis = experiment_info["hysteresis"]
     print(f"Expansion limit: {expansion_limit}")
     print(f"Hysteresis: {hysteresis}")
+    print(f"Bidirectional: {bidirectional}")
 
     print("Creating planner...")
-    planner = create_planner(configs)
-    print("Planner created successfully")
+    planner = create_planner(configs, bidirectional=bidirectional)
+    planner_type = "BiIGHAStar" if bidirectional else "IGHAStar"
+    print(f"{planner_type} planner created successfully")
 
     print("Starting search...")
     now = time.perf_counter()
@@ -198,7 +200,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--test-case", type=str, default="case1", help="Test case identifier (optional)"
     )
+    parser.add_argument(
+        "--bidirectional", "-b",
+        action="store_true",
+        help="Use bidirectional BiIGHAStar planner instead of unidirectional IGHAStar"
+    )
     # we assume the config is from examples/standalone folder:
     args = parser.parse_args()
     yaml_path = os.path.join(BASE_DIR.parent, "examples", "standalone", args.config)
-    main(yaml_path=yaml_path, test_case=args.test_case)
+    main(yaml_path=yaml_path, test_case=args.test_case, bidirectional=args.bidirectional)

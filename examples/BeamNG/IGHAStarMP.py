@@ -9,15 +9,18 @@ from typing import Any, Optional, Tuple, Dict
 class IGHAStarMP:
     """
     Multiprocessing wrapper for the IGHA* planner. Runs the planner in a separate process and communicates via queues.
+    Supports both unidirectional (IGHAStar) and bidirectional (BiIGHAStar) planning.
     """
 
-    def __init__(self, configs: Dict[str, Any]) -> None:
+    def __init__(self, configs: Dict[str, Any], bidirectional: bool = False) -> None:
         mp.set_start_method("spawn", force=True)  # Safe for CUDA
         self.query_queue = mp.Queue(5)
         self.result_queue = mp.Queue(5)
+        self.bidirectional = bidirectional
+        
         self.process = mp.Process(
             target=self._planner_process,
-            args=(configs, self.query_queue, self.result_queue),
+            args=(configs, self.query_queue, self.result_queue, bidirectional),
         )
         self.process.start()
         self.path = None
@@ -26,17 +29,20 @@ class IGHAStarMP:
         self.expansion_counter = 0
 
     def _planner_process(
-        self, configs: Dict[str, Any], query_queue: Any, result_queue: Any
+        self, configs: Dict[str, Any], query_queue: Any, result_queue: Any, 
+        bidirectional: bool = False
     ) -> None:
         """
         Planner process: loads the CUDA/C++ kernel and runs the IGHA* planner in response to queries.
+        Supports both IGHAStar and BiIGHAStar based on bidirectional flag.
         """
         import torch
         import numpy as np
         from ighastar.scripts.common_utils import create_planner
 
-        planner = create_planner(configs["Planner_config"])
-        print("[IGHAStarMP] Planner loaded.")
+        planner_config = configs["Planner_config"]
+        planner = create_planner(planner_config, bidirectional=bidirectional)
+        print(f"[IGHAStarMP] Planner loaded ({'BiIGHAStar' if bidirectional else 'IGHAStar'}).")
 
         map_res = configs["experiment_info_default"]["node_info"]["map_res"]
         offset = None
