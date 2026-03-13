@@ -1,20 +1,14 @@
 #include <algorithm>
 #include <atomic>
-#include <boost/functional/hash.hpp>
-#include <chrono>
 #include <condition_variable>
 #include <fstream>
-#include <iomanip>
 #include <memory>
 #include <mutex>
 #include <queue>
 #include <random>
-#include <sstream>
 #include <thread>
 #include <torch/extension.h>
 #include <tuple>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 #ifdef __linux__
 #include <pthread.h>
@@ -35,7 +29,11 @@
 #error "No environment macro defined"
 #endif
 // END ENVIRONMENT
+#include <chrono>
+#include <iomanip>
 #include <pybind11/stl.h>
+#include <unordered_map>
+#include <unordered_set>
 
 using namespace std;
 
