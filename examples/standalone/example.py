@@ -57,6 +57,10 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
 
     expansion_limit = experiment_info["max_expansions"]
     hysteresis = experiment_info["hysteresis"]
+    if bidirectional:
+        # expansion_limit /= 20
+        # expansion_limit = int(expansion_limit)
+        expansion_limit = 2000
     print(f"Expansion limit: {expansion_limit}")
     print(f"Hysteresis: {hysteresis}")
     print(f"Bidirectional: {bidirectional}")
@@ -139,14 +143,30 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
                 color="green",
                 label="Start",
             )
+            
+            # Check for direction info (last column) to detect near meets
+            direction = path[:, -1]
+            timesteps = node_info["timesteps"]
+            
+            # Find all near meet indices (both sides of direction flip)
+            near_meet_indices = set()
+            for i in range(0, len(path) - 1, timesteps):
+                next_idx = i + timesteps
+                if next_idx < len(path):
+                    # If direction flips, mark both sides as near meet
+                    if direction[i] * direction[next_idx] < 0:
+                        near_meet_indices.add(i)
+                        near_meet_indices.add(next_idx)
+            
             for i in range(len(path) - 1):
-                if i % node_info["timesteps"] == 0:
+                if i % timesteps == 0:
+                    car_color = "hotpink" if i in near_meet_indices else "blue"
                     plot_car(
                         plt,
                         path[i, 0] / map_res,
                         path[i, 1] / map_res,
                         path[i, 2],
-                        color="blue",
+                        color=car_color,
                     )
             # plot_car(plt, path[-1, 0]/map_res, path[-1, 1]/map_res, path[-1, 2], color='blue')
         else:

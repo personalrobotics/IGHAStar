@@ -641,19 +641,10 @@ public:
     }
     
     void initialize_perturbation_cache() {
-        // Compute local controllability radius for perturbation scaling
-        // Uses the same scaling as anchor_resolution in Node constructor:
-        // {resolution[0]/divider, resolution[1]/divider, 0.25*resolution[2]/divider, 0.5*resolution[3]/divider}
-        const float* resolution = forward_search->env->resolution;
-        float divider = std::pow(forward_search->env->division_factor, forward_search->env->anchor_level);
-        float local_controllability_radius[n_dims] = {
-            resolution[0] / divider,
-            resolution[1] / divider,
-            0.25f * resolution[2] / divider,
-            0.5f * resolution[3] / divider
-        };
+        // Use local_controllability_radius (LCR) directly from config for perturbation scaling
+        const float* LCR = forward_search->env->local_controllability_radius;
         
-        // Generate random perturbation offsets, pre-scaled by local controllability radius
+        // Generate random perturbation offsets, pre-scaled by LCR
         std::random_device rd;
         std::mt19937 gen(rd());
         std::normal_distribution<float> dist(0.0f, 1.0f);
@@ -663,8 +654,8 @@ public:
         for (int i = 0; i < num_perturbations; i++) {
             cached_perturbations[i].resize(n_dims);
             for (int d = 0; d < n_dims; d++) {
-                // Pre-scale by perturbation_scale * local_controllability_radius
-                cached_perturbations[i][d] = dist(gen) * perturbation_scale * local_controllability_radius[d];
+                // Pre-scale by perturbation_scale * LCR
+                cached_perturbations[i][d] = dist(gen) * perturbation_scale * LCR[d];
             }
         }
         if (debug) {
@@ -688,22 +679,22 @@ public:
         // Initialize anchor for this search direction
         if (search == forward_search) {
             forward_anchor.clear();
-            int anchor_idx = start_node->anchor_index;
-            forward_anchor[anchor_idx].push_back({0.0f, start_node});
+            int LCR_idx = start_node->LCR_index;
+            forward_anchor[LCR_idx].push_back({0.0f, start_node});
         } else {
             backward_anchor.clear();
-            int anchor_idx = start_node->anchor_index;
-            backward_anchor[anchor_idx].push_back({0.0f, start_node});
+            int LCR_idx = start_node->LCR_index;
+            backward_anchor[LCR_idx].push_back({0.0f, start_node});
         }
     }
     
-    float get_G_anchor(bool is_forward, int anchor_idx) {
+    float get_G_anchor(bool is_forward, int LCR_idx) {
         std::lock_guard<std::mutex> lock(anchor_mutex);
         auto& anchor = is_forward ? forward_anchor : backward_anchor;
-        if (anchor.count(anchor_idx) && !anchor[anchor_idx].empty()) {
+        if (anchor.count(LCR_idx) && !anchor[LCR_idx].empty()) {
             // Return the minimum g value among all nodes in this cell
             float min_g = 1e5f;
-            for (const auto& pair : anchor[anchor_idx]) {
+            for (const auto& pair : anchor[LCR_idx]) {
                 if (pair.first < min_g) {
                     min_g = pair.first;
                 }
@@ -714,11 +705,11 @@ public:
     }
     
     // Update anchor: add node to the list for this anchor cell
-    void update_anchor(bool is_forward, std::shared_ptr<Node> v, int anchor_idx) {
+    void update_anchor(bool is_forward, std::shared_ptr<Node> v, int LCR_idx) {
         std::lock_guard<std::mutex> lock(anchor_mutex);
         auto& anchor = is_forward ? forward_anchor : backward_anchor;
         // Add this node to the list (multiple nodes per cell allowed)
-        anchor[anchor_idx].push_back({v->g, v});
+        anchor[LCR_idx].push_back({v->g, v});
     }
 
     // Check if connection between two meeting nodes is valid using point perturbation
@@ -749,7 +740,7 @@ public:
             state_info.push_back({i, -1});  // base state
             
             // Generate perturbed states around this interpolation point
-            // cached_perturbations are pre-scaled by perturbation_scale * local_controllability_radius
+            // cached_perturbations are pre-scaled by perturbation_scale * LCR
             for (int p = 0; p < num_perturbations; p++) {
                 auto perturbed_state = std::make_unique<float[]>(n_dims);
                 for (int d = 0; d < n_dims; d++) {
@@ -794,12 +785,12 @@ public:
         IGHAStar* this_search, IGHAStar* other_search,
         std::shared_ptr<Node> v, std::shared_ptr<Node> this_start, std::shared_ptr<Node> other_start, bool is_forward, std::ostream& log_stream) 
     {
-        int anchor_idx = v->anchor_index;
+        int LCR_idx = v->LCR_index;
         
         std::lock_guard<std::mutex> lock(anchor_mutex);
         auto& other_anchor = is_forward ? backward_anchor : forward_anchor;
         
-        if (!other_anchor.count(anchor_idx) || other_anchor[anchor_idx].empty()) {
+        if (!other_anchor.count(LCR_idx) || other_anchor[LCR_idx].empty()) {
             return {false, 0.0f, {}};
         }
         
@@ -807,7 +798,7 @@ public:
         float current_omega = shared_Omega.load();
         std::vector<std::tuple<float, std::shared_ptr<Node>, float>> candidates;  // (path_cost, v_other, dist)
         
-        for (const auto& pair : other_anchor[anchor_idx]) {
+        for (const auto& pair : other_anchor[LCR_idx]) {
             float g_other = pair.first;
             std::shared_ptr<Node> v_other = pair.second;
             float dist = compute_near_meet_distance(this_search, v, v_other);
@@ -820,7 +811,7 @@ public:
         
         if (candidates.empty()) {
             if (debug) {
-                log_stream << "No candidates below Omega threshold for anchor " << anchor_idx << std::endl;
+                log_stream << "No candidates below Omega threshold for anchor " << LCR_idx << std::endl;
             }
             return {false, 0.0f, {}};
         }
@@ -830,7 +821,7 @@ public:
             [](const auto& a, const auto& b) { return std::get<0>(a) < std::get<0>(b); });
         
         if (debug) {
-            log_stream << "Checking " << candidates.size() << " candidates for anchor " << anchor_idx << std::endl;
+            log_stream << "Checking " << candidates.size() << " candidates for anchor " << LCR_idx << std::endl;
         }
         
         // Try candidates in order of cost until we find a valid one
@@ -1105,8 +1096,8 @@ public:
                             log_stream << "inserted node into Q_v and updated G" << std::endl;
                         }
                         // === BIDIRECTIONAL ADDITION: Update anchor and check near-meet ===
-                        int anchor_idx = neighbor->anchor_index;
-                        update_anchor(is_forward, neighbor, anchor_idx);
+                        int LCR_idx = neighbor->LCR_index;
+                        update_anchor(is_forward, neighbor, LCR_idx);
                         // measure the time for checking near meets:
                         auto nm_start_time = std::chrono::high_resolution_clock::now();
                         // Check for near-meet with other search
@@ -1336,8 +1327,8 @@ public:
                 backward_search->Q_v_hash.insert(sampled_node->hash);
                 
                 // Update anchor
-                int anchor_idx = sampled_node->anchor_index;
-                update_anchor(false, sampled_node, anchor_idx);
+                int LCR_idx = sampled_node->LCR_index;
+                update_anchor(false, sampled_node, LCR_idx);
             }
         }
         // Initialize anchors

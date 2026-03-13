@@ -50,14 +50,14 @@ public:
   int rank, level;
   size_t hash;
   std::vector<size_t> index;
-  size_t anchor_index;
+  size_t LCR_index;
   std::shared_ptr<Node> parent;
   int time_direction;
   // Constructor
   Node(const float *pose_in, const float *intermediate_poses_,
        std::shared_ptr<Node> parent_in, float g_in, const float *resolution_,
        float *tolerance, int max_level, float division_factor, int timesteps,
-       int anchor_level = 1, int time_direction_ = 1)
+       const float *LCR_, int time_direction_ = 1)
       : g(g_in), f(0), parent(parent_in), active(true), rank(0), level(0),
         intermediate_poses(nullptr), time_direction(time_direction_) {
     for (int i = 0; i < n_dims; i++) {
@@ -80,13 +80,8 @@ public:
                timesteps * n_dims * sizeof(float));
       }
     }
-    // Compute anchor_index using resolution
-    float divider = std::pow(division_factor, anchor_level);
-    float anchor_resolution[n_dims] = {resolution_[0] / divider,
-                                       resolution_[1] / divider,
-                                       0.25f * resolution_[2] / divider,
-                                       resolution_[3] / divider};
-    anchor_index = calc_hash(pose, anchor_resolution);
+    // Compute LCR_index using local_controllability_radius from config
+    LCR_index = calc_hash(pose, LCR_);
 
     hash = calc_hash(pose, tolerance);
     float resolution[n_dims];
@@ -138,8 +133,8 @@ class Environment {
 
 public:
   float resolution[n_dims], epsilon[n_dims], division_factor;
+  float local_controllability_radius[n_dims];
   int max_level;
-  int anchor_level;
   Environment(const py::dict &config, int time_direction_ = 1)
       : d_heightmap(nullptr), d_costmap(nullptr), time_direction(time_direction_),
         d_controls_instance(nullptr), d_state_instance(nullptr),
@@ -203,10 +198,18 @@ public:
     epsilon[1] = eps[1];
     epsilon[2] = eps[2];
     epsilon[3] = eps[3];
-    if (node_info.contains("anchor_level")) {
-      anchor_level = node_info["anchor_level"].cast<int>();
+    // Read LCR (Local Controllability Radius) for anchor resolution
+    if (info.contains("LCR")) {
+      auto lcr = info["LCR"].cast<std::vector<float>>();
+      local_controllability_radius[0] = lcr[0];
+      local_controllability_radius[1] = lcr[1];
+      local_controllability_radius[2] = lcr[2];
+      local_controllability_radius[3] = lcr[3];
     } else {
-      anchor_level = 1;
+      // Default: use epsilon as local_controllability_radius
+      for (int i = 0; i < n_dims; i++) {
+        local_controllability_radius[i] = epsilon[i];
+      }
     }
   }
 
@@ -338,7 +341,7 @@ public:
   std::shared_ptr<Node> create_Node(float *pose) {
     return std::make_shared<Node>(pose, nullptr, nullptr, 0, resolution,
                                   tolerance, max_level, division_factor,
-                                  timesteps, anchor_level, time_direction);
+                                  timesteps, local_controllability_radius, time_direction);
   }
 
   // Calculates Euclidean distance between two poses
@@ -555,7 +558,7 @@ public:
         auto node = std::make_shared<Node>(
             sampled_pose, intermediate_poses, start_node, start_node->g + g_value,
             resolution, tolerance, max_level, division_factor, timesteps,
-            anchor_level, time_direction);
+            local_controllability_radius, time_direction);
 
         delete[] intermediate_poses;
 
@@ -617,7 +620,7 @@ public:
         neighbor = std::make_shared<Node>(
             new_pose, new_intermediate_pose, node, node->g + cost[i],
             resolution, tolerance, max_level, division_factor, timesteps,
-            anchor_level, time_direction);
+            local_controllability_radius, time_direction);
         delete[] new_intermediate_pose;
         f = neighbor->g + heuristic(neighbor->pose, goal->pose);
         neighbor->f = f;

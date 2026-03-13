@@ -17,6 +17,7 @@ experiment_info_default:
   resolution: 4.0 # starting resolution used for discretization.
   epsilon: [2, 2, 0.2, 5.0] # ate, cte, heading, vel for goal region.
   backward_epsilon: [2, 2, 0.2, 5.0] # goal region for backward search (BiIGHAStar)
+  LCR: [1.0, 1.0, 0.1, 2.5] # local controllability radius for BiIGHAStar
   tolerance: 0.5 # Your perception (map) resolution should be at least this.
   max_level: 5 # maximum level to which you expect the system to go; we use this to cache the hash values.
   division_factor: 2  # factor by which the resolution increases every level.
@@ -44,4 +45,3 @@ experiment_info_default:
     max_vel:  10.0
     max_theta: 30.0 # in degrees
     gear_switch_time: 1.0
-    anchor_level: 1 # anchor level for BiIGHAStar (1 = default)
