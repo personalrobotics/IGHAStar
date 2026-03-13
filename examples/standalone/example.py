@@ -55,13 +55,14 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
     bitmap = get_map(map_name, map_dir=map_dir, map_size=map_size, node_info=node_info)
     print(f"Bitmap loaded, shape: {bitmap.shape}")
 
-    expansion_limit = experiment_info["max_expansions"]
+    default_expansion_limit = experiment_info["max_expansions"]
     hysteresis = experiment_info["hysteresis"]
     if bidirectional:
-        # expansion_limit /= 20
-        # expansion_limit = int(expansion_limit)
         expansion_limit = 2000
-    print(f"Expansion limit: {expansion_limit}")
+        print(f"\033[92mExpansion limit: {expansion_limit} (default unidirectional: {default_expansion_limit})\033[0m")
+    else:
+        expansion_limit = default_expansion_limit
+        print(f"Expansion limit: {expansion_limit}")
     print(f"Hysteresis: {hysteresis}")
     print(f"Bidirectional: {bidirectional}")
 
@@ -194,7 +195,7 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
 
         # Add legend and labels
         plt.legend(loc="upper right")
-        plt.title(f"IGHAStar Path Planning - {node_type.capitalize()} Environment")
+        plt.title(f"{planner_type} Path Planning - {node_type.capitalize()} Environment")
         plt.xlabel("X Position")
         plt.ylabel("Y Position")
 
@@ -202,6 +203,12 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
         plt.gca().invert_yaxis()
 
         print("Displaying visualization...")
+        # Save figure to output directory (create if needed)
+        output_dir = os.path.join(BASE_DIR.parent, "Content/standalone")
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, f"{map_name}_{node_type}_{planner_type}.png")
+        plt.savefig(output_path)
+        print(f"Saved to: {output_path}")
         plt.show()
         print("✓ Visualization complete!")
     else:
