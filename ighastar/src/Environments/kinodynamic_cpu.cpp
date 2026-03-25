@@ -166,14 +166,12 @@ void kinodynamic_launcher_cpu(
       intermediate_states[intermediate_base + 1] = y;
       intermediate_states[intermediate_base + 2] = yaw;
       intermediate_states[intermediate_base + 3] = vx;
-
-      cost[k] += dt;
     }
 
     // Add gear switch cost (exactly like CUDA version)
     float gear_switch_cost =
         gear_switch_time * (vx * initial_vx < 0); // change in direction
-    cost[k] += gear_switch_cost;
+    cost[k] = fabs(timesteps * dt) + gear_switch_cost;
 
     // Update final state
     state[state_base + 0] = x;

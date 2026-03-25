@@ -5,20 +5,32 @@ map:
   res: &map_res 0.1
   test_cases:
     case1:
-      start: [94.5, 19.5, 2.8284062641509644]
-      goal: [38.7, 81.6, 0.6324707282184407]
+      start: [94.5, 19.5, 2.8284062641509644, 5.0]
+      goal: [38.7, 81.6, 0.6324707282184407, 5.0]
     case2:
-      start: [17.6, 72.0, 0.9402905929256757]
-      goal: [40.3, 16.9, 1.0911003058968491]
+      start: [17.6, 72.0, 0.9402905929256757, 5.0]
+      goal: [40.3, 16.9, 1.0911003058968491, 5.0]
 
 experiment_info_default:
   resolution: 4.0 # starting resolution used for discretization.
-  epsilon: [2, 2, 0.2, 5.0] # ate, cte, heading, vel for goal region -- the kinematic planner does not use the vel epsilon.
+  epsilon: [2.0, 2.0, 0.2, 5.0] # ate, cte, heading, velocity for goal region (4D)
+  backward_epsilon: [2.0, 2.0, 0.2, 5.0] # goal region for backward search (BiIGHAStar)
+  LCR: [1.5, 1.5, 0.2, 5.0] # local controllability radius for BiIGHAStar (4D)
   tolerance: 0.5 # Your perception (map) resolution should be at least this.
   max_level: 5 # maximum level to which you expect the system to go; we use this to cache the hash values.
   division_factor: 2  # factor by which the resolution increases every level.
   max_expansions: 100000 # maximum number of expansions allowed.
   hysteresis: 20000 # hysteresis threshold for for IGHA*-H
+  near_meet_config: # configuration for BiIGHAStar near-meet validation
+    num_interpolation_points: 0 # number of interpolation points for validity check
+    num_perturbations: 0 # number of perturbations per interpolation point
+    perturbation_scale: 1.0 # scale factor for perturbations
+  goal_sampling_config: # configuration for backward search goal region sampling
+    enabled: true # whether to sample around goal for backward search
+    space_type: "SE2" # "SE2" for manifold with rotation, "R_N" for Euclidean
+    angular_dims: [2] # which dimensions are angular (dimension 2 = theta for kinematic)
+    num_samples: 32 # number of samples to generate
+    # sigma defaults to LCR if not specified
   node_info:
     node_type: "kinematic"
     length: 2.6

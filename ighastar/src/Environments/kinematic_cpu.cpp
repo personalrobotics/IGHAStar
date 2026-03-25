@@ -150,7 +150,7 @@ void kinematic_launcher_cpu(float *state, float *intermediate_states,
       intermediate_states[intermediate_base + 3] = vx;
     }
     float gear_switch_cost = gear_switch_time * (vx < 0); // reverse cost
-    cost[k] = timesteps * dt * fabs(vx) + gear_switch_cost;
+    cost[k] = fabs(timesteps * dt) * fabs(vx) + gear_switch_cost;
 
     // Update final state
     state[state_base + 0] = x;

@@ -112,14 +112,11 @@ struct NodePtrCompare {
 };
 
 class Environment {
-  int map_size_px, threads, blocks, n_succ, timesteps, patch_length_px,
-      patch_width_px;
-  float tolerance[n_dims];
+  int map_size_px, threads, blocks, n_succ, patch_length_px, patch_width_px;
   float *d_heightmap, *d_costmap;
   float dt, map_res;
   float car_l2, car_w2;
   float max_vel, min_vel, RI, max_theta, max_vert_acc, gear_switch_time;
-  int time_direction;
 
   // Per-instance CUDA device memory (allows parallel execution without conflicts)
   float *d_controls_instance;
@@ -134,7 +131,10 @@ class Environment {
 public:
   float resolution[n_dims], epsilon[n_dims], division_factor;
   float local_controllability_radius[n_dims];
+  float tolerance[n_dims];
   int max_level;
+  int timesteps;
+  int time_direction;
   Environment(const py::dict &config, int time_direction_ = 1)
       : d_heightmap(nullptr), d_costmap(nullptr), time_direction(time_direction_),
         d_controls_instance(nullptr), d_state_instance(nullptr),
@@ -375,6 +375,13 @@ public:
   // Calculates heuristic value for A* search
   float heuristic(float *pose, float *goal) {
     return distance(pose, goal) / max_vel;
+  }
+
+  // Compute distance between two poses for near-meet checking in bidirectional search
+  // Note that this implementation is left up to the user and can be different for different environments.
+  // The search method does not care "how" this is computed, as long as it is a valid distance metric.
+  float compute_near_meet_distance(float *pose1, float *pose2) {
+    return heuristic(pose1, pose2);
   }
 
   // Checks validity of start and goal positions

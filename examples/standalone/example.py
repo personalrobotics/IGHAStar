@@ -58,7 +58,7 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
     default_expansion_limit = experiment_info["max_expansions"]
     hysteresis = experiment_info["hysteresis"]
     if bidirectional:
-        expansion_limit = 2000
+        expansion_limit = 1000  # Per-thread limit for bidirectional search
         print(f"\033[92mExpansion limit: {expansion_limit} (default unidirectional: {default_expansion_limit})\033[0m")
     else:
         expansion_limit = default_expansion_limit
@@ -134,6 +134,27 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
             zorder=10,
         )
 
+        # Check for direction info (last column) to detect near meets
+        direction = path[:, -1]
+        
+        # Find all near meet indices (both sides of direction flip)
+        near_meet_indices = set()
+        if node_type == "kinodynamic" or node_type == "kinematic":
+            timesteps = node_info["timesteps"]
+            for i in range(0, len(path) - 1, timesteps):
+                next_idx = i + timesteps
+                if next_idx < len(path):
+                    # If direction flips, mark both sides as near meet
+                    if direction[i] * direction[next_idx] < 0:
+                        near_meet_indices.add(i)
+                        near_meet_indices.add(i+1)
+        else:
+            # Simple environment - check consecutive nodes
+            for i in range(len(path) - 1):
+                if direction[i] * direction[i + 1] < 0:
+                    near_meet_indices.add(i)
+                    near_meet_indices.add(i + 1)
+        
         if node_type == "kinodynamic" or node_type == "kinematic":
             # Plot car orientations along the path
             plot_car(
@@ -145,22 +166,9 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
                 label="Start",
             )
             
-            # Check for direction info (last column) to detect near meets
-            direction = path[:, -1]
             timesteps = node_info["timesteps"]
-            
-            # Find all near meet indices (both sides of direction flip)
-            near_meet_indices = set()
-            for i in range(0, len(path) - 1, timesteps):
-                next_idx = i + timesteps
-                if next_idx < len(path):
-                    # If direction flips, mark both sides as near meet
-                    if direction[i] * direction[next_idx] < 0:
-                        near_meet_indices.add(i)
-                        near_meet_indices.add(next_idx)
-            
             for i in range(len(path) - 1):
-                if i % timesteps == 0:
+                if i % timesteps == 0 or i in near_meet_indices:
                     car_color = "hotpink" if i in near_meet_indices else "blue"
                     plot_car(
                         plt,
@@ -169,16 +177,18 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
                         path[i, 2],
                         color=car_color,
                     )
-            # plot_car(plt, path[-1, 0]/map_res, path[-1, 1]/map_res, path[-1, 2], color='blue')
         else:
-            # Simple environment - plot path vertices
+            # Simple environment - plot path vertices with near-meet highlighting
             for i in range(len(path)):
+                point_color = "hotpink" if i in near_meet_indices else "blue"
+                point_size = 100 if i in near_meet_indices else 20
                 plt.scatter(
                     path[i, 0] / map_res,
                     path[i, 1] / map_res,
-                    color="blue",
-                    s=20,
-                    alpha=0.6,
+                    color=point_color,
+                    s=point_size,
+                    alpha=0.8 if i in near_meet_indices else 0.6,
+                    zorder=10 if i in near_meet_indices else 5,
                 )
 
         # Add goal region circle

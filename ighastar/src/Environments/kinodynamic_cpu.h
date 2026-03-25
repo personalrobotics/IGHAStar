@@ -46,24 +46,39 @@ public:
   bool active;
   int rank, level;
   size_t hash;
+  size_t LCR_index;  // Hash for local controllability radius (near-meet detection)
+  int time_direction;  // 1 for forward, -1 for backward
   std::vector<size_t> index;
   std::shared_ptr<Node> parent;
 
   // Constructor
   Node(const float *pose_in, const float *intermediate_poses_,
        std::shared_ptr<Node> parent_in, float g_in, const float *resolution_,
-       float *tolerance, int max_level, float division_factor, int timesteps)
+       float *tolerance, int max_level, float division_factor, int timesteps,
+       const float *LCR_, int time_direction_ = 1)
       : intermediate_poses(nullptr), g(g_in), f(0), parent(parent_in),
-        active(true), rank(0), level(0) {
+        active(true), rank(0), level(0), time_direction(time_direction_) {
     for (int i = 0; i < n_dims; i++) {
       pose[i] = pose_in[i];
     }
     if (parent_in != nullptr && intermediate_poses_ != nullptr) {
       intermediate_poses = new float[timesteps * n_dims];
-      memcpy(intermediate_poses, intermediate_poses_,
-             timesteps * n_dims * sizeof(float));
+      if (time_direction_ == -1) {
+        // Reverse the sequence for backward search
+        for (int t = 0; t < timesteps; t++) {
+          int src_index = (timesteps - 1 - t) * n_dims;
+          int dst_index = t * n_dims;
+          memcpy(&intermediate_poses[dst_index], &intermediate_poses_[src_index],
+                 n_dims * sizeof(float));
+        }
+      } else {
+        memcpy(intermediate_poses, intermediate_poses_,
+               timesteps * n_dims * sizeof(float));
+      }
     }
     hash = calc_hash(pose, tolerance);
+    // Compute LCR_index using local_controllability_radius
+    LCR_index = calc_hash(pose, LCR_);
     float resolution[n_dims];
     for (int i = 0; i < n_dims; i++) {
       resolution[i] = resolution_[i];
@@ -92,9 +107,8 @@ struct NodePtrCompare {
 };
 
 class Environment {
-  int map_size_px, threads, blocks, n_succ, timesteps, patch_length_px,
-      patch_width_px;
-  float resolution[n_dims], tolerance[n_dims], epsilon[n_dims], division_factor;
+  int map_size_px, threads, blocks, n_succ, patch_length_px, patch_width_px;
+  float epsilon[n_dims];
   float *h_heightmap, *h_costmap; // CPU versions
   float dt, map_res;
   float car_l2, car_w2;
@@ -103,8 +117,16 @@ class Environment {
 
 public:
   int max_level;
+  int timesteps;
+  int time_direction;
+  float resolution[n_dims];
+  float tolerance[n_dims];
+  float local_controllability_radius[n_dims];
+  float division_factor;
 
-  Environment(const py::dict &config) {
+  Environment(const py::dict &config, int time_direction_ = 1)
+      : h_heightmap(nullptr), h_costmap(nullptr), controls(nullptr),
+        time_direction(time_direction_) {
     auto info = config["experiment_info_default"].cast<py::dict>();
     auto node_info = info["node_info"].cast<py::dict>();
 
@@ -118,28 +140,38 @@ public:
 
     threads = 1; // CPU version doesn't need thread/block calculations
     blocks = 1;
-
-    h_heightmap = nullptr;
-    h_costmap = nullptr;
-    // controls is set in set_car_params, don't overwrite it here
   }
 
   ~Environment() {
-    if (h_costmap)
+    if (h_costmap) {
       delete[] h_costmap;
-    if (h_heightmap)
+      h_costmap = nullptr;
+    }
+    if (h_heightmap) {
       delete[] h_heightmap;
-    if (controls)
+      h_heightmap = nullptr;
+    }
+    if (controls) {
       delete[] controls;
+      controls = nullptr;
+    }
   }
 
   // Sets resolution, tolerance, and epsilon values for different dimensions
   void set_resolutions(py::dict &info, py::dict &node_info) {
     float res = info["resolution"].cast<float>();
     float tol = info["tolerance"].cast<float>();
-    auto eps = info["epsilon"].cast<std::vector<float>>();
     float del_theta = node_info["del_theta"].cast<float>() / 57.3;
     float del_vel = node_info["del_vel"].cast<float>();
+    
+    // For backward search, use backward_epsilon if available
+    std::vector<float> eps;
+    if (time_direction == -1 && info.contains("backward_epsilon")) {
+      eps = info["backward_epsilon"].cast<std::vector<float>>();
+    } else {
+      eps = info["epsilon"].cast<std::vector<float>>();
+    }
+
     resolution[0] = res;
     resolution[1] = res;
     resolution[2] = res * del_theta;
@@ -148,10 +180,21 @@ public:
     tolerance[1] = tol;
     tolerance[2] = tol * del_theta;
     tolerance[3] = tol * del_vel;
-    epsilon[0] = eps[0];
-    epsilon[1] = eps[1];
-    epsilon[2] = eps[2];
-    epsilon[3] = eps[3];
+    for (int i = 0; i < n_dims && i < static_cast<int>(eps.size()); i++) {
+      epsilon[i] = eps[i];
+    }
+    
+    // Set LCR from config if available, otherwise use epsilon
+    if (info.contains("LCR")) {
+      auto lcr = info["LCR"].cast<std::vector<float>>();
+      for (int i = 0; i < n_dims; i++) {
+        local_controllability_radius[i] = (i < static_cast<int>(lcr.size())) ? lcr[i] : epsilon[i];
+      }
+    } else {
+      for (int i = 0; i < n_dims; i++) {
+        local_controllability_radius[i] = epsilon[i];
+      }
+    }
   }
 
   // Sets car parameters and allocates controls array
@@ -166,7 +209,7 @@ public:
     patch_length_px = int(car_l2 * 2 / map_res);
     patch_width_px = int(car_w2 * 2 / map_res);
     timesteps = info["timesteps"].cast<int>();
-    dt = info["dt"].cast<float>();
+    dt = info["dt"].cast<float>() * float(time_direction);
     gear_switch_time = info["gear_switch_time"].cast<float>();
 
     auto steering_list = info["steering_list"].cast<std::vector<float>>();
@@ -176,8 +219,8 @@ public:
 
     controls = new float[n_succ * n_cont];
     int idx = 0;
-    for (int i = 0; i < throttle_list.size(); ++i) {
-      for (int j = 0; j < steering_list.size(); ++j) {
+    for (size_t i = 0; i < throttle_list.size(); ++i) {
+      for (size_t j = 0; j < steering_list.size(); ++j) {
         controls[idx * n_cont] = tanf(steering_list[j] / 57.3) / (car_l2 * 2);
         controls[idx * n_cont + 1] = throttle_list[i] * step_size;
         ++idx;
@@ -225,14 +268,43 @@ public:
     }
   }
 
-  // Cleanup function for CPU environment (no-op)
-  void cleanup() { return; }
-
   // Creates a new Node with the given pose
   std::shared_ptr<Node> create_Node(float *pose) {
     return std::make_shared<Node>(pose, nullptr, nullptr, 0, resolution,
                                   tolerance, max_level, division_factor,
-                                  timesteps);
+                                  timesteps, local_controllability_radius,
+                                  time_direction);
+  }
+
+  // Compute near-meet distance between two poses
+  float compute_near_meet_distance(float *pose1, float *pose2) {
+    return heuristic(pose1, pose2);
+  }
+
+  // Batched validity check for multiple states
+  void check_validity_batched(const std::vector<float *> &states,
+                              std::vector<bool> &results) {
+    int n_states = states.size();
+    results.resize(n_states);
+    
+    float *states_array = new float[n_states * n_dims];
+    bool *result_array = new bool[n_states];
+    std::fill(result_array, result_array + n_states, true);
+
+    for (int i = 0; i < n_states; i++) {
+      memcpy(&states_array[i * n_dims], states[i], n_dims * sizeof(float));
+    }
+
+    check_validity_launcher_cpu(h_costmap, map_size_px, map_res, states_array,
+                                patch_length_px, patch_width_px, car_l2, car_w2,
+                                n_states, n_dims, result_array);
+
+    for (int i = 0; i < n_states; i++) {
+      results[i] = result_array[i];
+    }
+
+    delete[] states_array;
+    delete[] result_array;
   }
 
   // Calculates Euclidean distance between two poses
@@ -320,7 +392,8 @@ public:
                timesteps * n_dims * sizeof(float));
         neighbor = std::make_shared<Node>(
             new_pose, new_intermediate_pose, node, node->g + cost[i],
-            resolution, tolerance, max_level, division_factor, timesteps);
+            resolution, tolerance, max_level, division_factor, timesteps,
+            local_controllability_radius, time_direction);
         f = neighbor->g + heuristic(neighbor->pose, goal->pose);
         neighbor->f = f;
         neighbors.push_back(neighbor);
@@ -332,36 +405,48 @@ public:
 
   torch::Tensor convert_node_list_to_path_tensor(
       std::vector<std::shared_ptr<Node>> node_list) {
-    int path_length = node_list.size();
-    auto path_tensor =
-        torch::zeros({1 + (path_length - 1) * timesteps, n_dims + 1},
-                     torch::TensorOptions().dtype(torch::kFloat32));
-    for (int i = 0; i < path_length; i++) {
-      int base_index = i * timesteps;
+    if (node_list.empty()) {
+      return torch::zeros({0, n_dims + 1},
+                          torch::TensorOptions().dtype(torch::kFloat32));
+    }
+
+    // First pass: build extended list with all states we want to include
+    struct PathState {
+      float pose[n_dims];
+      float g;
+    };
+    std::vector<PathState> extended_path;
+    for (size_t i = 0; i < node_list.size(); i++) {
       if (node_list[i]->parent == nullptr) {
-        // start node doesn't have any intermediates:
-        path_tensor[base_index][0] = node_list[i]->pose[0];
-        path_tensor[base_index][1] = node_list[i]->pose[1];
-        path_tensor[base_index][2] = node_list[i]->pose[2];
-        path_tensor[base_index][3] = node_list[i]->pose[3];
-        path_tensor[base_index][4] =
-            node_list[i]->g; // this is the timestamp of that node
-        break;
-      }
-      for (int j = 0; j < timesteps; j++) {
-        int intermediate_index = (timesteps - j - 1) * n_dims;
-        path_tensor[base_index + j][0] =
-            node_list[i]->intermediate_poses[intermediate_index + 0];
-        path_tensor[base_index + j][1] =
-            node_list[i]->intermediate_poses[intermediate_index + 1];
-        path_tensor[base_index + j][2] =
-            node_list[i]->intermediate_poses[intermediate_index + 2];
-        path_tensor[base_index + j][3] =
-            node_list[i]->intermediate_poses[intermediate_index + 3];
-        path_tensor[base_index + j][4] =
-            node_list[i]->g; // this is the timestamp of that node
+        // Start node (no intermediate poses): skip it
+        continue;
+      } else {
+        // Node with parent: add intermediate poses (in reverse order as stored)
+        for (int j = 0; j < timesteps; j++) {
+          int intermediate_index = (timesteps - j - 1) * n_dims;
+          PathState state;
+          for (int d = 0; d < n_dims; d++) {
+            state.pose[d] =
+                node_list[i]->intermediate_poses[intermediate_index + d];
+          }
+          state.g = node_list[i]->g * node_list[i]->time_direction;
+          extended_path.push_back(state);
+        }
       }
     }
-    return path_tensor; // this might cause segfault
+
+    // Second pass: create tensor of exact size and populate it
+    int tensor_size = extended_path.size();
+    auto path_tensor = torch::zeros({tensor_size, n_dims + 1},
+                                    torch::TensorOptions().dtype(torch::kFloat32));
+
+    for (size_t i = 0; i < extended_path.size(); i++) {
+      for (int d = 0; d < n_dims; d++) {
+        path_tensor[i][d] = extended_path[i].pose[d];
+      }
+      path_tensor[i][n_dims] = extended_path[i].g;
+    }
+
+    return path_tensor;
   }
 };

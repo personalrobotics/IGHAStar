@@ -34,6 +34,8 @@
 #include <pybind11/stl.h>
 #include <unordered_map>
 #include <unordered_set>
+#include <sampling_utils.h>
+#include "config_utils.h"
 
 using namespace std;
 
@@ -573,17 +575,23 @@ public:
     std::atomic<bool> forward_finished{false};
     std::atomic<bool> backward_finished{false};
     
-    // Anchor data structures for near-meet detection (protected by anchor_mutex)
-    // Each anchor cell stores a list of (g-value, node) pairs for multiple vertices
-    std::mutex anchor_mutex;
-    std::unordered_map<int, std::vector<std::pair<float, std::shared_ptr<Node>>>> forward_anchor;
-    std::unordered_map<int, std::vector<std::pair<float, std::shared_ptr<Node>>>> backward_anchor;
+    // LCR_table data structures for near-meet detection (protected by LCR_mutex)
+    // Each LCR_table cell stores a list of (g-value, node) pairs for multiple vertices
+    std::mutex LCR_mutex;
+    std::unordered_map<int, std::vector<std::pair<float, std::shared_ptr<Node>>>> forward_LCR_table;
+    std::unordered_map<int, std::vector<std::pair<float, std::shared_ptr<Node>>>> backward_LCR_table;
     
     // Point perturbation configuration for near-meet validity checking
-    int num_interpolation_points = 5;  // Number of interpolation points between meeting nodes
-    int num_perturbations = 3;         // Number of random perturbations per interpolation point
-    std::vector<std::vector<float>> cached_perturbations;  // Cached random offsets, pre-scaled [num_perturbations][n_dims]
-    float perturbation_scale = 1.0f;   // Scale factor for perturbations relative to local controllability radius
+    int num_interpolation_points;
+    int num_perturbations;
+    std::vector<std::vector<float>> cached_perturbations;
+    float perturbation_scale;
+    
+    // Goal sampling configuration for backward search
+    // Goal sampling is needed in practice because your exact goal state may be unreachable.
+    // Sampling around the goal allows the backward search to start from 
+    // reachable states within the goal region.
+    sampling::GoalSamplingConfig goal_sampling_config;
     
     // Best path storage
     std::mutex path_mutex;
@@ -608,59 +616,67 @@ public:
         forward_search = new IGHAStar(config, debug_, 1);
         backward_search = new IGHAStar(config, debug_, -1);
         
-        // Initialize perturbation configuration from config if available
-        // Check both root level and under experiment_info_default
-        py::dict nm_config;
-        bool found_nm_config = false;
-        
-        if (config.contains("near_meet_config")) {
-            nm_config = config["near_meet_config"].cast<py::dict>();
-            found_nm_config = true;
-        } else if (config.contains("experiment_info_default")) {
-            auto exp_config = config["experiment_info_default"].cast<py::dict>();
-            if (exp_config.contains("near_meet_config")) {
-                nm_config = exp_config["near_meet_config"].cast<py::dict>();
-                found_nm_config = true;
-            }
-        }
-        
-        if (found_nm_config) {
-            if (nm_config.contains("num_interpolation_points")) {
-                num_interpolation_points = nm_config["num_interpolation_points"].cast<int>();
-            }
-            if (nm_config.contains("num_perturbations")) {
-                num_perturbations = nm_config["num_perturbations"].cast<int>();
-            }
-            if (nm_config.contains("perturbation_scale")) {
-                perturbation_scale = nm_config["perturbation_scale"].cast<float>();
-            }
-        }
-        
-        // Initialize cached random perturbations
+        setup_near_meet(config);
+        setup_goal_sampling(config);
         initialize_perturbation_cache();
     }
     
-    void initialize_perturbation_cache() {
-        // Use local_controllability_radius (LCR) directly from config for perturbation scaling
+    void setup_near_meet(const py::dict& config) {
+        auto [nm_config, found] = config_utils::get_config_dict(config, "near_meet_config");
+        num_interpolation_points = nm_config.contains("num_interpolation_points") ? nm_config["num_interpolation_points"].cast<int>() : 5;
+        num_perturbations = nm_config.contains("num_perturbations") ? nm_config["num_perturbations"].cast<int>() : 3;
+        perturbation_scale = nm_config.contains("perturbation_scale") ? nm_config["perturbation_scale"].cast<float>() : 1.0f;
+        initialize_perturbation_cache();
+    }
+    
+    void setup_goal_sampling(const py::dict& config) {
+        auto [gs_config, found] = config_utils::get_config_dict(config, "goal_sampling_config");
+        
+        goal_sampling_config.n_dims = n_dims;
+        goal_sampling_config.enabled = gs_config.contains("enabled") ? gs_config["enabled"].cast<bool>() : true;
+        goal_sampling_config.num_samples = gs_config.contains("num_samples") ? gs_config["num_samples"].cast<int>() : 32;
+        
+        // Parse angular_dims as a list (supports multiple angular dimensions, e.g., for multi-car systems)
+        if (gs_config.contains("angular_dims")) {
+            goal_sampling_config.angular_dims = gs_config["angular_dims"].cast<std::vector<int>>();
+        } else {
+            goal_sampling_config.angular_dims = {2};  // default: dimension 2 is angular
+        }
+        
+        std::string space_type_str = gs_config.contains("space_type") ? gs_config["space_type"].cast<std::string>() : "SE2";
+        if (space_type_str == "SE2" || space_type_str == "se2") {
+            goal_sampling_config.space_type = sampling::SpaceType::SE2;
+        } else if (space_type_str == "R_N" || space_type_str == "r_n" || space_type_str == "RN" || space_type_str == "rn") {
+            goal_sampling_config.space_type = sampling::SpaceType::R_N;
+        } else {
+            goal_sampling_config.space_type = sampling::SpaceType::SE2;
+        }
+        
+        // Parse sigma vector (defaults to LCR if not specified)
+        goal_sampling_config.sigma.resize(n_dims);
         const float* LCR = forward_search->env->local_controllability_radius;
-        
-        // Generate random perturbation offsets, pre-scaled by LCR
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::normal_distribution<float> dist(0.0f, 1.0f);
-        
-        cached_perturbations.clear();
-        cached_perturbations.resize(num_perturbations);
-        for (int i = 0; i < num_perturbations; i++) {
-            cached_perturbations[i].resize(n_dims);
-            for (int d = 0; d < n_dims; d++) {
-                // Pre-scale by perturbation_scale * LCR
-                cached_perturbations[i][d] = dist(gen) * perturbation_scale * LCR[d];
+        if (gs_config.contains("sigma")) {
+            auto sigma_vec = gs_config["sigma"].cast<std::vector<float>>();
+            for (int i = 0; i < n_dims; i++) {
+                goal_sampling_config.sigma[i] = (i < static_cast<int>(sigma_vec.size())) ? sigma_vec[i] : LCR[i];
+            }
+        } else {
+            for (int i = 0; i < n_dims; i++) {
+                goal_sampling_config.sigma[i] = LCR[i];
             }
         }
+    }
+    
+    void initialize_perturbation_cache() {
+        // This is not part of the core Bi-IGHAStar method; we are simply putting it inside the class because it is 
+        // convenient to pass the function pointers to the sampling utility function, which is defined elsewhere.)
+        const float* LCR = forward_search->env->local_controllability_radius;
+        cached_perturbations = sampling::generate_perturbation_cache(
+            LCR, n_dims, num_perturbations, perturbation_scale);
+        
         if (debug) {
             std::cout << "Cached perturbations: " << cached_perturbations.size() << std::endl;
-            for (int i = 0; i < cached_perturbations.size(); i++) {
+            for (size_t i = 0; i < cached_perturbations.size(); i++) {
                 std::cout << "Perturbation " << i << ": ";
                 for (int d = 0; d < n_dims; d++) {
                     std::cout << cached_perturbations[i][d] << " ";
@@ -670,127 +686,170 @@ public:
         }
     }
     
+    void sample_goals(std::shared_ptr<Node> backward_start, std::shared_ptr<Node> backward_goal, std::ofstream& backward_log) {
+        // Define callbacks for the sampling utility
+        auto validity_checker = [this](const std::vector<float*>& states, std::vector<bool>& results) {
+            std::vector<float*> non_const_states(states.begin(), states.end());
+            backward_search->env->check_validity_batched(non_const_states, results);
+        };
+        
+        auto heuristic_fn = [this](const float* p1, const float* p2) {
+            return backward_search->env->heuristic(const_cast<float*>(p1), const_cast<float*>(p2));
+        };
+        
+        auto node_factory = [this, &backward_start](float* pose, float* intermediate_poses, float g_value, float f_value) {
+            auto node = std::make_shared<Node>(
+                pose, intermediate_poses, backward_start, backward_start->g + g_value,
+                backward_search->env->resolution, backward_search->env->tolerance,
+                backward_search->env->max_level, backward_search->env->division_factor,
+                backward_search->env->timesteps, backward_search->env->local_controllability_radius,
+                backward_search->env->time_direction);
+            node->f = backward_start->g + f_value;
+            return node;
+        };
+        
+        auto near_meet_checker = [this, &backward_start, &backward_log](const std::shared_ptr<Node>& node) {
+            return check_near_meet_validity(backward_search, node, backward_start, backward_log);
+        };
+        
+        // Sample goal region using utility function, then, filter the sampled nodes using the near-meet checker
+        // we only consider those sampled states that satisfy the near-meet checker, as they are the ones that are likely to be valid.
+        // This function is not part of the core Bi-IGHAStar method; we are simply putting it inside the class because it is 
+        // convenient to pass the function pointers to the sampling utility function, which is defined elsewhere.
+        auto sampled_nodes = sampling::sample_goal_region<std::shared_ptr<Node>>(
+            backward_start->pose, backward_goal->pose,
+            goal_sampling_config, backward_search->env->timesteps,
+            validity_checker, heuristic_fn, node_factory, near_meet_checker);
+
+        if (debug) {
+            int num_sampled_nodes = sampled_nodes.size();
+            if(num_sampled_nodes > 2) {
+                float mean[n_dims];
+                float variance[n_dims];
+                for(int i = 0; i < n_dims; i++) {
+                    mean[i] = 0.0f;
+                    variance[i] = 0.0f;
+                }
+                for(int i = 0; i < num_sampled_nodes; i++) {
+                    for(int j = 0; j < n_dims; j++) {
+                        mean[j] += sampled_nodes[i]->pose[j]/num_sampled_nodes;
+                    }
+                }
+                for(int i = 0; i < num_sampled_nodes; i++) {
+                    for(int j = 0; j < n_dims; j++) {
+                        float delta = sampled_nodes[i]->pose[j] - backward_start->pose[j];
+                        variance[j] += delta * delta / num_sampled_nodes;
+                    }
+                }
+                std::cout << "Mean of sampled nodes: ";
+                for(int i = 0; i < n_dims; i++) {
+                    std::cout << mean[i] << " ";
+                }
+                std::cout << std::endl;
+                std::cout << "Variance of sampled nodes: ";
+                for(int i = 0; i < n_dims; i++) {
+                    std::cout << variance[i] << " ";
+                }
+                std::cout << std::endl;
+                std::cout << "Individual nodes: around start: "<<backward_start->pose[0]<<", "<<backward_start->pose[1]<<", "<<backward_start->pose[2]<<", "<<backward_start->pose[3]<<":  " <<std::endl <<"[";
+                for(int i = 0; i < num_sampled_nodes; i++) {
+                    std::cout <<"[" <<sampled_nodes[i]->pose[0] - backward_start->pose[0] << ", " << sampled_nodes[i]->pose[1] - backward_start->pose[1] << ", " << sampled_nodes[i]->pose[2] - backward_start->pose[2] << ", " << sampled_nodes[i]->pose[3] - backward_start->pose[3] << "]," << std::endl;
+                }
+                std::cout << "]" << std::endl;
+            }
+            else {
+                std::cout << "Only " << num_sampled_nodes << " sampled nodes found, skipping variance computation" << std::endl;
+            }
+        }
+
+        // Add valid sampled states to backward search
+        for (std::shared_ptr<Node> sampled_node : sampled_nodes) {
+            if (backward_search->Q_v_hash.count(sampled_node->hash) > 0) {
+                continue;  // Skip duplicate
+            }
+            if (sampled_node->g < backward_search->get_G(backward_search->level, sampled_node->index[backward_search->level])) {
+                backward_search->GUpdate(sampled_node);
+            }
+            sampled_node->active = true;
+            backward_search->Q_v.push(sampled_node);
+            backward_search->Q_v_hash.insert(sampled_node->hash);
+            
+            int LCR_idx = sampled_node->LCR_index;
+            update_LCR_table(false, sampled_node, LCR_idx);
+        }
+    }
+    
     ~BiIGHAStar() {
         delete forward_search;
         delete backward_search;
     }
 
-    void reset_anchor(IGHAStar* search, std::shared_ptr<Node> start_node) {
-        // Initialize anchor for this search direction
+    void reset_LCR_table(IGHAStar* search, std::shared_ptr<Node> start_node) {
+        // Initialize LCR_table for this search direction
         if (search == forward_search) {
-            forward_anchor.clear();
+            forward_LCR_table.clear();
             int LCR_idx = start_node->LCR_index;
-            forward_anchor[LCR_idx].push_back({0.0f, start_node});
+            forward_LCR_table[LCR_idx].push_back({0.0f, start_node});
         } else {
-            backward_anchor.clear();
+            backward_LCR_table.clear();
             int LCR_idx = start_node->LCR_index;
-            backward_anchor[LCR_idx].push_back({0.0f, start_node});
+            backward_LCR_table[LCR_idx].push_back({0.0f, start_node});
         }
     }
     
-    float get_G_anchor(bool is_forward, int LCR_idx) {
-        std::lock_guard<std::mutex> lock(anchor_mutex);
-        auto& anchor = is_forward ? forward_anchor : backward_anchor;
-        if (anchor.count(LCR_idx) && !anchor[LCR_idx].empty()) {
-            // Return the minimum g value among all nodes in this cell
-            float min_g = 1e5f;
-            for (const auto& pair : anchor[LCR_idx]) {
-                if (pair.first < min_g) {
-                    min_g = pair.first;
-                }
-            }
-            return min_g;
-        }
-        return 1e5f;
-    }
-    
-    // Update anchor: add node to the list for this anchor cell
-    void update_anchor(bool is_forward, std::shared_ptr<Node> v, int LCR_idx) {
-        std::lock_guard<std::mutex> lock(anchor_mutex);
-        auto& anchor = is_forward ? forward_anchor : backward_anchor;
+    // Update LCR_table: add node to the list for this LCR cell
+    void update_LCR_table(bool is_forward, std::shared_ptr<Node> v, int LCR_idx) {
+        std::lock_guard<std::mutex> lock(LCR_mutex);
+        auto& LCR_table = is_forward ? forward_LCR_table : backward_LCR_table;
         // Add this node to the list (multiple nodes per cell allowed)
-        anchor[LCR_idx].push_back({v->g, v});
+        LCR_table[LCR_idx].push_back({v->g, v});
     }
 
-    // Check if connection between two meeting nodes is valid using point perturbation
+    // Check if connection between two meeting nodes is valid by interpolating points between the two vertices,
+    // and then perturbing those points around the interpolated points for a more robust check,
+    // the interpolation and perturbation are done using the sampling_utils library
     // Returns true if all interpolated + perturbed states are collision-free
-    bool check_near_meet_validity(IGHAStar* search, std::shared_ptr<Node> v_forward, std::shared_ptr<Node> v_backward, std::ostream& log_stream) {   
-        // Generate interpolated states between the two meeting points
-        std::vector<float*> states_to_check;
-        std::vector<std::unique_ptr<float[]>> state_storage;  // Manage memory
-        if (num_interpolation_points == 0 and num_perturbations == 0) {
+    bool check_near_meet_validity(IGHAStar* search, std::shared_ptr<Node> v_forward, std::shared_ptr<Node> v_backward, std::ostream& log_stream) {
+        if (num_interpolation_points == 0 && num_perturbations == 0) {
             return true;
         }
         
-        // Track which interpolation index each state belongs to (for debugging)
-        std::vector<std::pair<int, int>> state_info;  // (interpolation_idx, perturbation_idx) where -1 = base state
+        auto validity_checker = [search](const std::vector<float*>& states, std::vector<bool>& results) {
+            std::vector<float*> non_const_states(states.begin(), states.end());
+            search->env->check_validity_batched(non_const_states, results);
+        };
         
-        // Generate interpolation points (skip endpoints i=0 and i=num_interpolation_points
-        // since those are the meeting nodes themselves which were already validated during search)
-        for (int i = 1; i < num_interpolation_points; i++) {
-            float t = static_cast<float>(i) / static_cast<float>(num_interpolation_points);
-            
-            // Interpolate base state
-            auto base_state = std::make_unique<float[]>(n_dims);
-            for (int d = 0; d < n_dims; d++) {
-                base_state[d] = (1.0f - t) * v_forward->pose[d] + t * v_backward->pose[d];
-            }
-            states_to_check.push_back(base_state.get());
-            state_storage.push_back(std::move(base_state));
-            state_info.push_back({i, -1});  // base state
-            
-            // Generate perturbed states around this interpolation point
-            // cached_perturbations are pre-scaled by perturbation_scale * LCR
-            for (int p = 0; p < num_perturbations; p++) {
-                auto perturbed_state = std::make_unique<float[]>(n_dims);
-                for (int d = 0; d < n_dims; d++) {
-                    float base = (1.0f - t) * v_forward->pose[d] + t * v_backward->pose[d];
-                    perturbed_state[d] = base + cached_perturbations[p][d];
-                }
-                states_to_check.push_back(perturbed_state.get());
-                state_storage.push_back(std::move(perturbed_state));
-                state_info.push_back({i, p});  // perturbed state
-            }
-        }
-        
-        // Batch validity check
-        std::vector<bool> results;
-        search->env->check_validity_batched(states_to_check, results);
-        // Count invalid states and debug
-        int num_invalid = 0;
-        for (size_t idx = 0; idx < results.size(); idx++) {
-            if (!results[idx]) {
-                num_invalid++;
-            }
-        }
-        
-        if (num_invalid > 0) {
-            if (debug) {
-                log_stream << "Point perturbation check FAILED - " << num_invalid << "/" << results.size() 
-                          << " states invalid" << std::endl;
-            }
-            return false;
-        }
+        bool valid = sampling::check_interpolation_validity(
+            v_forward->pose, v_backward->pose,
+            n_dims, goal_sampling_config.angular_dims,
+            num_interpolation_points, cached_perturbations,
+            validity_checker);
         
         if (debug) {
-            log_stream << "Point perturbation check PASSED - " << states_to_check.size() << " states checked" << std::endl;
+            int num_states = (num_interpolation_points - 1) * (1 + num_perturbations);
+            if (valid) {
+                log_stream << "Point perturbation check PASSED - " << num_states << " states checked" << std::endl;
+            } else {
+                log_stream << "Point perturbation check FAILED" << std::endl;
+            }
         }
-        return true;
+        return valid;
     }
     
     // Check for near-meet with the other search direction
-    // Uses point perturbation to validate connections
+    // this function takes all the vertices from the opposite direction that are within LCR of the current vertex,
+    // then arrange them by increasing total cost, then check the validity of the connection, the first valid connection is returned.
     // Returns: (found, path_cost, path) if a valid connection was found
-    std::tuple<bool, float, std::vector<std::shared_ptr<Node>>> check_near_meet(
+    std::tuple<bool, float, std::vector<std::shared_ptr<Node>>> NearMeet(
         IGHAStar* this_search, IGHAStar* other_search,
         std::shared_ptr<Node> v, std::shared_ptr<Node> this_start, std::shared_ptr<Node> other_start, bool is_forward, std::ostream& log_stream) 
     {
         int LCR_idx = v->LCR_index;
         
-        std::lock_guard<std::mutex> lock(anchor_mutex);
-        auto& other_anchor = is_forward ? backward_anchor : forward_anchor;
+        std::lock_guard<std::mutex> lock(LCR_mutex);
+        auto& other_LCR_table = is_forward ? backward_LCR_table : forward_LCR_table;
         
-        if (!other_anchor.count(LCR_idx) || other_anchor[LCR_idx].empty()) {
+        if (!other_LCR_table.count(LCR_idx) || other_LCR_table[LCR_idx].empty()) {
             return {false, 0.0f, {}};
         }
         
@@ -798,7 +857,7 @@ public:
         float current_omega = shared_Omega.load();
         std::vector<std::tuple<float, std::shared_ptr<Node>, float>> candidates;  // (path_cost, v_other, dist)
         
-        for (const auto& pair : other_anchor[LCR_idx]) {
+        for (const auto& pair : other_LCR_table[LCR_idx]) {
             float g_other = pair.first;
             std::shared_ptr<Node> v_other = pair.second;
             float dist = compute_near_meet_distance(this_search, v, v_other);
@@ -811,7 +870,7 @@ public:
         
         if (candidates.empty()) {
             if (debug) {
-                log_stream << "No candidates below Omega threshold for anchor " << LCR_idx << std::endl;
+                log_stream << "No candidates below Omega threshold for LCR_idx " << LCR_idx << std::endl;
             }
             return {false, 0.0f, {}};
         }
@@ -821,7 +880,7 @@ public:
             [](const auto& a, const auto& b) { return std::get<0>(a) < std::get<0>(b); });
         
         if (debug) {
-            log_stream << "Checking " << candidates.size() << " candidates for anchor " << LCR_idx << std::endl;
+            log_stream << "Checking " << candidates.size() << " candidates for LCR_idx " << LCR_idx << std::endl;
         }
         
         // Try candidates in order of cost until we find a valid one
@@ -898,8 +957,7 @@ public:
 
     // Compute distance between two nodes for near-meet check
     float compute_near_meet_distance(IGHAStar* search, std::shared_ptr<Node> v1, std::shared_ptr<Node> v2) {
-        // Use the environment's heuristic function for near-meet distance
-        return search->env->heuristic(v1->pose, v2->pose);
+        return search->env->compute_near_meet_distance(v1->pose, v2->pose);
     }
     
     
@@ -1095,14 +1153,15 @@ public:
                         if (debug) {
                             log_stream << "inserted node into Q_v and updated G" << std::endl;
                         }
-                        // === BIDIRECTIONAL ADDITION: Update anchor and check near-meet ===
+                        // === BIDIRECTIONAL ADDITION: Update LCR_table and check near-meet ===
                         int LCR_idx = neighbor->LCR_index;
-                        update_anchor(is_forward, neighbor, LCR_idx);
+                        update_LCR_table(is_forward, neighbor, LCR_idx);
                         // measure the time for checking near meets:
                         auto nm_start_time = std::chrono::high_resolution_clock::now();
                         // Check for near-meet with other search
-                        auto [found, path_cost, connected_path] = check_near_meet(
+                        auto [found, path_cost, connected_path] = NearMeet(
                             search, other_search, neighbor, start_node, other_start_node, is_forward, log_stream);
+                        // technically, NearMeet is overloading the "NearMeet", as well as getNearMeetCost
                         auto nm_end_time = std::chrono::high_resolution_clock::now();
                         // log it to log_stream:
                         if (debug) {
@@ -1135,7 +1194,7 @@ public:
             search->change_resolution_g_update();
             search->Activate();
             end_time = std::chrono::high_resolution_clock::now();
-            // not pruning seen right now because that might also require figuring out the G_anchor and V_anchor
+            // not pruning seen right now because that might also require figuring out the G_LCR and V_LCR
             if (debug) {
                 log_stream << "done with level change" << std::endl;
             }
@@ -1207,8 +1266,8 @@ public:
         backward_finished.store(false);
         best_path.clear();
         best_path_list.clear();
-        forward_anchor.clear();
-        backward_anchor.clear();
+        forward_LCR_table.clear();
+        backward_LCR_table.clear();
         
         // Reset profiling variables
         successor_time = 0;
@@ -1249,91 +1308,14 @@ public:
             std::cout << "Goal node validity: " << valid[1] << std::endl;
         }
 
-        if (1) {
-            int num_tries = 0;
-            std::vector<std::shared_ptr<Node>> sampled_nodes = backward_search->env->sample_valid_states_around_start(
-                backward_start, backward_goal, 2, 32,
-                forward_search->env->epsilon); // use forward search's epsilon for backward search sampling.
-            // further filter sampled states using the point-perturbation check:
-            for (auto& sampled_node : sampled_nodes) {
-                if (!check_near_meet_validity(backward_search, sampled_node, backward_start, backward_log)) {
-                    sampled_nodes.erase(std::remove(sampled_nodes.begin(), sampled_nodes.end(), sampled_node), sampled_nodes.end());
-                }
-            }
-            // while (sampled_nodes.size() < 2 and num_tries < 1) {
-            //     num_tries += 1;
-            //     sampled_nodes = backward_search->env->sample_valid_states_around_start(
-            //         backward_start, backward_goal, float(num_tries+2), int(pow(num_tries+2, 4)),
-            //         forward_search->env->epsilon); // use forward search's epsilon for backward search sampling.
-            // }
-            // std::cout << "Sampled " << sampled_nodes.size() << " valid states around start and added to backward search" << std::endl;
-            if (debug) {
-                int num_sampled_nodes = sampled_nodes.size();
-                if(num_sampled_nodes > 2) {
-                    // compute the mean and variance of the sampled nodes for n_dims:
-                    float mean[n_dims];
-                    float variance[n_dims];
-                    for(int i = 0; i < n_dims; i++) {
-                        mean[i] = 0.0f;
-                        variance[i] = 0.0f;
-                    }
-                    for(int i = 0; i < num_sampled_nodes; i++) {
-                        for(int j = 0; j < n_dims; j++) {
-                            mean[j] += sampled_nodes[i]->pose[j]/num_sampled_nodes;
-                        }
-                    }
-                    for(int i = 0; i < num_sampled_nodes; i++) {
-                        for(int j = 0; j < n_dims; j++) {
-                            float delta = sampled_nodes[i]->pose[j] - backward_start->pose[j];
-                            variance[j] += delta * delta / num_sampled_nodes;
-                        }
-                    }
-                    // print the mean and variance of the sampled nodes for n_dims:
-                    std::cout << "Mean of sampled nodes: ";
-                    for(int i = 0; i < n_dims; i++) {
-                        std::cout << mean[i] << " ";
-                    }
-                    std::cout << std::endl;
-                    std::cout << "Variance of sampled nodes: ";
-                    for(int i = 0; i < n_dims; i++) {
-                        std::cout << variance[i] << " ";
-                    }
-                    std::cout << std::endl;
-                    // individual nodes print:
-                    std::cout << "Individual nodes: around start: "<<backward_start->pose[0]<<", "<<backward_start->pose[1]<<", "<<backward_start->pose[2]<<", "<<backward_start->pose[3]<<":  " <<std::endl <<"[";
-                    for(int i = 0; i < num_sampled_nodes; i++) {
-                        std::cout <<"[" <<sampled_nodes[i]->pose[0] - backward_start->pose[0] << ", " << sampled_nodes[i]->pose[1] - backward_start->pose[1] << ", " << sampled_nodes[i]->pose[2] - backward_start->pose[2] << ", " << sampled_nodes[i]->pose[3] - backward_start->pose[3] << "]," << std::endl;
-                    }
-                    std::cout << "]" << std::endl;
-                }
-                else {
-                    std::cout << "Only " << num_sampled_nodes << " sampled nodes found, skipping variance computation" << std::endl;
-                }
-
-            }
-
-            // Add valid sampled states to backward search
-            for (std::shared_ptr<Node> sampled_node : sampled_nodes) {
-                // Check if this node already exists (e.g., exact goal state)
-                if (backward_search->Q_v_hash.count(sampled_node->hash) > 0) {
-                    continue;  // Skip duplicate (shared_ptr manages memory)
-                }
-                // Add to Q_v and V
-                if (sampled_node->g < backward_search->get_G(backward_search->level, sampled_node->index[backward_search->level])) {
-                    backward_search->GUpdate(sampled_node);
-                }
-                sampled_node->active = true;
-                backward_search->Q_v.push(sampled_node);
-                backward_search->Q_v_hash.insert(sampled_node->hash);
-                
-                // Update anchor
-                int LCR_idx = sampled_node->LCR_index;
-                update_anchor(false, sampled_node, LCR_idx);
-            }
-        }
-        // Initialize anchors
-        reset_anchor(forward_search, forward_start);
-        reset_anchor(backward_search, backward_start);
+        // Goal sampling: sample reachable states around the goal for backward search.
+        // This is needed in practice because your exact goal state may be unreachable
+        // (e.g., due to discretization or kinematic constraints).
+        sample_goals(backward_start, backward_goal, backward_log);
+        
+        // Initialize LCR_tables
+        reset_LCR_table(forward_search, forward_start);
+        reset_LCR_table(backward_search, backward_start);
         
         // Create barrier for 2 threads
         expansion_barrier = std::make_unique<SimpleBarrier>(2);
@@ -1440,12 +1422,12 @@ public:
             // if(debug){
             std::cout << "Best path is not found, returning empty path" << std::endl;
             // }
-            return torch::zeros({0, 5}, torch::TensorOptions().dtype(torch::kFloat32));
+            return torch::zeros({0, n_dims + 1}, torch::TensorOptions().dtype(torch::kFloat32));
         }
         if(debug){
             if (best_path_list.empty()) {
                 std::cerr << "ERROR: best_path_list is empty!" << std::endl;
-                return torch::zeros({0, 5}, torch::TensorOptions().dtype(torch::kFloat32));
+                return torch::zeros({0, n_dims + 1}, torch::TensorOptions().dtype(torch::kFloat32));
             }
             std::cout << "Getting best path from best_path_list, size: " << best_path_list.size() << std::endl;
             std::cout << "Best path node count: " << best_path_list[best_path_list.size() - 1].size() << std::endl;
@@ -1455,7 +1437,12 @@ public:
         if(debug){
             std::cout<<"path: "<<std::endl;
             for (int i = 0; i < path.size(0); i++) {
-                std::cout<<"node "<<i<<": "<<path[i][0]<<", "<<path[i][1]<<", "<<path[i][2]<<", "<<path[i][3]<<std::endl;
+                std::cout<<"node "<<i<<": ";
+                for (int d = 0; d < path.size(1); d++) {
+                    std::cout<<path[i][d];
+                    if (d < path.size(1) - 1) std::cout<<", ";
+                }
+                std::cout<<std::endl;
             }
             std::cout<<"end of path"<<std::endl;
         }
