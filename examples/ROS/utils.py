@@ -357,20 +357,21 @@ def visualize_map_with_path(
             (path_disp[..., 1] * resolution_inv) + map_size // 2, 0, map_size - 1
         ).astype(int)
         car_width_px = max(1, int(0.15 * resolution_inv))
-        if path.shape[1] > 3:
-            velocity = path[..., 3]
-            velocity_norm = (velocity - np.min(velocity)) / (
-                np.max(velocity) - np.min(velocity) + 1e-6
-            )
-            velocity_color = np.clip((velocity_norm * 255), 0, 255).astype(int)
-        else:
-            velocity_color = np.full(len(path_X), 128, dtype=int)
+        
+        # Get direction from last column (g * time_direction): positive = forward, negative = backward
+        direction = path[..., -1]
+        
         for i in range(len(path_X) - 1):
+            # Green (0, 255, 0) for forward search, Blue (255, 0, 0) for backward search (BGR format)
+            if direction[i] >= 0:
+                color = (0, 255, 0)  # Green for forward
+            else:
+                color = (255, 0, 0)  # Blue for backward
             cv2.line(
                 display_img,
                 (path_X[i], path_Y[i]),
                 (path_X[i + 1], path_Y[i + 1]),
-                (0, int(velocity_color[i]), 0),
+                color,
                 car_width_px,
             )
 

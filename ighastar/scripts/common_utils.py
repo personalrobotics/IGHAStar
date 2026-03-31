@@ -1,10 +1,47 @@
 import torch
 from torch.utils.cpp_extension import load
 import pathlib
+import os
 from typing import Any, Dict
 import sys
 
-BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
+
+def _find_source_dir() -> pathlib.Path:
+    """
+    Find the ighastar source directory containing C++ files.
+    
+    Priority:
+    1. IGHASTAR_SRC_DIR environment variable
+    2. Relative to this file (works for editable installs / running from source)
+    3. Common development locations
+    """
+    # Check environment variable first
+    env_src = os.environ.get("IGHASTAR_SRC_DIR")
+    if env_src:
+        src_path = pathlib.Path(env_src)
+        if (src_path / "src" / "ighastar.cpp").exists():
+            return src_path
+    
+    # Try relative to this file (editable install or running from source)
+    file_based = pathlib.Path(__file__).resolve().parent.parent
+    if (file_based / "src" / "ighastar.cpp").exists():
+        return file_based
+    
+    # Try common development locations
+    common_paths = [
+        pathlib.Path.home() / "catkin_ws" / "src" / "ighastar" / "ighastar",
+        pathlib.Path("/root/catkin_ws/src/ighastar/ighastar"),
+        pathlib.Path.cwd() / "ighastar",
+    ]
+    for path in common_paths:
+        if (path / "src" / "ighastar.cpp").exists():
+            return path
+    
+    # Fallback to file-based path (will fail later with a clearer error)
+    return file_based
+
+
+BASE_DIR = _find_source_dir()
 
 
 def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
