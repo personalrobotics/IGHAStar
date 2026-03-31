@@ -34,8 +34,8 @@
 #include <pybind11/stl.h>
 #include <unordered_map>
 #include <unordered_set>
-#include <sampling_utils.h>
-#include "config_utils.h"
+#include "utils/sampling_utils.h"
+#include "utils/config_utils.h"
 
 using namespace std;
 
@@ -110,6 +110,7 @@ public:
   int Q_v_size;
   int max_level_profile;
   std::vector<int> expansion_list;
+  std::vector<float> cost_exp_list;
 
   IGHAStar(const py::dict &config, bool debug_ = false,
            int time_direction_ = 1) { // maybe have a debug mode?
@@ -153,6 +154,7 @@ public:
     switches = 0;
     max_level_profile = 0;
     expansion_list.clear();
+    cost_exp_list.clear();
   }
 
   // activate method for HA*M
@@ -434,7 +436,6 @@ public:
           best_path_list.push_back(best_path);
           goal_reached =
               false; // set flag to false to continue searching for better paths
-          expansion_list.push_back(expansion_counter);
           break;
         }
         if (!shift_run) {
@@ -483,6 +484,7 @@ public:
         g_update_time +=
             std::chrono::duration<float, std::micro>(end_time - start_time)
                 .count();
+        cost_exp_list.push_back(Omega);
       }
       start_time = std::chrono::high_resolution_clock::now();
       combine_Q_v_and_prune();      // puts inactive_Q_v into Q_v
@@ -498,7 +500,9 @@ public:
           (Q_v.size() + inactive_Q_v.size() + Seen.size());
       Q_v_size += Q_v.size();
       switches++;
+      expansion_list.push_back(expansion_counter);
       if (Q_v.empty() && inactive_Q_v.empty()) {
+        cost_exp_list.push_back(Omega);
         break;
       }
       if (run_naive) {
@@ -548,7 +552,7 @@ public:
 
   // get the profiler info, I want to get the averages for timing, Q_v size, and
   // number of switches:
-  std::tuple<float, float, float, float, int, int, int, int, std::vector<int>>
+  std::tuple<float, float, float, float, int, int, int, int, std::vector<int>, std::vector<float>>
   get_profiler_info() {
     float avg_successor_time = successor_time / expansion_counter;
     float avg_goal_check_time = goal_check_time / expansion_counter;
@@ -557,7 +561,7 @@ public:
     return std::make_tuple(avg_successor_time, avg_goal_check_time,
                            avg_overhead_time, avg_g_update_time, switches,
                            max_level_profile, Q_v_size, expansion_counter,
-                           expansion_list);
+                           expansion_list, cost_exp_list);
   }
 };
 
@@ -598,6 +602,9 @@ public:
     std::vector<std::shared_ptr<Node>> best_path;
     std::vector<std::vector<std::shared_ptr<Node>>> best_path_list;
     
+    // Profiling lists mutex
+    std::mutex profiling_lists_mutex;
+    
     // Synchronization barrier for parallel expansion
     std::unique_ptr<SimpleBarrier> expansion_barrier;
     
@@ -611,6 +618,7 @@ public:
     int switches;
     int max_level_profile;
     std::vector<int> expansion_list;
+    std::vector<float> cost_exp_list;
     
     BiIGHAStar(const py::dict& config, bool debug_=false) : debug(debug_) {
         forward_search = new IGHAStar(config, debug_, 1);
@@ -1177,6 +1185,10 @@ public:
                         }
                     }
                 }
+                {
+                    std::lock_guard<std::mutex> lock(profiling_lists_mutex);
+                    cost_exp_list.push_back(shared_Omega.load());
+                }
             }
 
             if (debug) {
@@ -1277,6 +1289,7 @@ public:
         switches = 0;
         max_level_profile = 0;
         expansion_list.clear();
+        cost_exp_list.clear();
         
         forward_search->reset();
         backward_search->reset();
@@ -1466,7 +1479,7 @@ public:
     }
     
     // get the profiler info, similar to IGHAStar but aggregated from both searches
-    std::tuple<float, float, float, float, int, int, int, int, std::vector<int>> get_profiler_info() {
+    std::tuple<float, float, float, float, int, int, int, int, std::vector<int>, std::vector<float>> get_profiler_info() {
         int total_exp = total_expansions.load();
         float avg_successor_time = total_exp > 0 ? successor_time / total_exp : 0;
         float avg_goal_check_time = total_exp > 0 ? goal_check_time / total_exp : 0;
@@ -1478,7 +1491,7 @@ public:
         
         return std::make_tuple(avg_successor_time, avg_goal_check_time, avg_overhead_time, 
             avg_g_update_time, switches, max_level_profile, total_Q_v_size, total_exp, 
-            expansion_list);
+            expansion_list, cost_exp_list);
     }
 };
 

@@ -38,19 +38,21 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
         }[env_name]
 
     cpp_path = BASE_DIR / "src" / "ighastar.cpp"
-    header_path = BASE_DIR / "src" / "Environments"
-    extra_includes = [str(header_path)]
+    env_include_path = BASE_DIR / "src" / "Environments" / "include"
+    utils_path = BASE_DIR / "src" / "utils"
+    src_path = BASE_DIR / "src"
+    extra_includes = [str(env_include_path), str(utils_path), str(src_path)]
 
     # Detect if running on macOS for Boost include path
     is_macos = sys.platform == "darwin"
     if is_macos:
         boost_include = "/opt/homebrew/opt/boost/include"  # Adjust if needed
-        extra_includes = [str(header_path), boost_include]
+        extra_includes = [str(env_include_path), str(utils_path), str(src_path), boost_include]
 
     if env_name != "simple":
         if cuda_available:
             # Use CUDA version
-            cuda_path = BASE_DIR / "src" / "Environments" / f"{env_name}.cu"
+            cuda_path = BASE_DIR / "src" / "Environments" / "src" / f"{env_name}.cu"
             kernel = load(
                 name="ighastar",
                 sources=[str(cpp_path), str(cuda_path)],
@@ -61,7 +63,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             )
         else:
             # Use CPU version - compile with CPU header and .cpp file included
-            cpu_cpp_path = BASE_DIR / "src" / "Environments" / f"{env_name}_cpu.cpp"
+            cpu_cpp_path = BASE_DIR / "src" / "Environments" / "src" / f"{env_name}_cpu.cpp"
             kernel = load(
                 name="ighastar",
                 sources=[str(cpp_path), str(cpu_cpp_path)],
@@ -79,7 +81,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
         )
 
     if bidirectional:
-        planner = kernel.BiIGHAStar(configs, True)
+        planner = kernel.BiIGHAStar(configs, False)
     else:
         planner = kernel.IGHAStar(configs, False)
     return planner

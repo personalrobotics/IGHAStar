@@ -58,7 +58,10 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
     default_expansion_limit = experiment_info["max_expansions"]
     hysteresis = experiment_info["hysteresis"]
     if bidirectional:
-        expansion_limit = 1000  # Per-thread limit for bidirectional search
+        if node_type == "kinodynamic" or node_type == "kinematic":
+            expansion_limit = 1000  # Per-thread limit for bidirectional search
+        else:
+            expansion_limit = 5000  # Per-thread limit for bidirectional search
         print(f"\033[92mExpansion limit: {expansion_limit} (default unidirectional: {default_expansion_limit})\033[0m")
     else:
         expansion_limit = default_expansion_limit
@@ -88,6 +91,7 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
         Q_v_size,
         expansion_counter,
         expansion_list,
+        cost_exp_list,
     ) = planner.get_profiler_info()
     print("Profiler info retrieved")
 
@@ -103,7 +107,22 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
     print(f"Max level profile: {max_level_profile}")
     print(f"Q_v size: {Q_v_size}")
     print(f"Expansion counter: {expansion_counter}")
-    print(f"Expansion list: {expansion_list}")
+    # print the expansions to first solution, and the cost of the best solution:
+    # first solution is when cost_exp_list is less than 1e4:
+    cost_exp_arr = np.array(cost_exp_list)
+    solution_indices = np.where(cost_exp_arr < 1e4)[0]
+    if len(solution_indices) > 0:
+        first_solution_expansion = solution_indices[0]
+        first_solution_cost = cost_exp_arr[first_solution_expansion]
+        print(f"First solution expansion: {first_solution_expansion}")
+        print(f"First solution cost: {first_solution_cost}")
+        # best solution is the minimum cost in the cost_exp_list:
+        best_solution_cost = np.min(cost_exp_arr)
+        print(f"Best solution cost: {best_solution_cost}")
+    else:
+        print("No solution found")
+
+    # print(f"Cost list (at each expansion): {cost_exp_list}")
 
     if success:
         print("✓ Optimal path found!")
@@ -113,14 +132,20 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
         # Create visualization
         show_map(plt, bitmap, node_type)
 
-        # Plot path
-        plt.plot(
-            path[:, 0] / map_res,
-            path[:, 1] / map_res,
-            color="blue",
-            linewidth=3,
-            label="Path",
-        )
+        # Check for direction info (last column) to color by search direction
+        # Positive = forward search (green), Negative = backward search (purple)
+        direction = path[:, -1]
+
+        # Plot path segments colored by direction
+        for i in range(len(path) - 1):
+            segment_color = "green" if direction[i] >= 0 else "darkviolet"
+            plt.plot(
+                [path[i, 0] / map_res, path[i + 1, 0] / map_res],
+                [path[i, 1] / map_res, path[i + 1, 1] / map_res],
+                color=segment_color,
+                linewidth=3,
+                zorder=3,
+            )
 
         plt.scatter(
             goal[0].item() / map_res,
@@ -133,27 +158,6 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
             label="Goal",
             zorder=10,
         )
-
-        # Check for direction info (last column) to detect near meets
-        direction = path[:, -1]
-        
-        # Find all near meet indices (both sides of direction flip)
-        near_meet_indices = set()
-        if node_type == "kinodynamic" or node_type == "kinematic":
-            timesteps = node_info["timesteps"]
-            for i in range(0, len(path) - 1, timesteps):
-                next_idx = i + timesteps
-                if next_idx < len(path):
-                    # If direction flips, mark both sides as near meet
-                    if direction[i] * direction[next_idx] < 0:
-                        near_meet_indices.add(i)
-                        near_meet_indices.add(i+1)
-        else:
-            # Simple environment - check consecutive nodes
-            for i in range(len(path) - 1):
-                if direction[i] * direction[i + 1] < 0:
-                    near_meet_indices.add(i)
-                    near_meet_indices.add(i + 1)
         
         if node_type == "kinodynamic" or node_type == "kinematic":
             # Plot car orientations along the path
@@ -168,8 +172,9 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
             
             timesteps = node_info["timesteps"]
             for i in range(len(path) - 1):
-                if i % timesteps == 0 or i in near_meet_indices:
-                    car_color = "hotpink" if i in near_meet_indices else "blue"
+                if i % timesteps == 0:
+                    # Green for forward search, dark purple for backward search
+                    car_color = "green" if direction[i] >= 0 else "darkviolet"
                     plot_car(
                         plt,
                         path[i, 0] / map_res,
@@ -178,17 +183,17 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
                         color=car_color,
                     )
         else:
-            # Simple environment - plot path vertices with near-meet highlighting
+            # Simple environment - plot path vertices colored by direction
             for i in range(len(path)):
-                point_color = "hotpink" if i in near_meet_indices else "blue"
-                point_size = 100 if i in near_meet_indices else 20
+                # Green for forward search, dark purple for backward search
+                point_color = "green" if direction[i] >= 0 else "darkviolet"
                 plt.scatter(
                     path[i, 0] / map_res,
                     path[i, 1] / map_res,
                     color=point_color,
-                    s=point_size,
-                    alpha=0.8 if i in near_meet_indices else 0.6,
-                    zorder=10 if i in near_meet_indices else 5,
+                    s=20,
+                    alpha=0.7,
+                    zorder=5,
                 )
 
         # Add goal region circle
@@ -202,6 +207,10 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
             label="Goal Region",
         )
         plt.gca().add_patch(goal_circle)
+
+        # Add legend entries for forward/backward search colors
+        plt.scatter([], [], color="green", label="Forward Search", s=50)
+        plt.scatter([], [], color="darkviolet", label="Backward Search", s=50)
 
         # Add legend and labels
         plt.legend(loc="upper right")
