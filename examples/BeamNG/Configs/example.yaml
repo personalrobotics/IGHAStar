@@ -3,6 +3,7 @@ MPPI_config:
   TIMESTEPS: &TIMESTEPS 30 # 80
   BINS: 1
   u_per_command: 1
+  n_iter: 6
 
 Map_config:
   map_name: "small_island"
@@ -78,7 +79,21 @@ Planner_config:
     max_level: 5 # maximum level to which you expect the system to go; we use this to cache the hash values.
     division_factor: 2  # factor by which the resolution increases every level.
     max_expansions: 5000 # maximum number of expansions allowed.
-    hysteresis: 1000 # hysteresis threshold for for IGHA*-H
+    hysteresis: 100 # hysteresis threshold for for IGHA*-H
+    # Bidirectional search parameters
+    bidirectional: true  # Set to true to use BiIGHAStar
+    backward_epsilon: [2.5, 2.5, 0.78, 5.0] # ate, cte, heading, vel
+    LCR: [2.0, 2.0, 0.78, 2.5]  # Local Controllability Radius
+    near_meet_config:
+      enabled: true
+      num_interpolation_points: 5
+      num_perturbations: 3
+    goal_sampling_config:
+      enabled: true
+      num_samples: 100
+      space_type: "SE2"
+      angular_dims: [2]
+      sigma: [4.0, 4.0, 0.3, 5.0]
     node_info:
       node_type: "kinodynamic"
       length: 2.6
@@ -100,7 +115,7 @@ Planner_config:
       hash_theta: False
 
 
-hysteresis: [100, -1] # -1 means HA*M
+hysteresis: [100] # -1 means HA*M
 scenarios: ['0'] # , '1']
 time_limit: [120.0]
 lookahead:  [50.0]

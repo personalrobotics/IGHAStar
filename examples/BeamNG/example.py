@@ -132,10 +132,17 @@ def main(
                 cooldown_timer = 0
 
                 first_path = False
-                expansion_limit = Config["Planner_config"]["experiment_info_default"][
+                default_expansion_limit = Config["Planner_config"]["experiment_info_default"][
                     "max_expansions"
                 ]
-                planner = IGHAStarMP(Config["Planner_config"])
+                bidirectional = Config["Planner_config"]["experiment_info_default"].get("bidirectional", False)
+                if bidirectional:
+                    expansion_limit = default_expansion_limit // 4
+                    print(f"\033[92mExpansion limit: {expansion_limit} (default unidirectional: {default_expansion_limit})\033[0m")
+                else:
+                    expansion_limit = default_expansion_limit
+                    print(f"Expansion limit: {expansion_limit}")
+                planner = IGHAStarMP(Config["Planner_config"], bidirectional=bidirectional)
                 time.sleep(2)
                 planner.reset()
 
@@ -247,7 +254,8 @@ def main(
                         controller.forward(
                             torch.from_numpy(state_to_ctrl).to(
                                 device=device, dtype=dtype
-                            )
+                            ),
+                            num_iters=MPPI_config["n_iter"],
                         )
                         .cpu()
                         .numpy(),
@@ -267,9 +275,7 @@ def main(
                         action = np.zeros(2)
                         if state[6] > 0.5:
                             controller.reset()
-                        cooldown_timer = int(
-                            0.5 / Config["burn_time"]
-                        )  # set the car up to drive backwards for 0.5 seconds.
+                        cooldown_timer = int(1 / Config["burn_time"])
                     if cooldown_timer > 0:
                         action = np.zeros(2)
                         action[1] = -0.2  # Reverse to recover from bad state
@@ -324,6 +330,7 @@ def main(
                         goal - state[:2],
                         expansions,
                         hysteresis,
+                        bidirectional,
                     )
 
                 planner.shutdown()

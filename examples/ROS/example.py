@@ -38,8 +38,10 @@ class PlannerNode:
         self.max_expansions = planner_cfg["experiment_info_default"]["max_expansions"]
         if self.bidirectional:
             self.expansion_limit = self.max_expansions // 2
+            print(f"\033[92mExpansion limit: {self.expansion_limit} (default unidirectional: {self.max_expansions})\033[0m")
         else:
             self.expansion_limit = self.max_expansions
+            print(f"Expansion limit: {self.expansion_limit}")
         self.planner = create_planner(planner_cfg, bidirectional=self.bidirectional)
         # --- Costmap parameters ---
         self.blur_kernel = config["blur_kernel"]

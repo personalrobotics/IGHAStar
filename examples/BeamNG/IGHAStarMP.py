@@ -40,8 +40,7 @@ class IGHAStarMP:
         import numpy as np
         from ighastar.scripts.common_utils import create_planner
 
-        planner_config = configs["Planner_config"]
-        planner = create_planner(planner_config, bidirectional=bidirectional)
+        planner = create_planner(configs, bidirectional=bidirectional)
         print(f"[IGHAStarMP] Planner loaded ({'BiIGHAStar' if bidirectional else 'IGHAStar'}).")
 
         map_res = configs["experiment_info_default"]["node_info"]["map_res"]
@@ -101,6 +100,7 @@ class IGHAStarMP:
                         Q_v_size,
                         expansion_counter,
                         expansion_list,
+                        cost_exp_list,
                     ) = planner.get_profiler_info()
 
                 end = time.perf_counter()
