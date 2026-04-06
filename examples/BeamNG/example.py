@@ -138,6 +138,7 @@ def main(
                 bidirectional = Config["Planner_config"]["experiment_info_default"].get("bidirectional", False)
                 if bidirectional:
                     expansion_limit = default_expansion_limit // 4
+                    Config["Planner_config"]["experiment_info_default"]["max_expansions"] = expansion_limit
                     print(f"\033[92mExpansion limit: {expansion_limit} (default unidirectional: {default_expansion_limit})\033[0m")
                 else:
                     expansion_limit = default_expansion_limit
