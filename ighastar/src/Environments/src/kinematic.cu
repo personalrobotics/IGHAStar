@@ -75,9 +75,7 @@ check_validity_batch_kernel(const float *bitmap, int map_size_px, float map_res,
   if (!(d_valid[k]))
     return; // already invalid
 
-  int intermediate_index =
-      k * timesteps * NX +
-      t * NX;
+  int intermediate_index = k * timesteps * NX + t * NX;
 
   float x = d_intermediate_states[intermediate_index + x_index];
   float y = d_intermediate_states[intermediate_index + y_index];
@@ -181,30 +179,30 @@ void kinematic_launcher(
     int n_succ, int NX, int NC, const int map_size, float map_res, float car_l2,
     float car_w2, float max_vel, float min_vel, float RI, float max_vert_acc,
     float max_theta, float gear_switch_time, int patch_length_px,
-    int patch_width_px, const int blocks, const int threads,
-    float *d_state, float *d_intermediate_states, float *d_controls,
-    bool *d_valid, float *d_cost, cudaStream_t stream) {
+    int patch_width_px, const int blocks, const int threads, float *d_state,
+    float *d_intermediate_states, float *d_controls, bool *d_valid,
+    float *d_cost, cudaStream_t stream) {
   dim3 valid_threads(patch_length_px, patch_width_px);
   dim3 valid_blocks(timesteps, n_succ);
-  
+
   cudaMemcpyAsync(d_state, state, sizeof(float) * n_succ * NX,
                   cudaMemcpyHostToDevice, stream);
-  cudaMemcpyAsync(d_valid, valid, n_succ * sizeof(bool), 
-                  cudaMemcpyHostToDevice, stream);
-  cudaMemcpyAsync(d_cost, cost, n_succ * sizeof(float), 
-                  cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(d_valid, valid, n_succ * sizeof(bool), cudaMemcpyHostToDevice,
+                  stream);
+  cudaMemcpyAsync(d_cost, cost, n_succ * sizeof(float), cudaMemcpyHostToDevice,
+                  stream);
 
   kinematic_kernel<<<blocks, threads, 0, stream>>>(
       d_state, d_intermediate_states, d_controls, heightmap, costmap, d_valid,
       d_cost, dt, timesteps, n_succ, NX, NC, map_size, map_res, car_l2, car_w2,
       max_vel, min_vel, RI, max_vert_acc, max_theta, gear_switch_time);
-  
+
   check_validity_batch_kernel<<<valid_blocks, valid_threads, 0, stream>>>(
       costmap, map_size, map_res, d_intermediate_states, patch_length_px,
       patch_width_px, car_l2, car_w2, NX, timesteps, d_valid);
-  
+
   cudaStreamSynchronize(stream);
-  
+
   cudaMemcpy(state, d_state, sizeof(float) * n_succ * NX,
              cudaMemcpyDeviceToHost);
   cudaMemcpy(valid, d_valid, sizeof(bool) * n_succ, cudaMemcpyDeviceToHost);
@@ -223,8 +221,7 @@ void check_validity_launcher(const float *costmap, int map_size_px,
   float *d_validity_states;
   cudaMalloc(&d_result, n_states * sizeof(bool));
   cudaMalloc(&d_validity_states, NX * n_states * sizeof(float));
-  cudaMemcpy(d_result, result, n_states * sizeof(bool),
-             cudaMemcpyHostToDevice);
+  cudaMemcpy(d_result, result, n_states * sizeof(bool), cudaMemcpyHostToDevice);
   cudaMemcpy(d_validity_states, states, n_states * NX * sizeof(float),
              cudaMemcpyHostToDevice);
 

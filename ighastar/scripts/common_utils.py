@@ -9,7 +9,7 @@ import sys
 def _find_source_dir() -> pathlib.Path:
     """
     Find the ighastar source directory containing C++ files.
-    
+
     Priority:
     1. IGHASTAR_SRC_DIR environment variable
     2. Relative to this file (works for editable installs / running from source)
@@ -21,12 +21,12 @@ def _find_source_dir() -> pathlib.Path:
         src_path = pathlib.Path(env_src)
         if (src_path / "src" / "ighastar.cpp").exists():
             return src_path
-    
+
     # Try relative to this file (editable install or running from source)
     file_based = pathlib.Path(__file__).resolve().parent.parent
     if (file_based / "src" / "ighastar.cpp").exists():
         return file_based
-    
+
     # Try common development locations
     common_paths = [
         pathlib.Path.home() / "catkin_ws" / "src" / "ighastar" / "ighastar",
@@ -36,7 +36,7 @@ def _find_source_dir() -> pathlib.Path:
     for path in common_paths:
         if (path / "src" / "ighastar.cpp").exists():
             return path
-    
+
     # Fallback to file-based path (will fail later with a clearer error)
     return file_based
 
@@ -47,11 +47,11 @@ BASE_DIR = _find_source_dir()
 def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
     """
     Create an IGHA* or BiIGHA* planner based on configuration.
-    
+
     Args:
         configs: Configuration dictionary containing experiment_info_default
         bidirectional: If True, create a BiIGHAStar planner instead of IGHAStar
-    
+
     Returns:
         The created planner instance
     """
@@ -84,7 +84,12 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
     is_macos = sys.platform == "darwin"
     if is_macos:
         boost_include = "/opt/homebrew/opt/boost/include"  # Adjust if needed
-        extra_includes = [str(env_include_path), str(utils_path), str(src_path), boost_include]
+        extra_includes = [
+            str(env_include_path),
+            str(utils_path),
+            str(src_path),
+            boost_include,
+        ]
 
     if env_name != "simple":
         if cuda_available:
@@ -100,7 +105,9 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             )
         else:
             # Use CPU version - compile with CPU header and .cpp file included
-            cpu_cpp_path = BASE_DIR / "src" / "Environments" / "src" / f"{env_name}_cpu.cpp"
+            cpu_cpp_path = (
+                BASE_DIR / "src" / "Environments" / "src" / f"{env_name}_cpu.cpp"
+            )
             kernel = load(
                 name="ighastar",
                 sources=[str(cpp_path), str(cpu_cpp_path)],

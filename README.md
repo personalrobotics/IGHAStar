@@ -130,27 +130,51 @@ For the ROS and BeamNG examples, see [examples/ROS/README.md](examples/ROS/READM
 
 ```
 IGHAStar/
-├── ighastar/             # Main package directory
-│   ├── src/              # Core C++/CUDA source files and Python modules
-│   │   ├── ighastar.cpp  # Main IGHA* C++ implementation
-│   │   └── Environments/ # Environment implementations
-│   │       ├── *.h       # Header files
-│   │       ├── *.cu      # CUDA implementations
-│   │       └── *.cpp     # CPU implementations
-│   └── scripts/          # Utility scripts
-│       ├── common_utils.py # Common utilities (create_planner, etc.)
-├── examples/             # Example scripts and configurations
-│   ├── standalone/       # Standalone examples
-│   │   ├── example.py    # Main example script
-│   │   ├── README.md     # Detailed usage guide
-│   │   ├── Configs/      # Configuration files
-│   │   └── Maps/         # Map files
-│   └── *              # Other example folders
-├── Content/              # Figures and media files
-├── ighastar.yml          # Conda environment file
-├── pyproject.toml        # Package configuration
-├── setup.py              # Package setup (for editable installs)
-└── README.md             # This file
+├── ighastar/                   # Main package directory
+│   ├── src/                    # Core C++/CUDA source files
+│   │   ├── ighastar.cpp        # Main IGHA* C++ implementation
+│   │   ├── utils/              # Utility headers
+│   │   │   ├── config_utils.h
+│   │   │   └── sampling_utils.h
+│   │   └── Environments/       # Environment implementations
+│   │       ├── include/        # Header files (*.h)
+│   │       ├── src/            # CUDA (*.cu) and CPU (*.cpp) implementations
+│   │       └── README.md       # Environment documentation
+│   └── scripts/                # Utility scripts
+│       └── common_utils.py     # Common utilities (create_planner, etc.)
+├── examples/                   # Example scripts and configurations
+│   ├── standalone/             # Standalone examples (no external dependencies)
+│   │   ├── example.py          # Main example script
+│   │   ├── utils.py            # Standalone utilities
+│   │   ├── README.md           # Detailed usage guide
+│   │   ├── Configs/            # Configuration files (*.yml)
+│   │   └── Maps/               # Map files (Offroad, street-png, generated)
+│   ├── BeamNG/                 # BeamNG simulator integration
+│   │   ├── example.py          # BeamNG example script
+│   │   ├── IGHAStarMP.py       # Multiprocessing planner wrapper
+│   │   ├── TrackingCost.py     # MPC cost function
+│   │   ├── utils.py            # BeamNG utilities
+│   │   ├── README.md           # BeamNG setup guide
+│   │   ├── Configs/            # Configuration files (*.yaml)
+│   │   └── Waypoints/          # Waypoint files
+│   └── ROS/                    # ROS integration
+│       ├── example.py          # ROS example node
+│       ├── utils.py            # ROS utilities
+│       ├── README.md           # ROS setup guide
+│       ├── Configs/            # Configuration files (*.yml)
+│       └── rosbags/            # Sample rosbags
+├── tests/                      # Test suite
+│   ├── unit/                   # Unit tests
+│   │   ├── core/               # Core functionality tests
+│   │   └── environments/       # Environment tests
+│   └── README.md               # Testing documentation
+├── Content/                    # Figures and media files
+│   ├── standalone/             # Standalone example images
+│   ├── BeamNG/                 # BeamNG example images
+│   └── ROS/                    # ROS example images
+├── ighastar.yml                # Conda environment file
+├── pyproject.toml              # Package configuration
+└── README.md                   # This file
 ```
 
 ## Contributing

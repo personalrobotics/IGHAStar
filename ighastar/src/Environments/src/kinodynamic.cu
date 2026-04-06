@@ -101,9 +101,7 @@ check_validity_batch_kernel(const float *bitmap, int map_size_px, float map_res,
   if (!(d_valid[k]))
     return; // already invalid
 
-  int intermediate_index =
-      k * timesteps * NX +
-      t * NX;
+  int intermediate_index = k * timesteps * NX + t * NX;
 
   float x = d_intermediate_states[intermediate_index + x_index];
   float y = d_intermediate_states[intermediate_index + y_index];
@@ -213,9 +211,10 @@ __global__ void kinodynamic_kernel(float *state, float *intermediate_states,
     intermediate_states[intermediate_index + yaw_index] = yaw;
     intermediate_states[intermediate_index + vx_index] = vx;
   }
-  float gear_switch_cost = gear_switch_time * (vx * initial_vx < 0); // change in direction
-  cost[k] = fabsf(timesteps * dt) + gear_switch_cost; 
-                                                
+  float gear_switch_cost =
+      gear_switch_time * (vx * initial_vx < 0); // change in direction
+  cost[k] = fabsf(timesteps * dt) + gear_switch_cost;
+
   state[state_base + x_index] = x;
   state[state_base + y_index] = y;
   state[state_base + yaw_index] = yaw;
@@ -228,15 +227,17 @@ void kinodynamic_launcher(
     int n_succ, int NX, int NC, const int map_size, float map_res, float car_l2,
     float car_w2, float max_vel, float min_vel, float RI, float max_vert_acc,
     float max_theta, float gear_switch_time, int patch_length_px,
-    int patch_width_px, const int blocks, const int threads,
-    float *d_state, float *d_intermediate_states, float *d_controls,
-    bool *d_valid, float *d_cost, cudaStream_t stream) {
+    int patch_width_px, const int blocks, const int threads, float *d_state,
+    float *d_intermediate_states, float *d_controls, bool *d_valid,
+    float *d_cost, cudaStream_t stream) {
   dim3 valid_threads(patch_length_px, patch_width_px);
   dim3 valid_blocks(timesteps, n_succ);
   cudaMemcpyAsync(d_state, state, sizeof(float) * n_succ * NX,
-             cudaMemcpyHostToDevice, stream);
-  cudaMemcpyAsync(d_valid, valid, n_succ * sizeof(bool), cudaMemcpyHostToDevice, stream);
-  cudaMemcpyAsync(d_cost, cost, n_succ * sizeof(float), cudaMemcpyHostToDevice, stream);
+                  cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(d_valid, valid, n_succ * sizeof(bool), cudaMemcpyHostToDevice,
+                  stream);
+  cudaMemcpyAsync(d_cost, cost, n_succ * sizeof(float), cudaMemcpyHostToDevice,
+                  stream);
 
   kinodynamic_kernel<<<blocks, threads, 0, stream>>>(
       d_state, d_intermediate_states, d_controls, heightmap, costmap, d_valid,
@@ -246,11 +247,14 @@ void kinodynamic_launcher(
       costmap, map_size, map_res, d_intermediate_states, patch_length_px,
       patch_width_px, car_l2, car_w2, NX, timesteps, d_valid);
   cudaMemcpyAsync(state, d_state, sizeof(float) * n_succ * NX,
-             cudaMemcpyDeviceToHost, stream);
-  cudaMemcpyAsync(valid, d_valid, sizeof(bool) * n_succ, cudaMemcpyDeviceToHost, stream);
-  cudaMemcpyAsync(cost, d_cost, sizeof(float) * n_succ, cudaMemcpyDeviceToHost, stream);
+                  cudaMemcpyDeviceToHost, stream);
+  cudaMemcpyAsync(valid, d_valid, sizeof(bool) * n_succ, cudaMemcpyDeviceToHost,
+                  stream);
+  cudaMemcpyAsync(cost, d_cost, sizeof(float) * n_succ, cudaMemcpyDeviceToHost,
+                  stream);
   cudaMemcpyAsync(intermediate_states, d_intermediate_states,
-             sizeof(float) * n_succ * timesteps * NX, cudaMemcpyDeviceToHost, stream);
+                  sizeof(float) * n_succ * timesteps * NX,
+                  cudaMemcpyDeviceToHost, stream);
   cudaStreamSynchronize(stream);
 }
 
@@ -264,8 +268,7 @@ void check_validity_launcher(const float *costmap, int map_size_px,
   float *d_validity_states;
   cudaMalloc(&d_result, n_states * sizeof(bool));
   cudaMalloc(&d_validity_states, NX * n_states * sizeof(float));
-  cudaMemcpy(d_result, result, n_states * sizeof(bool),
-             cudaMemcpyHostToDevice);
+  cudaMemcpy(d_result, result, n_states * sizeof(bool), cudaMemcpyHostToDevice);
   cudaMemcpy(d_validity_states, states, n_states * NX * sizeof(float),
              cudaMemcpyHostToDevice);
 

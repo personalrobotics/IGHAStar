@@ -13,18 +13,15 @@ constexpr int warp_size = 32;
 
 // Launches kinematic simulation for multiple rollouts on GPU
 // Uses per-instance device memory and stream for parallel execution
-void kinematic_launcher(float *state, float *intermediate_states,
-                        const float *heightmap, const float *costmap,
-                        bool *valid, float *cost, float dt, int timesteps,
-                        int rollouts, int n_dims, int n_cont,
-                        const int map_size_px, float map_res, float car_l2,
-                        float car_w2, float max_vel, float min_vel, float RI,
-                        float max_vert_acc, float max_theta,
-                        float gear_switch_time, int patch_length_px,
-                        int patch_width_px, const int blocks, const int threads,
-                        float *d_state, float *d_intermediate_states,
-                        float *d_controls, bool *d_valid, float *d_cost,
-                        cudaStream_t stream);
+void kinematic_launcher(
+    float *state, float *intermediate_states, const float *heightmap,
+    const float *costmap, bool *valid, float *cost, float dt, int timesteps,
+    int rollouts, int n_dims, int n_cont, const int map_size_px, float map_res,
+    float car_l2, float car_w2, float max_vel, float min_vel, float RI,
+    float max_vert_acc, float max_theta, float gear_switch_time,
+    int patch_length_px, int patch_width_px, const int blocks,
+    const int threads, float *d_state, float *d_intermediate_states,
+    float *d_controls, bool *d_valid, float *d_cost, cudaStream_t stream);
 
 // Checks validity of multiple states against a bitmap on GPU
 void check_validity_launcher(const float *bitmap, int map_size_px,
@@ -50,8 +47,9 @@ public:
   bool active;
   int rank, level;
   size_t hash;
-  size_t LCR_index;  // Hash for local controllability radius (near-meet detection)
-  int time_direction;  // 1 for forward, -1 for backward
+  size_t
+      LCR_index; // Hash for local controllability radius (near-meet detection)
+  int time_direction; // 1 for forward, -1 for backward
   std::vector<size_t> index;
   std::shared_ptr<Node> parent;
   // Constructor
@@ -73,8 +71,8 @@ public:
         for (int t = 0; t < timesteps; t++) {
           int src_index = (timesteps - 1 - t) * n_dims;
           int dst_index = t * n_dims;
-          memcpy(&intermediate_poses[dst_index], &intermediate_poses_[src_index],
-                 n_dims * sizeof(float));
+          memcpy(&intermediate_poses[dst_index],
+                 &intermediate_poses_[src_index], n_dims * sizeof(float));
         }
       } else {
         memcpy(intermediate_poses, intermediate_poses_,
@@ -119,7 +117,8 @@ class Environment {
   float car_l2, car_w2;
   float max_vel, min_vel, RI, max_theta, max_vert_acc, gear_switch_time;
 
-  // Per-instance CUDA device memory (allows parallel execution without conflicts)
+  // Per-instance CUDA device memory (allows parallel execution without
+  // conflicts)
   float *d_controls_instance;
   float *d_state_instance;
   float *d_cost_instance;
@@ -137,12 +136,12 @@ public:
   float tolerance[n_dims];
   float local_controllability_radius[n_dims];
   float division_factor;
-  
+
   Environment(const py::dict &config, int time_direction_ = 1)
-      : d_heightmap(nullptr), d_costmap(nullptr), time_direction(time_direction_),
-        d_controls_instance(nullptr), d_state_instance(nullptr),
-        d_cost_instance(nullptr), d_intermediate_states_instance(nullptr),
-        d_valid_instance(nullptr) {
+      : d_heightmap(nullptr), d_costmap(nullptr),
+        time_direction(time_direction_), d_controls_instance(nullptr),
+        d_state_instance(nullptr), d_cost_instance(nullptr),
+        d_intermediate_states_instance(nullptr), d_valid_instance(nullptr) {
     auto info = config["experiment_info_default"].cast<py::dict>();
     auto node_info = info["node_info"].cast<py::dict>();
     // Top-level fields
@@ -193,7 +192,8 @@ public:
     }
   }
 
-  // Sets resolution, tolerance, epsilon, and LCR values for different dimensions
+  // Sets resolution, tolerance, epsilon, and LCR values for different
+  // dimensions
   void set_resolutions(py::dict &info, py::dict &node_info) {
     float res = info["resolution"].cast<float>();
     float tol = info["tolerance"].cast<float>();
@@ -219,7 +219,8 @@ public:
     if (info.contains("LCR")) {
       auto lcr = info["LCR"].cast<std::vector<float>>();
       for (int i = 0; i < n_dims; i++) {
-        local_controllability_radius[i] = (i < static_cast<int>(lcr.size())) ? lcr[i] : epsilon[i];
+        local_controllability_radius[i] =
+            (i < static_cast<int>(lcr.size())) ? lcr[i] : epsilon[i];
       }
     } else {
       for (int i = 0; i < n_dims; i++) {
@@ -262,32 +263,41 @@ public:
     cudaError_t err;
     err = cudaMalloc(&d_controls_instance, sizeof(float) * n_succ * n_cont);
     if (err != cudaSuccess) {
-      std::cerr << "CUDA error allocating d_controls_instance: " << cudaGetErrorString(err) << std::endl;
+      std::cerr << "CUDA error allocating d_controls_instance: "
+                << cudaGetErrorString(err) << std::endl;
     }
     err = cudaMalloc(&d_state_instance, n_succ * n_dims * sizeof(float));
     if (err != cudaSuccess) {
-      std::cerr << "CUDA error allocating d_state_instance: " << cudaGetErrorString(err) << std::endl;
+      std::cerr << "CUDA error allocating d_state_instance: "
+                << cudaGetErrorString(err) << std::endl;
     }
-    err = cudaMalloc(&d_intermediate_states_instance, n_succ * timesteps * n_dims * sizeof(float));
+    err = cudaMalloc(&d_intermediate_states_instance,
+                     n_succ * timesteps * n_dims * sizeof(float));
     if (err != cudaSuccess) {
-      std::cerr << "CUDA error allocating d_intermediate_states_instance: " << cudaGetErrorString(err) << std::endl;
+      std::cerr << "CUDA error allocating d_intermediate_states_instance: "
+                << cudaGetErrorString(err) << std::endl;
     }
     err = cudaMalloc(&d_valid_instance, n_succ * sizeof(bool));
     if (err != cudaSuccess) {
-      std::cerr << "CUDA error allocating d_valid_instance: " << cudaGetErrorString(err) << std::endl;
+      std::cerr << "CUDA error allocating d_valid_instance: "
+                << cudaGetErrorString(err) << std::endl;
     }
     err = cudaMalloc(&d_cost_instance, n_succ * sizeof(float));
     if (err != cudaSuccess) {
-      std::cerr << "CUDA error allocating d_cost_instance: " << cudaGetErrorString(err) << std::endl;
+      std::cerr << "CUDA error allocating d_cost_instance: "
+                << cudaGetErrorString(err) << std::endl;
     }
-    err = cudaMemcpy(d_controls_instance, controls, sizeof(float) * n_succ * n_cont, cudaMemcpyHostToDevice);
+    err = cudaMemcpy(d_controls_instance, controls,
+                     sizeof(float) * n_succ * n_cont, cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
-      std::cerr << "CUDA error copying controls: " << cudaGetErrorString(err) << std::endl;
+      std::cerr << "CUDA error copying controls: " << cudaGetErrorString(err)
+                << std::endl;
     }
     // Create CUDA stream for parallel execution
     err = cudaStreamCreate(&cuda_stream);
     if (err != cudaSuccess) {
-      std::cerr << "CUDA error creating stream: " << cudaGetErrorString(err) << std::endl;
+      std::cerr << "CUDA error creating stream: " << cudaGetErrorString(err)
+                << std::endl;
     }
   }
 
@@ -388,7 +398,8 @@ public:
   // Calculates heuristic value for A* search
   float heuristic(float *pose, float *goal) { return distance(pose, goal); }
 
-  // Compute distance between two poses for near-meet checking in bidirectional search
+  // Compute distance between two poses for near-meet checking in bidirectional
+  // search
   float compute_near_meet_distance(float *pose1, float *pose2) {
     return heuristic(pose1, pose2);
   }
@@ -474,14 +485,13 @@ public:
     for (int i = 0; i < n_succ; i++) {
       memcpy(&state[i * n_dims], node->pose, n_dims * sizeof(float));
     }
-    kinematic_launcher(state, intermediate_states, d_heightmap, d_costmap,
-                       valid, cost, dt, timesteps, n_succ, n_dims, n_cont,
-                       map_size_px, map_res, car_l2, car_w2, max_vel, min_vel,
-                       RI, max_vert_acc, max_theta, gear_switch_time,
-                       patch_length_px, patch_width_px, blocks, threads,
-                       d_state_instance, d_intermediate_states_instance,
-                       d_controls_instance, d_valid_instance, d_cost_instance,
-                       cuda_stream);
+    kinematic_launcher(
+        state, intermediate_states, d_heightmap, d_costmap, valid, cost, dt,
+        timesteps, n_succ, n_dims, n_cont, map_size_px, map_res, car_l2, car_w2,
+        max_vel, min_vel, RI, max_vert_acc, max_theta, gear_switch_time,
+        patch_length_px, patch_width_px, blocks, threads, d_state_instance,
+        d_intermediate_states_instance, d_controls_instance, d_valid_instance,
+        d_cost_instance, cuda_stream);
 
     for (int i = 0; i < n_succ; i++) {
       if (valid[i]) {
@@ -541,8 +551,9 @@ public:
 
     // Second pass: create tensor of exact size and populate it
     int tensor_size = extended_path.size();
-    auto path_tensor = torch::zeros({tensor_size, n_dims + 1},
-                                    torch::TensorOptions().dtype(torch::kFloat32));
+    auto path_tensor =
+        torch::zeros({tensor_size, n_dims + 1},
+                     torch::TensorOptions().dtype(torch::kFloat32));
 
     for (size_t i = 0; i < extended_path.size(); i++) {
       for (int d = 0; d < n_dims; d++) {

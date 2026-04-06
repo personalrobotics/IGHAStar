@@ -257,8 +257,12 @@ class PlannerVis:
                     # Get direction from last column (g * time_direction): positive = forward, negative = backward
                     direction = self.path[..., -1]
                     velocity = self.path[..., 3]
-                    velocity_norm = (velocity - np.min(velocity)) / (np.max(velocity) - np.min(velocity))
-                    velocity_color = np.clip((velocity_norm * 255), 0, 255).astype(np.uint8)
+                    velocity_norm = (velocity - np.min(velocity)) / (
+                        np.max(velocity) - np.min(velocity)
+                    )
+                    velocity_color = np.clip((velocity_norm * 255), 0, 255).astype(
+                        np.uint8
+                    )
                     for i in range(len(path_X) - 1):
                         # Green for forward search, Blue for backward search (BGR format)
                         if direction[i] >= 0:

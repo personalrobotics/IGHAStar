@@ -64,8 +64,9 @@ public:
   bool active;
   int rank, level;
   size_t hash;
-  size_t LCR_index;  // Hash for local controllability radius (near-meet detection)
-  int time_direction;  // 1 for forward, -1 for backward
+  size_t
+      LCR_index; // Hash for local controllability radius (near-meet detection)
+  int time_direction; // 1 for forward, -1 for backward
   std::vector<size_t> index;
   std::shared_ptr<Node> parent;
 
@@ -86,8 +87,8 @@ public:
         for (int t = 0; t < timesteps; t++) {
           int src_index = (timesteps - 1 - t) * n_dims;
           int dst_index = t * n_dims;
-          memcpy(&intermediate_poses[dst_index], &intermediate_poses_[src_index],
-                 n_dims * sizeof(float));
+          memcpy(&intermediate_poses[dst_index],
+                 &intermediate_poses_[src_index], n_dims * sizeof(float));
         }
       } else {
         memcpy(intermediate_poses, intermediate_poses_,
@@ -181,7 +182,7 @@ public:
     float tol = info["tolerance"].cast<float>();
     float del_theta = node_info["del_theta"].cast<float>() / 57.3;
     float del_vel = node_info["del_vel"].cast<float>();
-    
+
     // For backward search, use backward_epsilon if available
     std::vector<float> eps;
     if (time_direction == -1 && info.contains("backward_epsilon")) {
@@ -201,12 +202,13 @@ public:
     for (int i = 0; i < n_dims && i < static_cast<int>(eps.size()); i++) {
       epsilon[i] = eps[i];
     }
-    
+
     // Set LCR from config if available, otherwise use epsilon
     if (info.contains("LCR")) {
       auto lcr = info["LCR"].cast<std::vector<float>>();
       for (int i = 0; i < n_dims; i++) {
-        local_controllability_radius[i] = (i < static_cast<int>(lcr.size())) ? lcr[i] : epsilon[i];
+        local_controllability_radius[i] =
+            (i < static_cast<int>(lcr.size())) ? lcr[i] : epsilon[i];
       }
     } else {
       for (int i = 0; i < n_dims; i++) {
@@ -310,7 +312,7 @@ public:
                               std::vector<bool> &results) {
     int n_states = states.size();
     results.resize(n_states);
-    
+
     float *states_array = new float[n_states * n_dims];
     bool *result_array = new bool[n_states];
     std::fill(result_array, result_array + n_states, true);
@@ -456,8 +458,9 @@ public:
 
     // Second pass: create tensor of exact size and populate it
     int tensor_size = extended_path.size();
-    auto path_tensor = torch::zeros({tensor_size, n_dims + 1},
-                                    torch::TensorOptions().dtype(torch::kFloat32));
+    auto path_tensor =
+        torch::zeros({tensor_size, n_dims + 1},
+                     torch::TensorOptions().dtype(torch::kFloat32));
 
     for (size_t i = 0; i < extended_path.size(); i++) {
       for (int d = 0; d < n_dims; d++) {

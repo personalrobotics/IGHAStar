@@ -34,11 +34,15 @@ class PlannerNode:
         self.map_res = planner_cfg["experiment_info_default"]["node_info"]["map_res"]
         self.expansion_limit = planner_cfg["experiment_info_default"]["max_expansions"]
         self.hysteresis = planner_cfg["experiment_info_default"]["hysteresis"]
-        self.bidirectional = planner_cfg["experiment_info_default"].get("bidirectional", False)
+        self.bidirectional = planner_cfg["experiment_info_default"].get(
+            "bidirectional", False
+        )
         self.max_expansions = planner_cfg["experiment_info_default"]["max_expansions"]
         if self.bidirectional:
             self.expansion_limit = self.max_expansions // 2
-            print(f"\033[92mExpansion limit: {self.expansion_limit} (default unidirectional: {self.max_expansions})\033[0m")
+            print(
+                f"\033[92mExpansion limit: {self.expansion_limit} (default unidirectional: {self.max_expansions})\033[0m"
+            )
         else:
             self.expansion_limit = self.max_expansions
             print(f"Expansion limit: {self.expansion_limit}")

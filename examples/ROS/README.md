@@ -73,6 +73,24 @@ We provide rosbags that you can use to run the example script. Place them in the
    rosbag play hound_95.bag
    ```
 
+### Bidirectional Mode
+
+<figure align="center">
+  <img src="../../Content/ROS/ros_bi_example.png" alt="ROS Example Bidirectional Visualization" width="600"/>
+  <figcaption><b>Fig. 2:</b> Example ROS planner visualization in bidirectional mode. The visualization shows "BiIGHA*" to indicate bidirectional search is active. The green part of the path represents the path found through forward search, and the blue part indicates the part found through backward search.</figcaption>
+</figure>
+
+To run the planner in bidirectional mode, set `bidirectional: true` in the config file (`Configs/ros_example.yml`) under `Planner_config > experiment_info_default`:
+
+```yaml
+Planner_config:
+  experiment_info_default:
+    bidirectional: true
+```
+
+**Note:** When running in bidirectional mode, the planner automatically uses half the expansion budget (highlighted in green in the terminal output), we are doing this to showcase the fact that the bidirectional version can provide plans at the same or higher rate even at half the budget.
+
+
 ## Visualization
 - The planner will open an OpenCV window showing the costmap, elevation map, path, goal, and robot state.
 - Path and goal are also published as ROS topics for use in RViz.
