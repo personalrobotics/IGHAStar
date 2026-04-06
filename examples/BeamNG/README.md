@@ -11,6 +11,7 @@ This example demonstrates how to use the IGHA* global planner and MPPI controlle
 The planner supports both standard IGHA* and **bidirectional search (BiIGHA*)**, which can significantly reduce the number of expansions needed to find a solution by searching from both the start and goal simultaneously.
 
 ![BiIGHA* Example](../../Content/BeamNG/BeamNG_bi_example.png)
+
 The green part of the path represents the path found through forward search, and the blue part indicates the part found through backward search.
 
 ## Prerequisites
