@@ -5,8 +5,22 @@ Planner_config:
     tolerance: 0.125
     max_level: 5
     division_factor: 2  # Example division factor
-    max_expansions: 500
+    max_expansions: 1000
     hysteresis: 100
+    # Bidirectional search parameters
+    bidirectional: true  # Set to true to use BiIGHAStar
+    backward_epsilon: [0.5, 0.5, 0.5, 1.0]
+    LCR: [0.5, 0.5, 0.5, 1.0]  # Local Controllability Radius
+    near_meet_config:
+      enabled: true
+      num_interpolation_points: 5
+      num_perturbations: 3
+    goal_sampling_config:
+      enabled: true
+      num_samples: 32
+      space_type: "SE2"
+      angular_dims: [2]
+      sigma: [0.5, 0.5, 0.5, 1.0]
     node_info:
       node_type: "kinodynamic"
       length: 0.3

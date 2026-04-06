@@ -16,11 +16,26 @@ map:
 experiment_info_default:
   resolution: 4.0 # starting resolution used for discretization.
   epsilon: [2, 2, 0.2, 5.0] # ate, cte, heading, vel for goal region.
+  backward_epsilon: [2, 2, 0.2, 5.0] # goal region for backward search (BiIGHAStar)
+  LCR: [1.5, 1.5, 0.2, 5.0] # local controllability radius for BiIGHAStar
   tolerance: 0.5 # Your perception (map) resolution should be at least this.
   max_level: 5 # maximum level to which you expect the system to go; we use this to cache the hash values.
   division_factor: 2  # factor by which the resolution increases every level.
   max_expansions: 100000 # maximum number of expansions allowed.
   hysteresis: 1000 # hysteresis threshold for for IGHA*-H
+  near_meet_config: # configuration for BiIGHAStar near-meet validation
+    num_interpolation_points: 0 # number of interpolation points for validity check
+    num_perturbations: 0 # number of perturbations per interpolation point
+    perturbation_scale: 1.0 # scale factor for perturbations
+  goal_sampling_config: # configuration for backward search goal region sampling
+    # Goal sampling is needed in practice because your exact goal state may be unreachable
+    # (e.g., due to discretization or kinematic constraints). Sampling around the goal
+    # allows the backward search to start from reachable states within the goal region.
+    enabled: true # whether to sample around goal for backward search
+    space_type: "SE2" # "SE2" for manifold with rotation, "R_N" for Euclidean
+    angular_dims: [2] # which dimensions are angular (list, e.g., [2] for single car, [2, 6] for two cars)
+    num_samples: 32 # number of samples to generate
+    sigma: [2.0, 2.0, 0.2, 5.0] # sampling standard deviation per dimension
   node_info:
     node_type: "kinodynamic"
     length: 2.6

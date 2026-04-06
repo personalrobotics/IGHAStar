@@ -34,7 +34,15 @@ class PlannerNode:
         self.map_res = planner_cfg["experiment_info_default"]["node_info"]["map_res"]
         self.expansion_limit = planner_cfg["experiment_info_default"]["max_expansions"]
         self.hysteresis = planner_cfg["experiment_info_default"]["hysteresis"]
-        self.planner = create_planner(planner_cfg)
+        self.bidirectional = planner_cfg["experiment_info_default"].get("bidirectional", False)
+        self.max_expansions = planner_cfg["experiment_info_default"]["max_expansions"]
+        if self.bidirectional:
+            self.expansion_limit = self.max_expansions // 2
+            print(f"\033[92mExpansion limit: {self.expansion_limit} (default unidirectional: {self.max_expansions})\033[0m")
+        else:
+            self.expansion_limit = self.max_expansions
+            print(f"Expansion limit: {self.expansion_limit}")
+        self.planner = create_planner(planner_cfg, bidirectional=self.bidirectional)
         # --- Costmap parameters ---
         self.blur_kernel = config["blur_kernel"]
         self.costmap_cosine_thresh = np.cos(np.radians(config["lethal_slope"]))
@@ -136,7 +144,9 @@ class PlannerNode:
             Q_v_size,
             expansion_counter,
             expansion_list,
+            cost_exp_list,
         ) = self.planner.get_profiler_info()
+
         output_goal = goal[:2] - (self.offset - self.map_center[:2])
         if success:
             path = self.planner.get_best_path().numpy()
@@ -194,7 +204,6 @@ class PlannerNode:
                     plan_state, goal, stop=len(self.local_waypoints) == 0
                 )
                 expansions_per_second = max(expansions / time_taken, 1000)
-                self.expansion_limit = int(expansions_per_second * 0.5)
                 if success:
                     publish_path(path, self.path_pub)
                     publish_goal(output_goal, self.marker_pub)

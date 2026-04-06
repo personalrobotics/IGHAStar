@@ -3,8 +3,6 @@
 #include <cmath>
 #include <cstdio>
 
-constexpr float GRAVITY = 9.81f;
-
 // Maps world coordinates to elevation value from heightmap
 float map_to_elev_cpu(float x, float y, const float *elev, int map_size_px,
                       float res_inv) {
@@ -74,18 +72,19 @@ bool check_crop_cpu(const float x, const float y, const float cy,
   return true;
 }
 
-// CPU implementations of CUDA functions
-// Launches kinodynamic simulation for multiple rollouts on CPU
-void kinodynamic_launcher_cpu(
-    float *state, float *intermediate_states, const float *heightmap,
-    const float *costmap, bool *valid, float *cost, float dt, int timesteps,
-    int rollouts, int n_dims, int n_cont, const int map_size_px, float map_res,
-    float car_l2, float car_w2, float max_vel, float min_vel, float RI,
-    float max_vert_acc, float max_theta, float gear_switch_time,
-    int patch_length_px, int patch_width_px, const int blocks,
-    const int threads, const float *controls) {
+// Launches kinematic simulation for multiple rollouts on CPU
+void kinematic_launcher_cpu(float *state, float *intermediate_states,
+                            const float *heightmap, const float *costmap,
+                            bool *valid, float *cost, float dt, int timesteps,
+                            int rollouts, int n_dims, int n_cont,
+                            const int map_size_px, float map_res, float car_l2,
+                            float car_w2, float max_vel, float min_vel,
+                            float RI, float max_vert_acc, float max_theta,
+                            float gear_switch_time, int patch_length_px,
+                            int patch_width_px, const int blocks,
+                            const int threads, const float *controls) {
 
-  // CPU implementation based on analytical_bicycle.cpp
+  // CPU implementation based on analytical_bicycle.cpp kinematic_launcher
   float res_inv = 1.0f / map_res;
 
   for (int k = 0; k < rollouts; k++) {
@@ -96,29 +95,25 @@ void kinodynamic_launcher_cpu(
     float x = state[state_base + 0];
     float y = state[state_base + 1];
     float yaw = state[state_base + 2];
-    float vx = state[state_base + 3];
 
     // Extract controls from controls array
     float curvature = controls[control_base + 0]; // steering
-    float ax = controls[control_base + 1];        // throttle/wheelspeed
+    float vx = controls[control_base + 1];        // throttle/wheelspeed
+    float wz = curvature * vx;                    // angular velocity
 
-    float vy = 0, vz = 0, wz = curvature * vx;
-
-    // Compute initial footprint & orientation (exactly like CUDA version)
-    float cy = cosf(yaw), sy = sinf(yaw);
-    float fl[3], fr[3], bl[3], br[3], z;
-    get_footprint_z_cpu(fl, fr, bl, br, z, x, y, cy, sy, heightmap, map_size_px,
-                        res_inv, car_l2, car_w2);
-    float last_roll = atan2f((fl[2] + bl[2]) - (fr[2] + br[2]), 4 * car_w2);
-    float last_pitch = atan2f((bl[2] + br[2]) - (fl[2] + fr[2]), 4 * car_l2);
-    float roll, pitch, wx, wy, cp, sp, cr, sr, ay, az;
-    float initial_vx = vx;
+    // Additional variables for 3D motion (like CUDA version)
+    float vy = 0, vz = 0;
 
     valid[k] = true;
     cost[k] = 0.0f;
 
-    // Simulate for timesteps
-    for (int t = 0; t < timesteps; t++) {
+    // Compute initial footprint & orientation (exactly like CUDA version)
+    float cy = cosf(yaw), sy = sinf(yaw);
+    float fl[3], fr[3], bl[3], br[3], z;
+    float roll, pitch, cp, sp, cr, sr;
+    valid[k] = true;
+
+    for (int t = 1; t <= timesteps; t++) {
       cy = cosf(yaw);
       sy = sinf(yaw);
       get_footprint_z_cpu(fl, fr, bl, br, z, x, y, cy, sy, heightmap,
@@ -126,22 +121,11 @@ void kinodynamic_launcher_cpu(
       roll = atan2f((fl[2] + bl[2]) - (fr[2] + br[2]), 4 * car_w2);
       pitch = atan2f((bl[2] + br[2]) - (fl[2] + fr[2]), 4 * car_l2);
 
-      wx = (roll - last_roll) / dt;
-      wy = (pitch - last_pitch) / dt;
-      last_pitch = pitch;
-      last_roll = roll;
-
       cp = cosf(pitch), sp = sinf(pitch);
       cr = cosf(roll), sr = sinf(roll);
 
-      vx += (ax * cp + sp * GRAVITY) * dt;
-      vx = std::min(std::max(vx, min_vel), max_vel);
-      ay = vx * wz - sr * GRAVITY;
-      az = GRAVITY * cp * cr - vx * wy +
-           wx * wx * car_w2; // assuming car width/2 ~ car cg height
-      wz = curvature * vx;
-
-      yaw = fmod(yaw + wz * dt + M_PI, 2 * M_PI) - M_PI;
+      yaw =
+          fmod(yaw + wz * dt + M_PI, 2 * M_PI) - M_PI; // wrap_to_pi equivalent
       cy = cosf(yaw);
       sy = sinf(yaw);
 
@@ -152,28 +136,21 @@ void kinodynamic_launcher_cpu(
 
       // Check constraints
       if (valid[k]) {
-        valid[k] = check_crop_cpu(x, y, cy, sy, costmap, map_size_px, map_res,
-                                  car_l2, car_w2);
-        valid[k] = valid[k] && fabsf(az - GRAVITY) < max_vert_acc;
-        valid[k] = valid[k] && fabsf(ay / az) < RI;
+        valid[k] = fabsf(pitch) < max_theta && fabsf(roll) < max_theta;
         valid[k] =
-            valid[k] && fabsf(pitch) < max_theta && fabsf(roll) < max_theta;
+            valid[k] && check_crop_cpu(x, y, cy, sy, costmap, map_size_px,
+                                       map_res, car_l2, car_w2);
       }
 
       // Store intermediate state
-      int intermediate_base = k * timesteps * n_dims + t * n_dims;
+      int intermediate_base = k * timesteps * n_dims + (t - 1) * n_dims;
       intermediate_states[intermediate_base + 0] = x;
       intermediate_states[intermediate_base + 1] = y;
       intermediate_states[intermediate_base + 2] = yaw;
       intermediate_states[intermediate_base + 3] = vx;
-
-      cost[k] += dt;
     }
-
-    // Add gear switch cost (exactly like CUDA version)
-    float gear_switch_cost =
-        gear_switch_time * (vx * initial_vx < 0); // change in direction
-    cost[k] += gear_switch_cost;
+    float gear_switch_cost = gear_switch_time * (vx < 0); // reverse cost
+    cost[k] = fabs(timesteps * dt) * fabs(vx) + gear_switch_cost;
 
     // Update final state
     state[state_base + 0] = x;

@@ -150,6 +150,7 @@ class PlannerVis:
         self.path = None
         self.states = None
         self.cosine_thresh = np.cos(np.radians(45))
+        self.bidirectional = False
         self.vis_thread = threading.Thread(target=self.costmap_vis)
         self.vis_thread.daemon = True
         self.vis_thread.start()
@@ -164,6 +165,7 @@ class PlannerVis:
         goal: np.ndarray,
         expansion_counter: int,
         hysteresis: float,
+        bidirectional: bool = False,
     ) -> None:
         with self.lock:
             if isinstance(states, torch.Tensor):
@@ -177,6 +179,7 @@ class PlannerVis:
             self.goal = goal
             self.hysteresis = hysteresis
             self.expansion_counter = expansion_counter
+            self.bidirectional = bidirectional
 
     def generate_costmap_from_BEVmap(self, normal: np.ndarray) -> np.ndarray:
         dot_product = normal[:, :, 2]
@@ -251,19 +254,22 @@ class PlannerVis:
                         dtype=int,
                     )
                     car_width_px = int(2.0 * self.resolution_inv)
+                    # Get direction from last column (g * time_direction): positive = forward, negative = backward
+                    direction = self.path[..., -1]
                     velocity = self.path[..., 3]
-                    velocity_norm = (velocity - np.min(velocity)) / (
-                        np.max(velocity) - np.min(velocity)
-                    )
-                    velocity_color = np.array(
-                        np.clip((velocity_norm * 255), 0, 255), dtype=int
-                    )
+                    velocity_norm = (velocity - np.min(velocity)) / (np.max(velocity) - np.min(velocity))
+                    velocity_color = np.clip((velocity_norm * 255), 0, 255).astype(np.uint8)
                     for i in range(len(path_X) - 1):
+                        # Green for forward search, Blue for backward search (BGR format)
+                        if direction[i] >= 0:
+                            color = (0, int(velocity_color[i]), 0)  # Green for forward
+                        else:
+                            color = (int(velocity_color[i]), 0, 0)  # Blue for backward
                         cv2.line(
                             costmap,
                             (path_X[i], path_Y[i]),
                             (path_X[i + 1], path_Y[i + 1]),
-                            (0, int(velocity_color[i]), 0),
+                            color,
                             car_width_px,
                         )
                 # Draw states
@@ -315,6 +321,8 @@ class PlannerVis:
                 costmap = cv2.flip(costmap, 0)
                 if self.hysteresis == -1:
                     var = "HA*M"
+                elif self.bidirectional:
+                    var = f"BiIGHA*-{self.hysteresis}"
                 else:
                     var = f"IGHA*-{self.hysteresis}"
                 cv2.putText(

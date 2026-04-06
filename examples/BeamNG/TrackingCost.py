@@ -135,20 +135,12 @@ class SimpleCarCost(torch.nn.Module):
         brx_px = self.meters_to_px(brx)
         bry_px = self.meters_to_px(bry)
 
-        # State cost is the maximum cost at the car's footprint corners
+        # State cost is the average cost at the car's footprint corners
         state_cost = torch.zeros_like(x)
-        state_cost = torch.max(
-            state_cost, torch.square(self.BEVmap_cost[fly_px, flx_px])
-        )
-        state_cost = torch.max(
-            state_cost, torch.square(self.BEVmap_cost[fry_px, frx_px])
-        )
-        state_cost = torch.max(
-            state_cost, torch.square(self.BEVmap_cost[bly_px, blx_px])
-        )
-        state_cost = torch.max(
-            state_cost, torch.square(self.BEVmap_cost[bry_px, brx_px])
-        )
+        state_cost = torch.square(self.BEVmap_cost[fly_px, flx_px]) / 4
+        state_cost += torch.square(self.BEVmap_cost[fry_px, frx_px]) / 4
+        state_cost += torch.square(self.BEVmap_cost[bly_px, blx_px]) / 4
+        state_cost += torch.square(self.BEVmap_cost[bry_px, brx_px]) / 4
 
         cr = torch.cos(roll)
         cp = torch.cos(pitch)
@@ -185,7 +177,7 @@ class SimpleCarCost(torch.nn.Module):
         constraint_cost[torch.where(pos_err < 1)] = 0
 
         constraint_cost = constraint_cost.mean(dim=0).sum(dim=1)
-        if torch.all(constraint_cost > self.lethal_w):
+        if torch.all(constraint_cost > self.lethal_w * 0.9):
             self.constraint_violation = True
         else:
             self.constraint_violation = False

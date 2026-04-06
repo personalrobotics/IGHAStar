@@ -1,5 +1,23 @@
 # Creating a Custom Environment for IGHAStar
 
+## Folder Structure
+
+```
+Environments/
+├── include/           # Header files (.h)
+│   ├── kinematic.h
+│   ├── kinematic_cpu.h
+│   ├── kinodynamic.h
+│   ├── kinodynamic_cpu.h
+│   └── simple.h
+├── src/               # Source files (.cpp, .cu)
+│   ├── kinematic.cu
+│   ├── kinematic_cpu.cpp
+│   ├── kinodynamic.cu
+│   └── kinodynamic_cpu.cpp
+└── README.md
+```
+
 ## What is an environment?
 The envrionment is effectively what provides the successor function, edge evaluation, heuristic, goal checking, and what the node data structure looks like.
 For instance, in the example environments used here, the world is represented using 2D costmaps and elevation maps. 
@@ -22,22 +40,16 @@ Your custom `Environment` class **must** provide the following methods and membe
 
 **Constructor**
   ```cpp
-  Environment(const py::dict& config);
+  Environment(const py::dict& config, int time_direction_ = 1);
 ```
-Initializes the environment using a
-Python dictionary of configuration parameters.
+Initializes the environment using a Python dictionary of configuration parameters.
+The `time_direction` parameter is used for bidirectional search: `1` for forward search, `-1` for backward search.
 
 **set_world**
   ```cpp
   void set_world(torch::Tensor world);
   ```
 Loads the map or world representation from a PyTorch tensor.
-
-**cleanup**
-  ```cpp
-  void cleanup();
-  ```
-  Frees any allocated resources (e.g., memory, CUDA buffers).
 
 **create_Node**
   ```cpp
@@ -69,6 +81,18 @@ Loads the map or world representation from a PyTorch tensor.
   ```
   Sets `result[0]` and `result[1]` to true if `start` and `goal` are valid, respectively.
 
+**check_validity_batched**
+  ```cpp
+  void check_validity_batched(const std::vector<float *> &states, std::vector<bool> &results);
+  ```
+  Checks validity for a batch of states. Used for goal region sampling in bidirectional search.
+
+**compute_near_meet_distance**
+  ```cpp
+  float compute_near_meet_distance(float *pose1, float *pose2);
+  ```
+  Computes the distance between two poses for near-meet detection in bidirectional search.
+
 **Succ**
   ```cpp
   std::vector<std::shared_ptr<Node>> Succ(std::shared_ptr<Node> node,
@@ -84,9 +108,15 @@ Loads the map or world representation from a PyTorch tensor.
   torch::Tensor convert_node_list_to_path_tensor(std::vector<std::shared_ptr<Node>> node_list);
   ```
   Converts a list of nodes (the path) to a PyTorch tensor for output/visualization.
+  The tensor should have shape `[path_length, n_dims + 1]`, where the last column contains `g * time_direction` to indicate search direction.
 
 ### **Required Members**
 - `int max_level;` - The maximum number of resolution levels (used for multi-resolution search).
+- `int time_direction;` - Direction of search: `1` for forward, `-1` for backward.
+- `int timesteps;` - Number of intermediate states between nodes.
+- `float local_controllability_radius[n_dims];` - Local controllability radius for each dimension.
+- `float resolution[n_dims];` - Resolution for each dimension.
+- `float tolerance[n_dims];` - Tolerance for each dimension.
 
 ## Node Structure Requirements
 
@@ -99,6 +129,8 @@ Your environment must define a `Node` struct or class with the following members
 - `bool active;` // Whether the node is active in the search
 - `int rank, level;` // Rank and resolution level
 - `size_t hash;` // Hash value for fast lookup
+- `size_t LCR_index;` // Index for local controllability radius table (used in bidirectional search)
+- `int time_direction;` // Direction of search: `1` for forward, `-1` for backward
 - `std::vector<size_t> index;` // Multi-resolution indices
 - `std::shared_ptr<Node> parent;` // Pointer to parent node
 
@@ -108,7 +140,8 @@ Your environment must define a `Node` struct or class with the following members
   Node(const float *pose_in, const float *intermediate_poses_,
        std::shared_ptr<Node> parent_in, float g_in,
        const float *resolution_, float *tolerance, int max_level,
-       float division_factor, int timesteps);
+       float division_factor, int timesteps,
+       const float *LCR_, int time_direction_ = 1);
   ```
   Initializes a node with the given state, parent, and other parameters.
 
@@ -128,16 +161,16 @@ struct NodePtrCompare {
                     const std::shared_ptr<Node> &b) const {
         return a->f > b->f; // min-heap: smaller f has higher priority
     }
-```
 };
 ```
 
 ## Example
 
-See the files in this directory (e.g., `kinematic.h`, `kinodynamic.h`, `simple.h`) for concrete examples of how to implement these interfaces.
+See the files in `include/` (e.g., `kinematic.h`, `kinodynamic.h`, `simple.h`) for concrete examples of how to implement these interfaces.
 
 ---
 
 **Note:**
 - All methods and members must match the signatures above for IGHAStar to work correctly.
-- You may add additional methods or members as needed for your environment's logic. 
+- You may add additional methods or members as needed for your environment's logic.
+- For bidirectional search support, ensure proper handling of `time_direction` in the Node constructor and `Succ` method.

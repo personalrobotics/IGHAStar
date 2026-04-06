@@ -10,7 +10,7 @@ from ighastar.scripts.common_utils import create_planner, BASE_DIR
 from typing import Optional
 
 
-def main(yaml_path: str = "", test_case: Optional[str] = None) -> None:
+def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bool = False) -> None:
     assert yaml_path, "Please provide a valid YAML configuration file path."
     print("Loading config from:", yaml_path)
     with open(yaml_path, "r") as file:
@@ -55,14 +55,24 @@ def main(yaml_path: str = "", test_case: Optional[str] = None) -> None:
     bitmap = get_map(map_name, map_dir=map_dir, map_size=map_size, node_info=node_info)
     print(f"Bitmap loaded, shape: {bitmap.shape}")
 
-    expansion_limit = experiment_info["max_expansions"]
+    default_expansion_limit = experiment_info["max_expansions"]
     hysteresis = experiment_info["hysteresis"]
-    print(f"Expansion limit: {expansion_limit}")
+    if bidirectional:
+        if node_type == "kinodynamic" or node_type == "kinematic":
+            expansion_limit = 1000  # Per-thread limit for bidirectional search
+        else:
+            expansion_limit = 5000  # Per-thread limit for bidirectional search
+        print(f"\033[92mExpansion limit: {expansion_limit} (default unidirectional: {default_expansion_limit})\033[0m")
+    else:
+        expansion_limit = default_expansion_limit
+        print(f"Expansion limit: {expansion_limit}")
     print(f"Hysteresis: {hysteresis}")
+    print(f"Bidirectional: {bidirectional}")
 
     print("Creating planner...")
-    planner = create_planner(configs)
-    print("Planner created successfully")
+    planner = create_planner(configs, bidirectional=bidirectional)
+    planner_type = "BiIGHAStar" if bidirectional else "IGHAStar"
+    print(f"{planner_type} planner created successfully")
 
     print("Starting search...")
     now = time.perf_counter()
@@ -81,6 +91,7 @@ def main(yaml_path: str = "", test_case: Optional[str] = None) -> None:
         Q_v_size,
         expansion_counter,
         expansion_list,
+        cost_exp_list,
     ) = planner.get_profiler_info()
     print("Profiler info retrieved")
 
@@ -96,7 +107,22 @@ def main(yaml_path: str = "", test_case: Optional[str] = None) -> None:
     print(f"Max level profile: {max_level_profile}")
     print(f"Q_v size: {Q_v_size}")
     print(f"Expansion counter: {expansion_counter}")
-    print(f"Expansion list: {expansion_list}")
+    # print the expansions to first solution, and the cost of the best solution:
+    # first solution is when cost_exp_list is less than 1e4:
+    cost_exp_arr = np.array(cost_exp_list)
+    solution_indices = np.where(cost_exp_arr < 1e4)[0]
+    if len(solution_indices) > 0:
+        first_solution_expansion = solution_indices[0]
+        first_solution_cost = cost_exp_arr[first_solution_expansion]
+        print(f"First solution expansion: {first_solution_expansion}")
+        print(f"First solution cost: {first_solution_cost}")
+        # best solution is the minimum cost in the cost_exp_list:
+        best_solution_cost = np.min(cost_exp_arr)
+        print(f"Best solution cost: {best_solution_cost}")
+    else:
+        print("No solution found")
+
+    # print(f"Cost list (at each expansion): {cost_exp_list}")
 
     if success:
         print("✓ Optimal path found!")
@@ -106,14 +132,20 @@ def main(yaml_path: str = "", test_case: Optional[str] = None) -> None:
         # Create visualization
         show_map(plt, bitmap, node_type)
 
-        # Plot path
-        plt.plot(
-            path[:, 0] / map_res,
-            path[:, 1] / map_res,
-            color="blue",
-            linewidth=3,
-            label="Path",
-        )
+        # Check for direction info (last column) to color by search direction
+        # Positive = forward search (green), Negative = backward search (purple)
+        direction = path[:, -1]
+
+        # Plot path segments colored by direction
+        for i in range(len(path) - 1):
+            segment_color = "green" if direction[i] >= 0 else "darkviolet"
+            plt.plot(
+                [path[i, 0] / map_res, path[i + 1, 0] / map_res],
+                [path[i, 1] / map_res, path[i + 1, 1] / map_res],
+                color=segment_color,
+                linewidth=3,
+                zorder=3,
+            )
 
         plt.scatter(
             goal[0].item() / map_res,
@@ -126,7 +158,7 @@ def main(yaml_path: str = "", test_case: Optional[str] = None) -> None:
             label="Goal",
             zorder=10,
         )
-
+        
         if node_type == "kinodynamic" or node_type == "kinematic":
             # Plot car orientations along the path
             plot_car(
@@ -137,25 +169,31 @@ def main(yaml_path: str = "", test_case: Optional[str] = None) -> None:
                 color="green",
                 label="Start",
             )
+            
+            timesteps = node_info["timesteps"]
             for i in range(len(path) - 1):
-                if i % node_info["timesteps"] == 0:
+                if i % timesteps == 0:
+                    # Green for forward search, dark purple for backward search
+                    car_color = "green" if direction[i] >= 0 else "darkviolet"
                     plot_car(
                         plt,
                         path[i, 0] / map_res,
                         path[i, 1] / map_res,
                         path[i, 2],
-                        color="blue",
+                        color=car_color,
                     )
-            # plot_car(plt, path[-1, 0]/map_res, path[-1, 1]/map_res, path[-1, 2], color='blue')
         else:
-            # Simple environment - plot path vertices
+            # Simple environment - plot path vertices colored by direction
             for i in range(len(path)):
+                # Green for forward search, dark purple for backward search
+                point_color = "green" if direction[i] >= 0 else "darkviolet"
                 plt.scatter(
                     path[i, 0] / map_res,
                     path[i, 1] / map_res,
-                    color="blue",
+                    color=point_color,
                     s=20,
-                    alpha=0.6,
+                    alpha=0.7,
+                    zorder=5,
                 )
 
         # Add goal region circle
@@ -170,9 +208,13 @@ def main(yaml_path: str = "", test_case: Optional[str] = None) -> None:
         )
         plt.gca().add_patch(goal_circle)
 
+        # Add legend entries for forward/backward search colors
+        plt.scatter([], [], color="green", label="Forward Search", s=50)
+        plt.scatter([], [], color="darkviolet", label="Backward Search", s=50)
+
         # Add legend and labels
         plt.legend(loc="upper right")
-        plt.title(f"IGHAStar Path Planning - {node_type.capitalize()} Environment")
+        plt.title(f"{planner_type} Path Planning - {node_type.capitalize()} Environment")
         plt.xlabel("X Position")
         plt.ylabel("Y Position")
 
@@ -180,6 +222,12 @@ def main(yaml_path: str = "", test_case: Optional[str] = None) -> None:
         plt.gca().invert_yaxis()
 
         print("Displaying visualization...")
+        # Save figure to output directory (create if needed)
+        output_dir = os.path.join(BASE_DIR.parent, "Content/standalone")
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, f"{map_name}_{node_type}_{planner_type}.png")
+        plt.savefig(output_path)
+        print(f"Saved to: {output_path}")
         plt.show()
         print("✓ Visualization complete!")
     else:
@@ -198,7 +246,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--test-case", type=str, default="case1", help="Test case identifier (optional)"
     )
+    parser.add_argument(
+        "--bidirectional", "-b",
+        action="store_true",
+        help="Use bidirectional BiIGHAStar planner instead of unidirectional IGHAStar"
+    )
     # we assume the config is from examples/standalone folder:
     args = parser.parse_args()
     yaml_path = os.path.join(BASE_DIR.parent, "examples", "standalone", args.config)
-    main(yaml_path=yaml_path, test_case=args.test_case)
+    main(yaml_path=yaml_path, test_case=args.test_case, bidirectional=args.bidirectional)

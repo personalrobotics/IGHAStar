@@ -18,22 +18,29 @@ size_t calc_hash(float *pose, const float *resolution) {
 struct Node {
 public:
   float pose[n_dims];
+  float *intermediate_poses;  // Not used in simple env, but needed for interface compatibility
   float g, f;
   bool active;
   int rank, level;
   size_t hash;
+  size_t LCR_index;  // Hash for local controllability radius (near-meet detection)
+  int time_direction;  // 1 for forward, -1 for backward
   std::vector<size_t> index;
   std::shared_ptr<Node> parent;
 
-  // Constructor matching kinodynamic pattern
-  Node(const float *pose_in, std::shared_ptr<Node> parent_in, float g_in,
+  // Constructor matching kinodynamic pattern (intermediate_poses ignored for simple env)
+  Node(const float *pose_in, const float *intermediate_poses_,
+       std::shared_ptr<Node> parent_in, float g_in,
        const float *resolution_, const float *tolerance, int max_level,
-       float division_factor)
-      : g(g_in), f(0), parent(parent_in), active(true), rank(0), level(0) {
+       float division_factor, int timesteps, const float *LCR_, int time_direction_ = 1)
+      : intermediate_poses(nullptr), g(g_in), f(0), parent(parent_in), 
+        active(true), rank(0), level(0), time_direction(time_direction_) {
     for (int i = 0; i < n_dims; i++) {
       pose[i] = pose_in[i];
     }
     hash = calc_hash(pose, tolerance);
+    // Compute LCR_index using local_controllability_radius
+    LCR_index = calc_hash(pose, LCR_);
     float resolution[n_dims];
     for (int i = 0; i < n_dims; i++) {
       resolution[i] = resolution_[i];
@@ -55,14 +62,22 @@ struct NodePtrCompare {
 };
 
 class Environment {
-  int map_size_px, n_succ, timesteps;
-  float resolution[n_dims], tolerance[n_dims], epsilon[n_dims], division_factor;
+  int map_size_px, n_succ;
+  float epsilon[n_dims];
   float step_size, map_res;
   float *costmap;
-  int max_level;
 
 public:
-  Environment(const py::dict &config) {
+  int max_level;
+  int timesteps;
+  int time_direction;
+  float resolution[n_dims];
+  float tolerance[n_dims];
+  float local_controllability_radius[n_dims];
+  float division_factor;
+
+  Environment(const py::dict &config, int time_direction_ = 1)
+      : costmap(nullptr), time_direction(time_direction_) {
     auto info = config["experiment_info_default"].cast<py::dict>();
     auto node_info = info["node_info"].cast<py::dict>();
 
@@ -73,27 +88,47 @@ public:
 
     set_resolutions(info, node_info);
     set_simple_params(node_info);
-
-    costmap = nullptr;
   }
 
   // Destructor
   ~Environment() {
-    if (costmap)
+    if (costmap) {
       delete[] costmap;
+      costmap = nullptr;
+    }
   }
 
   void set_resolutions(py::dict &info, py::dict &node_info) {
     float res = info["resolution"].cast<float>();
     float tol = info["tolerance"].cast<float>();
-    auto eps = info["epsilon"].cast<std::vector<float>>();
+    
+    // For backward search, use backward_epsilon if available
+    std::vector<float> eps;
+    if (time_direction == -1 && info.contains("backward_epsilon")) {
+      eps = info["backward_epsilon"].cast<std::vector<float>>();
+    } else {
+      eps = info["epsilon"].cast<std::vector<float>>();
+    }
 
     resolution[0] = res;
     resolution[1] = res;
     tolerance[0] = tol;
     tolerance[1] = tol;
-    epsilon[0] = eps[0];
-    epsilon[1] = eps[1];
+    for (int i = 0; i < n_dims && i < static_cast<int>(eps.size()); i++) {
+      epsilon[i] = eps[i];
+    }
+    
+    // Set LCR from config if available, otherwise use epsilon
+    if (info.contains("LCR")) {
+      auto lcr = info["LCR"].cast<std::vector<float>>();
+      for (int i = 0; i < n_dims; i++) {
+        local_controllability_radius[i] = (i < static_cast<int>(lcr.size())) ? lcr[i] : epsilon[i];
+      }
+    } else {
+      for (int i = 0; i < n_dims; i++) {
+        local_controllability_radius[i] = epsilon[i];
+      }
+    }
   }
 
   void set_simple_params(py::dict &node_info) {
@@ -125,17 +160,26 @@ public:
     map_size_px = H; // assume H = W
   }
 
-  void cleanup() {
-    if (costmap) {
-      delete[] costmap;
-      costmap = nullptr;
-    }
-  }
-
   // Creates a new Node with the given pose
   std::shared_ptr<Node> create_Node(float *pose) {
-    return std::make_shared<Node>(pose, nullptr, 0, resolution, tolerance,
-                                  max_level, division_factor);
+    return std::make_shared<Node>(pose, nullptr, nullptr, 0, resolution, tolerance,
+                                  max_level, division_factor, timesteps,
+                                  local_controllability_radius, time_direction);
+  }
+
+  // Compute near-meet distance between two poses
+  float compute_near_meet_distance(float *pose1, float *pose2) {
+    return heuristic(pose1, pose2);
+  }
+
+  // Batched validity check for multiple states
+  void check_validity_batched(const std::vector<float *> &states,
+                              std::vector<bool> &results) {
+    int n_states = states.size();
+    results.resize(n_states);
+    for (int i = 0; i < n_states; i++) {
+      results[i] = check_validity_single(states[i]);
+    }
   }
 
   float distance(float *pose, float *goal) {
@@ -208,9 +252,11 @@ public:
         new_pose[0] = x;
         new_pose[1] = y;
 
-        neighbor = std::make_shared<Node>(new_pose, node, node->g + step_size,
+        neighbor = std::make_shared<Node>(new_pose, nullptr, node, node->g + step_size,
                                           resolution, tolerance, max_level,
-                                          division_factor);
+                                          division_factor, timesteps,
+                                          local_controllability_radius,
+                                          time_direction);
         f = neighbor->g + heuristic(neighbor->pose, goal->pose);
         neighbor->f = f;
         neighbors.push_back(neighbor);
@@ -221,12 +267,19 @@ public:
 
   torch::Tensor convert_node_list_to_path_tensor(
       std::vector<std::shared_ptr<Node>> node_list) {
+    if (node_list.empty()) {
+      return torch::zeros({0, n_dims + 1},
+                          torch::TensorOptions().dtype(torch::kFloat32));
+    }
+
     int path_length = node_list.size();
     auto path_tensor = torch::zeros(
-        {path_length, n_dims}, torch::TensorOptions().dtype(torch::kFloat32));
+        {path_length, n_dims + 1}, torch::TensorOptions().dtype(torch::kFloat32));
     for (int i = 0; i < path_length; i++) {
-      path_tensor[i][0] = node_list[i]->pose[0];
-      path_tensor[i][1] = node_list[i]->pose[1];
+      for (int d = 0; d < n_dims; d++) {
+        path_tensor[i][d] = node_list[i]->pose[d];
+      }
+      path_tensor[i][n_dims] = node_list[i]->g * node_list[i]->time_direction;
     }
     return path_tensor;
   }

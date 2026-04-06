@@ -2,7 +2,7 @@
 
 # IGHA*: Incremental Generalized Hybrid A* Search 
 
-## ([Website](https://personalrobotics.github.io/IGHAStar/), Accepted to IEEE RA-L Nov 2025, [Preprint](https://arxiv.org/abs/2508.13392))
+## ([Website](https://personalrobotics.github.io/IGHAStar/), Accepted to IEEE RA-L Nov 2025, [Preprint](https://personalrobotics.cs.washington.edu/publications/talia2025ighastar.pdf))
 
 </div>
 

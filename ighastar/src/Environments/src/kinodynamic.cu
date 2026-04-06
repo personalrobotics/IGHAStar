@@ -12,31 +12,6 @@
 #define th_index 1
 #define GRAVITY 9.81f
 
-// using namespace std;
-float *d_controls, *d_state, *d_cost, *d_intermediate_states;
-bool *d_valid;
-
-// Sets up CUDA memory for kinematic simulation
-void cuda_setup(float *controls, int n_succ, int NX, int NC, int timesteps) {
-  cudaMalloc(&d_controls, sizeof(float) * n_succ * NC);
-  cudaMalloc(&d_state, n_succ * NX * sizeof(float));
-  cudaMalloc(&d_intermediate_states, n_succ * timesteps * NX * sizeof(float));
-  cudaMalloc(&d_valid, n_succ * sizeof(bool));
-  cudaMalloc(&d_cost, n_succ * sizeof(float));
-  cudaMemcpy(d_controls, controls, sizeof(float) * n_succ * NC,
-             cudaMemcpyHostToDevice);
-  cudaDeviceSynchronize();
-}
-
-// Cleans up CUDA memory for kinematic simulation
-void cuda_cleanup() {
-  cudaFree(d_controls);
-  cudaFree(d_state);
-  cudaFree(d_intermediate_states);
-  cudaFree(d_valid);
-  cudaFree(d_cost);
-}
-
 __device__ float nan_to_num(float x, float replace) {
   return (std::isnan(x) || std::isinf(x)) ? replace : x;
 }
@@ -84,6 +59,32 @@ __device__ void get_footprint_z(float *fl, float *fr, float *bl, float *br,
   br[2] = map_to_elev(br[0], br[1], elev, map_size_px, res_inv) - z_cent;
 }
 
+/*
+list of constants:
+    NX = 4
+    NC = 2
+    timesteps = 10
+    n_succ = 1000
+    patch_length_px = 20
+    patch_width_px = 20
+    map_size_px = 1000
+    map_res = 0.1
+    car_l2 = 1.0
+    car_w2 = 0.5
+*/
+/*
+list of reused variables:
+    bitmap = BEVmap_cost
+    map_size_px = map_size
+    map_res = map_res
+    d_intermediate_states = d_intermediate_states
+    patch_length_px = patch_length_px
+    patch_width_px = patch_width_px
+    car_l2 = car_l2
+    car_w2 = car_w2
+    d_valid = d_valid
+*/
+
 // Checks validity of multiple states against a bitmap (CUDA kernel)
 __global__ void
 check_validity_batch_kernel(const float *bitmap, int map_size_px, float map_res,
@@ -115,6 +116,7 @@ check_validity_batch_kernel(const float *bitmap, int map_size_px, float map_res,
 
   float px = offset_x * cy - offset_y * sy + x;
   float py = offset_x * sy + offset_y * cy + y;
+
   if (px < 0 || px >= map_size_px * map_res || py < 0 ||
       py >= map_size_px * map_res) {
     d_valid[k] = false;
@@ -126,16 +128,16 @@ check_validity_batch_kernel(const float *bitmap, int map_size_px, float map_res,
   }
 }
 
-// Launches kinematic simulation for multiple rollouts (CUDA kernel)
-__global__ void kinematic_kernel(float *state, float *intermediate_states,
-                                 float *controls, const float *BEVmap_height,
-                                 const float *BEVmap_cost, bool *valid,
-                                 float *cost, float dt, int timesteps,
-                                 int rollouts, int NX, int NC,
-                                 const int BEVmap_size_px, float BEVmap_res,
-                                 float car_l2, float car_w2, float max_vel,
-                                 float min_vel, float RI, float max_vert_acc,
-                                 float max_theta, float gear_switch_time) {
+// Launches kinodynamic simulation for multiple rollouts (CUDA kernel)
+__global__ void kinodynamic_kernel(float *state, float *intermediate_states,
+                                   float *controls, const float *BEVmap_height,
+                                   const float *BEVmap_cost, bool *valid,
+                                   float *cost, float dt, int timesteps,
+                                   int rollouts, int NX, int NC,
+                                   const int BEVmap_size_px, float BEVmap_res,
+                                   float car_l2, float car_w2, float max_vel,
+                                   float min_vel, float RI, float max_vert_acc,
+                                   float max_theta, float gear_switch_time) {
   int k = blockIdx.x * blockDim.x + threadIdx.x; // rollout ID
 
   if (k >= rollouts)
@@ -149,18 +151,24 @@ __global__ void kinematic_kernel(float *state, float *intermediate_states,
   int intermediate_index;
 
   float curvature = controls[control_base + st_index];
-  float vx = controls[control_base + th_index];
+  float ax = controls[control_base + th_index];
 
   float x = state[state_base + x_index];
   float y = state[state_base + y_index];
   float yaw = state[state_base + yaw_index];
+  float vx = state[state_base + vx_index];
+  float vz = 0.0f, vy = 0.0f;
   float wz = curvature * vx;
-  float vy = 0, vz = 0;
 
   // Compute initial footprint & orientation
   float cy = cosf(yaw), sy = sinf(yaw);
   float fl[3], fr[3], bl[3], br[3], z;
-  float roll, pitch, cp, sp, cr, sr;
+  get_footprint_z(fl, fr, bl, br, z, x, y, cy, sy, BEVmap_height,
+                  BEVmap_size_px, res_inv, car_l2, car_w2);
+  float last_roll = atan2f((fl[2] + bl[2]) - (fr[2] + br[2]), 4 * car_w2);
+  float last_pitch = atan2f((bl[2] + br[2]) - (fl[2] + fr[2]), 4 * car_l2);
+  float roll, pitch, wx, wy, cp, sp, cr, sr, ay, az;
+  float initial_vx = vx;
   valid[k] = true;
 
   for (int t = 1; t <= timesteps; t++) {
@@ -171,8 +179,20 @@ __global__ void kinematic_kernel(float *state, float *intermediate_states,
     roll = atan2f((fl[2] + bl[2]) - (fr[2] + br[2]), 4 * car_w2);
     pitch = atan2f((bl[2] + br[2]) - (fl[2] + fr[2]), 4 * car_l2);
 
+    wx = (roll - last_roll) / dt;
+    wy = (pitch - last_pitch) / dt;
+    last_pitch = pitch;
+    last_roll = roll;
+
     cp = cosf(pitch), sp = sinf(pitch);
     cr = cosf(roll), sr = sinf(roll);
+
+    vx += (ax * cp + sp * GRAVITY) * dt;
+    vx = clamp(vx, min_vel, max_vel);
+    ay = vx * wz - sr * GRAVITY;
+    az = GRAVITY * cp * cr - vx * wy +
+         wx * wx * car_w2; // assuming car width/2 ~ car cg height
+    wz = curvature * vx;
 
     yaw = wrap_to_pi(yaw + wz * dt);
     cy = cosf(yaw);
@@ -183,6 +203,8 @@ __global__ void kinematic_kernel(float *state, float *intermediate_states,
     y += dt * (vx * (cp * sy) + vy * (sr * sp * sy + cr * cy) +
                vz * (cr * sp * sy - sr * cy));
 
+    valid[k] = valid[k] && fabsf(az - GRAVITY) < max_vert_acc;
+    valid[k] = valid[k] && fabsf(ay / az) < RI;
     valid[k] = valid[k] && fabsf(pitch) < max_theta && fabsf(roll) < max_theta;
 
     intermediate_index = k * timesteps * NX + (t - 1) * NX;
@@ -191,43 +213,45 @@ __global__ void kinematic_kernel(float *state, float *intermediate_states,
     intermediate_states[intermediate_index + yaw_index] = yaw;
     intermediate_states[intermediate_index + vx_index] = vx;
   }
-  float gear_switch_cost = gear_switch_time * (vx < 0); // reverse cost
-  cost[k] = timesteps * dt * fabs(vx) + gear_switch_cost;
+  float gear_switch_cost = gear_switch_time * (vx * initial_vx < 0); // change in direction
+  cost[k] = fabsf(timesteps * dt) + gear_switch_cost; 
+                                                
   state[state_base + x_index] = x;
   state[state_base + y_index] = y;
   state[state_base + yaw_index] = yaw;
   state[state_base + vx_index] = vx;
 }
 
-void kinematic_launcher(
+void kinodynamic_launcher(
     float *state, float *intermediate_states, const float *heightmap,
     const float *costmap, bool *valid, float *cost, float dt, int timesteps,
     int n_succ, int NX, int NC, const int map_size, float map_res, float car_l2,
     float car_w2, float max_vel, float min_vel, float RI, float max_vert_acc,
     float max_theta, float gear_switch_time, int patch_length_px,
-    int patch_width_px, const int blocks, const int threads) {
+    int patch_width_px, const int blocks, const int threads,
+    float *d_state, float *d_intermediate_states, float *d_controls,
+    bool *d_valid, float *d_cost, cudaStream_t stream) {
   dim3 valid_threads(patch_length_px, patch_width_px);
   dim3 valid_blocks(timesteps, n_succ);
-  cudaMemcpy(d_state, state, sizeof(float) * n_succ * NX,
-             cudaMemcpyHostToDevice);
-  cudaMemcpy(d_valid, valid, n_succ * sizeof(bool), cudaMemcpyHostToDevice);
-  cudaMemcpy(d_cost, cost, n_succ * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpyAsync(d_state, state, sizeof(float) * n_succ * NX,
+             cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(d_valid, valid, n_succ * sizeof(bool), cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(d_cost, cost, n_succ * sizeof(float), cudaMemcpyHostToDevice, stream);
 
-  kinematic_kernel<<<blocks, threads>>>(
+  kinodynamic_kernel<<<blocks, threads, 0, stream>>>(
       d_state, d_intermediate_states, d_controls, heightmap, costmap, d_valid,
       d_cost, dt, timesteps, n_succ, NX, NC, map_size, map_res, car_l2, car_w2,
       max_vel, min_vel, RI, max_vert_acc, max_theta, gear_switch_time);
-  cudaDeviceSynchronize();
-  check_validity_batch_kernel<<<valid_blocks, valid_threads>>>(
+  check_validity_batch_kernel<<<valid_blocks, valid_threads, 0, stream>>>(
       costmap, map_size, map_res, d_intermediate_states, patch_length_px,
       patch_width_px, car_l2, car_w2, NX, timesteps, d_valid);
-  cudaDeviceSynchronize();
-  cudaMemcpy(state, d_state, sizeof(float) * n_succ * NX,
-             cudaMemcpyDeviceToHost);
-  cudaMemcpy(valid, d_valid, sizeof(bool) * n_succ, cudaMemcpyDeviceToHost);
-  cudaMemcpy(cost, d_cost, sizeof(float) * n_succ, cudaMemcpyDeviceToHost);
-  cudaMemcpy(intermediate_states, d_intermediate_states,
-             sizeof(float) * n_succ * timesteps * NX, cudaMemcpyDeviceToHost);
+  cudaMemcpyAsync(state, d_state, sizeof(float) * n_succ * NX,
+             cudaMemcpyDeviceToHost, stream);
+  cudaMemcpyAsync(valid, d_valid, sizeof(bool) * n_succ, cudaMemcpyDeviceToHost, stream);
+  cudaMemcpyAsync(cost, d_cost, sizeof(float) * n_succ, cudaMemcpyDeviceToHost, stream);
+  cudaMemcpyAsync(intermediate_states, d_intermediate_states,
+             sizeof(float) * n_succ * timesteps * NX, cudaMemcpyDeviceToHost, stream);
+  cudaStreamSynchronize(stream);
 }
 
 void check_validity_launcher(const float *costmap, int map_size_px,
