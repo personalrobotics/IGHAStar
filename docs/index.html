@@ -213,6 +213,28 @@
 
 <body>
 
+  <!-- Navbar -->
+  <nav class="navbar is-spaced" role="navigation" aria-label="main navigation">
+    <div class="container is-max-desktop">
+      <div class="navbar-brand">
+        <a class="navbar-item is-active" href="./index.html">
+          <strong>IGHA*</strong>
+        </a>
+        <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navbarMain">
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+        </a>
+      </div>
+
+      <div id="navbarMain" class="navbar-menu">
+        <div class="navbar-start">
+          <a class="navbar-item" href="./biighastar.html">Bi-IGHA*</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
 
   <!-- Hero Section -->
   <section class="hero">
@@ -332,13 +354,13 @@
             <div class="figure-container" style="margin: 1.5rem 0;">
               <div class="multi-figure">
                 <div>
-                  <img src="Content/gifs/AStar.gif" alt="A* search without any pruning" style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                  <img src="Content/ighastar/gifs/AStar.gif" alt="A* search without any pruning" style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
                   <figcaption style="margin-top: 0.5rem; font-size: 0.85em;">
                     <b>Fig. 1 (a).</b> A* search without any pruning
                   </figcaption>
                 </div>
                 <div>
-                  <img src="Content/gifs/HAStar.gif" alt="HA* search with grid-based dominance check" style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                  <img src="Content/ighastar/gifs/HAStar.gif" alt="HA* search with grid-based dominance check" style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
                   <figcaption style="margin-top: 0.5rem; font-size: 0.85em;">
                     <b>Fig. 1 (b).</b> HA* search with grid-based dominance check
                   </figcaption>
@@ -349,13 +371,13 @@
             <!-- Main Figure -->
             <div class="figure-container">
                 <div class="multi-figure">
-                <div><img src="Content/figures/main_1.png" alt="1× Resolution" style="width: 100%; height: auto;">
+                <div><img src="Content/ighastar/figures/main_1.png" alt="1× Resolution" style="width: 100%; height: auto;">
                   <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 2 (a).</b> 1× resolution</figcaption>
                 </div>
-                <div><img src="Content/figures/main_2.png" alt="2× Resolution" style="width: 100%; height: auto;">
+                <div><img src="Content/ighastar/figures/main_2.png" alt="2× Resolution" style="width: 100%; height: auto;">
                   <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 2 (b).</b> 2× resolution</figcaption>
                 </div>
-                <div><img src="Content/figures/main_3.png" alt="4× Resolution" style="width: 100%; height: auto;">
+                <div><img src="Content/ighastar/figures/main_3.png" alt="4× Resolution" style="width: 100%; height: auto;">
                   <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 2 (c).</b> 4× resolution</figcaption>
                 </div>
                 </div>
@@ -368,10 +390,10 @@
             IGHA* provably matches or outperforms HA*, and has been tested in both simulation and in the real world on a small scale off-road platform (Fig. 3 (a),(b)). Fig. 3 shows a sneak peek of the results we show later.
             <div class="figure-container" style="margin: 1.5rem 0;">
               <div class="multi-figure">
-                <div><img src="Content/gifs/ighastar_sim.gif" alt="IGHAStar Simulation" style="width: 100%; height: auto; border-radius: 8px;">
+                <div><img src="Content/ighastar/gifs/ighastar_sim.gif" alt="IGHAStar Simulation" style="width: 100%; height: auto; border-radius: 8px;">
                   <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 3 (a).</b> Simulation</figcaption>
                 </div>
-                <div><img src="Content/gifs/ighastar_real.gif" alt="IGHAStar Real-World" style="width: 100%; height: auto; border-radius: 8px;">
+                <div><img src="Content/ighastar/gifs/ighastar_real.gif" alt="IGHAStar Real-World" style="width: 100%; height: auto; border-radius: 8px;">
                   <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 3 (b).</b> Real-world testing</figcaption>
                 </div>
               </div>
@@ -397,24 +419,24 @@
 
         <div class="figure-container" style="margin: 1.5rem 0;">
             <div class="multi-figure" style="flex-wrap: wrap;">
-                <div><img src="Content/gifs/SB_inf.gif" alt="SB, IGHA*-∞" style="width: 100%; height: auto;">
+                <div><img src="Content/ighastar/gifs/SB_inf.gif" alt="SB, IGHA*-∞" style="width: 100%; height: auto;">
                     <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (a).</b> SB, IGHA*-∞</figcaption>
                 </div>
-                <div><img src="Content/gifs/SB_50.gif" alt="SB, IGHA*-50" style="width: 100%; height: auto;">
+                <div><img src="Content/ighastar/gifs/SB_50.gif" alt="SB, IGHA*-50" style="width: 100%; height: auto;">
                     <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (b).</b> SB, IGHA*-50</figcaption>
                 </div>
-                <div><img src="Content/gifs/SB_0.gif" alt="SB, IGHA*-0" style="width: 100%; height: auto;">
+                <div><img src="Content/ighastar/gifs/SB_0.gif" alt="SB, IGHA*-0" style="width: 100%; height: auto;">
                     <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (c).</b> SB, IGHA*-0</figcaption>
                 </div>
             </div>
             <div class="multi-figure" style="flex-wrap: wrap; margin-top: 1rem;">
-                <div><img src="Content/gifs/MB_inf.gif" alt="MB, IGHA*-∞" style="width: 100%; height: auto;">
+                <div><img src="Content/ighastar/gifs/MB_inf.gif" alt="MB, IGHA*-∞" style="width: 100%; height: auto;">
                     <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (d).</b> MB, IGHA*-∞</figcaption>
                 </div>
-                <div><img src="Content/gifs/MB_50.gif" alt="MB, IGHA*-50" style="width: 100%; height: auto;">
+                <div><img src="Content/ighastar/gifs/MB_50.gif" alt="MB, IGHA*-50" style="width: 100%; height: auto;">
                     <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (e).</b> MB, IGHA*-50</figcaption>
                 </div>
-                <div><img src="Content/gifs/MB_0.gif" alt="MB, IGHA*-0" style="width: 100%; height: auto;">
+                <div><img src="Content/ighastar/gifs/MB_0.gif" alt="MB, IGHA*-0" style="width: 100%; height: auto;">
                     <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 5 (f).</b> MB, IGHA*-0</figcaption>
                 </div>
             </div>
@@ -439,13 +461,13 @@
          <div class="figure-container" style="margin: 0 0;">
            <div class="multi-figure">
              <div>
-               <img src="Content/gifs/SB_HA_slowed.gif" alt="HA*M:Only Increase Resolution" style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+               <img src="Content/ighastar/gifs/SB_HA_slowed.gif" alt="HA*M:Only Increase Resolution" style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
                <figcaption style="margin-top: 0.5rem; font-size: 0.85em;">
                  <b>Fig. 4 (a).</b> HA*M:Only Increase Resolution
                </figcaption>
              </div>
              <div>
-               <img src="Content/gifs/SB_0_slowed.gif" alt="IGHA*:Increase/Decrease Resolution on the fly" style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+               <img src="Content/ighastar/gifs/SB_0_slowed.gif" alt="IGHA*:Increase/Decrease Resolution on the fly" style="width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
                <figcaption style="margin-top: 0.5rem; font-size: 0.85em;">
                  <b>Fig. 4 (b).</b> IGHA*:Increase/Decrease Resolution on the fly
                </figcaption>
@@ -470,10 +492,10 @@
             lower ranks (left) = fewer expansions to find the first solution.
             <div class="figure-container" style="margin: 1.5rem 0;">
               <div class="multi-figure">
-                <div><img src="Content/figures/SB_rank.png" alt="Rank Plot" style="width: 100%; height: auto;">
+                <div><img src="Content/ighastar/figures/SB_rank.png" alt="Rank Plot" style="width: 100%; height: auto;">
                   <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 6 (a).</b> Rank Plot for Single-Bottleneck Environments</figcaption>
                 </div>
-                <div><img src="Content/figures/MB_rank.png" alt="Rank Plot" style="width: 100%; height: auto;">
+                <div><img src="Content/ighastar/figures/MB_rank.png" alt="Rank Plot" style="width: 100%; height: auto;">
                   <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 6 (b).</b> Rank Plot for Multi-Bottleneck Environments</figcaption>
                 </div>
               </div>
@@ -496,16 +518,16 @@
         </p>
         <div class="figure-container" style="margin: 1.5rem 0;">
             <div class="multi-figure">
-                <div><img src="Content/figures/kinematic_example.png" alt="Urban city environments" style="width: 100%; height: 300px; object-fit: contain;">
+                <div><img src="Content/ighastar/figures/kinematic_example.png" alt="Urban city environments" style="width: 100%; height: 300px; object-fit: contain;">
                     <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 7 (a).</b> Urban city environments</figcaption>
                 </div>
-                <div><img src="Content/figures/sim_exp.jpg" alt="Off road environments" style="width: 100%; height: 300px; object-fit: contain;">
+                <div><img src="Content/ighastar/figures/sim_exp.jpg" alt="Off road environments" style="width: 100%; height: 300px; object-fit: contain;">
                     <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Fig. 7 (b).</b> Off road environments</figcaption>
                 </div>
             </div>
         </div>
         <div class="figure-container" style="margin: 1.5rem 0;">
-            <div><img src="Content/figures/combined_kinematic_kinodynamic_best_ratio_with_time.png" alt="Speed-up comparison" style="width: 100%; height: auto;">
+            <div><img src="Content/ighastar/figures/combined_kinematic_kinodynamic_best_ratio_with_time.png" alt="Speed-up comparison" style="width: 100%; height: auto;">
                 <figcaption style="margin-top: 0.5rem; font-size: 0.85em; text-align: center;"><b>Fig. 7 (c).</b> Speed-up comparison</figcaption>
             </div>
         </div>
@@ -519,7 +541,7 @@
            we evaluate IGHA* against HA*M, as well as state of the art sampling based planners for kinodynamic planning
            KPIECE<a href="#sucan2011sampling" style="text-decoration: none; color: #3273dc;">[3]</a> 
            and SST<a href="#li2015sparse" style="text-decoration: none; color: #3273dc;">[4]</a>.
-           We use same MPC(MPPI<a href="#williams2017model" style="text-decoration: none; color: #3273dc;">[2]</a>) 
+           We use the same MPC(MPPI<a href="#williams2017model" style="text-decoration: none; color: #3273dc;">[2]</a>) 
            to track the planned path.
            As a sanity check for problem difficulty, 
            we run just the MPC with a longer horizon (shown as "MPC" in the legends)
@@ -535,12 +557,12 @@
         <div class="figure-container" style="margin: 1.5rem 0;">
           <div class="multi-figure">
             <div>
-              <img src="Content/figures/Success_vs_time.png" alt="Success vs Time" style="width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: contain;">
+              <img src="Content/ighastar/figures/Success_vs_time.png" alt="Success vs Time" style="width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: contain;">
               <figcaption style="margin-top: 0.5rem; font-size: 0.85em; text-align: center;"><b>Fig. 8 (a).</b> Success rate vs. time comparison</figcaption>
             </div>
             <div>
               <video controls muted loop preload="metadata" playsinline style="width: 100%; aspect-ratio: 16 / 9; object-fit: contain;">
-                <source src="Content/videos/comparison_anecdote.mp4" type="video/mp4">
+                <source src="Content/ighastar/videos/comparison_anecdote.mp4" type="video/mp4">
                 Your browser does not support the video tag.
               </video>
               <figcaption style="margin-top: 0.5rem; font-size: 0.85em; text-align: center;"><b>Fig. 8 (b).</b> Comparison of all methods</figcaption>
@@ -549,14 +571,14 @@
           <div class="multi-figure" style="margin-top: 1rem;">
             <div>
               <video controls muted loop preload="metadata" playsinline style="width: 100%; aspect-ratio: 16 / 9; object-fit: contain;">
-                <source src="Content/videos/comparison_beamng_2.mov" type="video/mp4">
+                <source src="Content/ighastar/videos/comparison_beamng_2.mov" type="video/mp4">
                 Your browser does not support the video tag.
               </video>
               <figcaption style="margin-top: 0.5rem; font-size: 0.85em; text-align: center;"><b>Fig. 8 (c).</b> IGHA* vs HA*M, anecdote 1</figcaption>
             </div>
             <div>
               <video controls muted loop preload="metadata" playsinline style="width: 100%; aspect-ratio: 16 / 9; object-fit: contain;">
-                <source src="Content/videos/comparison_beamng_1.mp4" type="video/mp4">
+                <source src="Content/ighastar/videos/comparison_beamng_1.mp4" type="video/mp4">
                 Your browser does not support the video tag.
               </video>
               <figcaption style="margin-top: 0.5rem; font-size: 0.85em; text-align: center;"><b>Fig. 8 (d).</b> IGHA* vs HA*M, anecdote 2</figcaption>
@@ -577,14 +599,14 @@
         <div class="multi-figure">
           <div>
             <video controls muted loop preload="metadata" playsinline style="width: 100%; aspect-ratio: 16 / 9; object-fit: contain;">
-              <source src="Content/videos/ighastar_real_1.mov.mp4" type="video/mp4">
+              <source src="Content/ighastar/videos/ighastar_real_1.mov.mp4" type="video/mp4">
               Your browser does not support the video tag.
             </video>
             <figcaption style="margin-top: 0.5rem; font-size: 0.85em; text-align: center;"><b>Fig. 10 (a).</b></figcaption>
           </div>
           <div>
             <video controls muted loop preload="metadata" playsinline style="width: 100%; aspect-ratio: 16 / 9; object-fit: contain;">
-              <source src="Content/videos/ighastar_real_2.mov.mp4" type="video/mp4">
+              <source src="Content/ighastar/videos/ighastar_real_2.mov.mp4" type="video/mp4">
               Your browser does not support the video tag.
             </video>
             <figcaption style="margin-top: 0.5rem; font-size: 0.85em; text-align: center;"><b>Fig. 10 (b).</b></figcaption>

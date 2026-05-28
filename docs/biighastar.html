@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="description" content="Bidirectional Incremental Generalized Hybrid A* (Bi-IGHA*) — kinodynamic planning with bidirectional search over adaptive-resolution Hybrid A*.">
+  <meta name="keywords" content="Path Planning, Hybrid A*, IGHA*, Bidirectional Search, Kinodynamic Planning, Robotics">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bi-IGHA*: Bidirectional Incremental Generalized Hybrid A*</title>
+
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro" rel="stylesheet">
+
+  <link rel="stylesheet" href="./static/css/bulma.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-slider.min.css">
+  <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script defer src="./static/js/fontawesome.all.min.js"></script>
+  <script src="./static/js/bulma-carousel.min.js"></script>
+  <script src="./static/js/bulma-slider.min.js"></script>
+  <script src="./static/js/index.js"></script>
+
+  <style>
+    .section { padding: 0 1.5rem 3rem 1.5rem; }
+    @media (max-width: 768px) { .section { padding: 0 1rem 1.5rem 1rem; } }
+    .content { text-align: justify; }
+    .content p { text-align: justify; }
+    .figure-container { text-align: center; margin: 2rem 0; }
+    .figure-container img, .figure-container object { max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }
+    .figure-container figcaption { margin-top: 1rem; font-style: italic; color: #666; font-size: 0.9em; }
+    .multi-figure { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; gap: 10px; margin: 2rem 0; overflow: visible; }
+    .multi-figure > div { flex: 1 1 0; min-width: 0; text-align: center; display: flex; flex-direction: column; padding: 0; margin: 0; }
+    .multi-figure img { max-width: 100%; height: auto; object-fit: contain; }
+    .multi-figure > div > img { width: 100%; height: auto; display: block; margin: 0; padding: 0; }
+    .multi-figure-4 { flex-wrap: nowrap; }
+    .multi-figure-4 > div { flex: 1 1 25%; }
+    .multi-figure-2 { flex-wrap: nowrap; margin: 1rem 0; }
+    .multi-figure-2 > div { flex: 1 1 50%; }
+    .multi-figure video { width: 100%; height: auto; }
+    @media (max-width: 768px) {
+      .multi-figure-4 { flex-wrap: wrap; }
+      .multi-figure-4 > div { flex: 1 1 45%; }
+      .multi-figure-2 { flex-wrap: wrap; }
+      .multi-figure-2 > div { flex: 1 1 100%; }
+    }
+    .bi-grid-6 { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin: 1.5rem 0; align-items: start; }
+    .bi-grid-6 img { width: 100%; height: auto; border-radius: 6px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08); }
+    .bi-grid-6 .subcap { margin-top: 0.35rem; font-size: 0.72em; line-height: 1.2; color: #555; }
+    @media (max-width: 1100px) { .bi-grid-6 { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 520px) { .bi-grid-6 { grid-template-columns: repeat(2, 1fr); } }
+    .bi-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 1rem 0; }
+    .bi-grid-3 img, .bi-grid-3 video { width: 100%; height: auto; border-radius: 6px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08); }
+    @media (max-width: 768px) { .bi-grid-3 { grid-template-columns: 1fr; } }
+    .bi-sim-gif { width: 100%; max-width: 100%; display: block; margin: 1.5rem auto 0 auto; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }
+    .draft-note { font-size: 0.9rem; color: #666; margin-top: 0.5rem; }
+    .bi-loop-video { width: 100%; max-height: 85vh; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); background: #111; }
+  </style>
+</head>
+
+<body>
+
+  <nav class="navbar is-spaced" role="navigation" aria-label="main navigation">
+    <div class="container is-max-desktop">
+      <div class="navbar-brand">
+        <a class="navbar-item" href="./index.html">
+          <strong>IGHA*</strong>
+        </a>
+        <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navbarMain">
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+        </a>
+      </div>
+      <div id="navbarMain" class="navbar-menu">
+        <div class="navbar-start">
+          <a class="navbar-item is-active" href="./biighastar.html">Bi-IGHA*</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <section class="hero">
+    <div class="hero-body">
+      <div class="container is-max-desktop">
+        <div class="columns is-centered">
+          <div class="column has-text-centered">
+            <h1 class="title is-1 publication-title">
+              <span style="color: #0050FF;">B</span>idirectional
+              <span style="color: #0050FF;">I</span>ncremental
+              <span style="color: #0050FF;">G</span>eneralized
+              <span style="color: #0050FF;">H</span>ybrid
+              <span style="color: #0050FF;">A*</span> (Bi-IGHA*)
+            </h1>
+            <div class="is-size-5 publication-authors" style="margin-top: 0.5rem;">
+              <span>Preprint</span>
+            </div>
+            <div class="is-size-5 publication-authors">
+              <span class="author-block"><a href="https://sidharthtalia.com">Sidharth Talia</a><sup>1</sup>,</span>
+              <span class="author-block"><a href="https://crl.cs.technion.ac.il/">Oren Salzman</a><sup>2</sup>,</span>
+              <span class="author-block"><a href="https://goodrobot.ai">Siddhartha Srinivasa</a><sup>1</sup></span>
+            </div>
+            <div class="is-size-5 publication-authors">
+              <span class="author-block"><sup>1</sup>University of Washington,</span>
+              <span class="author-block"><sup>2</sup>Technion–Israel Institute of Technology</span>
+            </div>
+            <div class="is-size-5 publication-authors" style="margin-top: 0.5rem;">
+              <span>Structurally efficient anytime planning in continuous spaces</span>
+            </div>
+            <div class="column has-text-centered" style="margin-top: 0.75rem;">
+              <div class="publication-links">
+                <span class="link-block">
+                  <a href="https://github.com/personalrobotics/IGHAStar" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon"><i class="fab fa-github"></i></span>
+                    <span>Code</span>
+                  </a>
+                </span>
+                <span class="link-block">
+                  <a class="external-link button is-normal is-rounded is-light" title="Add arXiv or PDF URL when ready" style="pointer-events: none; opacity: 0.65;" aria-disabled="true">
+                    <span class="icon"><i class="fas fa-file-pdf"></i></span>
+                    <span>Paper (TBD)</span>
+                  </a>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container is-max-desktop">
+
+      <div class="content" style="margin-top: 0;">
+        <div class="figure-container">
+          <iframe
+            src="https://www.youtube.com/embed/VmbPP38v5CY?rel=0"
+            title="Bi-IGHA* overview video"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowfullscreen
+            style="max-width: 100%; border: 0; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); width: 100%; aspect-ratio: 16 / 9;">
+          </iframe>
+          <figcaption style="margin-top: 0.5rem; font-size: 0.85em;">
+            <b>Overview video</b> for Bi-IGHA*.
+          </figcaption>
+        </div>
+      </div>
+
+      <h2 class="title is-3 has-text-centered">Abstract</h2>
+      <div class="content">
+        <p>
+          Similar to our prior work on <a href="https://personalrobotics.github.io/IGHAStar/" target="_blank">IGHA*</a>,
+          we focus on efficient anytime kinodynamic planning for systems with complex dynamics in unstructured 
+          environments where precomputing motion primitives is infeasible.
+          While IGHA* was motivated by the need to decouple how the tree is searched with what tree is being searched over,
+          it remains susceptible to accidental freezing of vertices that are needed to reach the goal.
+          For example, Fig.1 shows an example of IGHA* vs Bi-IGHA* on a Reeds–Shepp style goal in <em>(x, y, θ)</em>.
+          On a Reeds–Shepp style goal in <em>(x, y, θ)</em>, 
+          IGHA* misses the true goal test in the full space
+          by freezing a critical vertex, wasting expansions, and forcing resolution
+           refinement.
+          While classical bidirectional search is typically motivated by reduced effective search depth,
+          our key insight is that Bi-IGHA* additionally benefits from a mitigation of the frozen
+          vertex barrier through near-meets. Bi-IGHA* preserves the
+          core guarantees of IGHA*, including monotonic improvement of solution cost and termination with the best path, while delivering significant speedup on benchmarks.
+        </p>
+      </div>
+
+      <div class="figure-container">
+        <img src="Content/biighastar/gifs/biigha_zoom_anecdote.gif" alt="Animated comparison: IGHA* vs Bi-IGHA* motivating anecdote" style="width: 100%; max-width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+        <figcaption style="margin-top: 1rem; font-size: 0.9em; text-align: justify;">
+          <b>Figure 1.</b> IGHA* vs Bi-IGHA* on the motivating example (colors as in the paper: forward expansions, frozen vertices, collisions, backward tree, near-meet, final path). The goal condition uses a Reeds–Shepp distance threshold in <em>(x, y, θ)</em>, not just proximity in the plane.
+        </figcaption>
+      </div>
+
+      <h2 class="title is-3 has-text-centered">Method overview</h2>
+      <div class="content">
+        <p>
+          Bi-IGHA* instantiates two IGHA* searches that share the current best path cost for branch-and-bound and periodically check for feasible near-meets between the forward and backward trees.
+          When multiple opposing vertices qualify, the implementation selects the meet that minimizes the sum of costs plus the local connection cost.
+          Forward and backward searches can change resolutions independently; if one side terminates, the other continues until its queue is exhausted.
+
+        <div class="figure-container">
+          <img src="Content/biighastar/paper_figures/BIGHAstar-flow.png" alt="Bi-IGHA* flow diagram">
+          <figcaption style="margin-top: 0.5rem; font-size: 0.85em;">
+            <b>Figure 2.</b> High-level flow: two anti-parallel IGHA* loops with shared bounds and near-meet handling (rasterized from the paper PDF).
+          </figcaption>
+        </div>
+
+        The implication of the above is that Bi-IGHA* can achieve the same solution quality as IGHA* at a lower resolution with fewer expansions.
+        </p>
+      </div>
+      <div class="figure-container">
+        <div class="multi-figure multi-figure-4">
+          <div>
+            <img src="Content/biighastar/gifs/main_0.gif" alt="IGHA* at base resolution">
+            <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>IGHA*</b> — base resolution (no solution yet)</figcaption>
+          </div>
+          <div>
+            <img src="Content/biighastar/gifs/main_0_bi.gif" alt="Bi-IGHA* at base resolution">
+            <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Bi-IGHA*</b> — same base resolution (solution found)</figcaption>
+          </div>
+          <div>
+            <img src="Content/biighastar/gifs/main_2.gif" alt="IGHA* best solution at finer resolution">
+            <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>IGHA*</b> — best solution after refinement</figcaption>
+          </div>
+          <div>
+            <img src="Content/biighastar/gifs/main_2_bi.gif" alt="Bi-IGHA* best solution at lower resolution">
+            <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Bi-IGHA*</b> — best solution at lower resolution than IGHA*</figcaption>
+          </div>
+        </div>
+        <figcaption style="font-size: 0.9em; text-align: justify; margin-top: 1rem;">
+          <b>Figure 3.</b> Same scenario as in the paper: unidirectional vs Bi-IGHA* at matched snapshots (animated).
+        </figcaption>
+      </div>
+
+      
+      <h2 class="title is-3 has-text-centered">Results</h2>
+        <h2 class="title is-5 has-text-centered">
+          How does Bi-IGHA* compare to IGHA* on open-loop benchmarks?
+        </h2>
+      <div class="content">
+        <p>
+          We evaluate kinematic (3D), kinodynamic car (4D), and hovercraft (6D) systems across Moving AI and BeamNG-style maps, comparing Bi-IGHA* to forward-only IGHA* and to the faster of forward/reverse IGHA* (“Min”), for both first-solution and best-solution expansion counts.
+          Fig. 7 shows that any Bi-IGHA* variant consistently delivers ~10x speedups over any IGHA* variant.
+          In classical bidirectional search, the gains are typically due to reduced effective search depth as we're burning the candle
+          from both ends.
+          However, we found that the effect of mitigating the frozen vertices is powerful enough 
+          such that if compare the expected reduction in branching factor that classical bidirectional 
+          search would achieve for IGHA*, against the actual reduction in branching factor that Bi-IGHA* achieves, 
+          we see that Bi-IGHA* has a lower effective branching factor (B* > 1 implies greater than expected reduction in branching factor).
+          This is illustrated in Fig. 8.
+        </p>
+      </div>
+
+      <!-- <div class="figure-container">
+        <div class="bi-grid-6">
+          <div><img src="Content/biighastar/paper_figures/jpg_kinematic/speedup_vs_expansions_forward_only_first_path_no_legend_001.jpg" alt="R3 For first"><div class="subcap">ℝ³ For., first</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_kinodynamic/speedup_vs_expansions_forward_only_first_path_no_legend_001.jpg" alt="R4 For first"><div class="subcap">ℝ⁴ For., first</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_hovercraft/speedup_vs_expansions_forward_only_first_path_no_legend_001.jpg" alt="R6 For first"><div class="subcap">ℝ⁶ For., first</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_kinematic/speedup_vs_expansions_forward_only_best_path_no_legend_001.jpg" alt="R3 For best"><div class="subcap">ℝ³ For., best</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_kinodynamic/speedup_vs_expansions_forward_only_best_path_no_legend_001.jpg" alt="R4 For best"><div class="subcap">ℝ⁴ For., best</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_hovercraft/speedup_vs_expansions_forward_only_best_path_no_legend_001.jpg" alt="R6 For best"><div class="subcap">ℝ⁶ For., best</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_kinematic/speedup_vs_expansions_min_fwd_rev_first_path_no_legend_001.jpg" alt="R3 Min first"><div class="subcap">ℝ³ Min., first</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_kinodynamic/speedup_vs_expansions_min_fwd_rev_first_path_no_legend_001.jpg" alt="R4 Min first"><div class="subcap">ℝ⁴ Min., first</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_hovercraft/speedup_vs_expansions_min_fwd_rev_first_path_no_legend_001.jpg" alt="R6 Min first"><div class="subcap">ℝ⁶ Min., first</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_kinematic/speedup_vs_expansions_min_fwd_rev_best_path_no_legend_001.jpg" alt="R3 Min best"><div class="subcap">ℝ³ Min., best</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_kinodynamic/speedup_vs_expansions_min_fwd_rev_best_path_no_legend_001.jpg" alt="R4 Min best"><div class="subcap">ℝ⁴ Min., best</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_hovercraft/speedup_vs_expansions_min_fwd_rev_best_path_no_legend_001.jpg" alt="R6 Min best"><div class="subcap">ℝ⁶ Min., best</div></div>
+        </div>
+        <figcaption style="font-size: 0.9em; text-align: justify;">
+          <b>Figure 4.</b> Speedup of Bi-IGHA* vs baselines (see paper for legend: hysteresis variants, LCR volume scales, and confidence intervals). Forward-only vs “Min” reverse-or-forward IGHA* comparisons illustrate that bidirectional gains are not merely from guessing search direction.
+        </figcaption>
+      </div> -->
+
+      <!-- <div class="figure-container">
+        <img src="Content/biighastar/paper_figures/combined_bidirectional_results_jpg/p_hat_heatmap_001.jpg" alt="Speedup probability heatmap" style="width: 100%; max-width: 100%;">
+        <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Figure 5.</b> Estimated probability that speedup exceeds 1 across LCR settings (paper Fig.).</figcaption>
+      </div>
+      <div class="figure-container">
+        <img src="Content/biighastar/paper_figures/combined_bidirectional_results_jpg/level_p_hat_heatmap_001.jpg" alt="Level probability heatmap" style="width: 100%; max-width: 100%;">
+        <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Figure 6.</b> When speedup occurs, Bi-IGHA* often operates at a resolution level no worse than unidirectional IGHA* (see paper for μ<sub>≤</sub>, μ<sub>&lt;</sub> definitions).</figcaption>
+      </div> -->
+
+      <div class="figure-container">
+        <div class="bi-grid-6">
+          <div><img src="Content/biighastar/paper_figures/jpg_kinematic/success_rate_vs_expansions_no_legend.jpg" alt="R3 success"><div class="subcap">ℝ³ success</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_kinematic/cost_vs_expansions_no_legend.jpg" alt="R3 cost"><div class="subcap">ℝ³ cost</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_kinodynamic/success_rate_vs_expansions_no_legend.jpg" alt="R4 success"><div class="subcap">ℝ⁴ success</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_kinodynamic/cost_vs_expansions_no_legend.jpg" alt="R4 cost"><div class="subcap">ℝ⁴ cost</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_hovercraft/success_rate_vs_expansions_no_legend.jpg" alt="R6 success"><div class="subcap">ℝ⁶ success</div></div>
+          <div><img src="Content/biighastar/paper_figures/jpg_hovercraft/cost_vs_expansions_no_legend.jpg" alt="R6 cost"><div class="subcap">ℝ⁶ cost</div></div>
+        </div>
+        <figcaption style="font-size: 0.9em;"><b>Figure 7.</b> Success rate and cost vs expansions in open loop (<span style="color: #5a9e54; font-weight: 600;">Bi-IGHA*</span> vs <span style="color: #8b6b9e; font-weight: 600;">IGHA*</span> vs <span style="color: #777; font-weight: 600;">SST</span> reference in paper).</figcaption>
+      </div>
+
+      <div class="figure-container">
+        <img src="Content/biighastar/paper_figures/combined_bidirectional_results/combined_B_star_ratio_scatter_forward.png" alt="Branching factor analysis" style="width: 100%; max-width: 900px;">
+        <figcaption style="margin-top: 0.5rem; font-size: 0.85em;"><b>Figure 8.</b> Additional analysis of branching / B* behaviour from the paper. B* > 1 implies greater than expected reduction in branching factor.</figcaption>
+      </div>
+
+      <h2 class="title is-5 has-text-centered">
+        How does this speed up translate to closed-loop performance?
+      </h2>
+      <div class="content">
+        <p>
+          Using the same MPPI-based closed-loop stack and BeamNG-style benchmarking as the IGHA* paper, Bi-IGHA* achieves similar mission success and cost while tolerating much (4x) smaller  expansion budgets—important when planning shares compute with perception and control.
+        </p>
+      </div>
+      <div class="figure-container">
+        <div class="bi-grid-3">
+          <div>
+            <img src="Content/biighastar/paper_figures/in_the_loop_figs/success_rate_200.png" alt="Playback success rate">
+            <div class="subcap">Playback success</div>
+          </div>
+          <div>
+            <img src="Content/biighastar/paper_figures/in_the_loop_figs/cost_test_200.png" alt="Playback cost">
+            <div class="subcap">Playback cost</div>
+          </div>
+          <div>
+            <img src="Content/biighastar/paper_figures/in_the_loop_figs_jpg/success_vs_time_expansion_comparison_001.jpg" alt="In-the-loop performance">
+            <div class="subcap">In-the-loop</div>
+          </div>
+        </div>
+        <img class="bi-sim-gif" src="Content/biighastar/gifs/comparison_sim.gif" alt="Qualitative in-simulation comparison: IGHA* vs Bi-IGHA*">
+        <p style="margin-top: 0.5rem; font-size: 0.85em; color: #555; text-align: center;"><b>Simulation (qualitative)</b> — full width below the metric panels.</p>
+        <figcaption style="font-size: 0.9em; text-align: justify; margin-top: 1rem;">
+          <b>Figure 9.</b> Closed-loop metrics (top row): playback-derived budgets and success vs time under matched compute. Below: in-simulation comparison (GIF) at full content width, illustrating starvation / stalling at low expansion limits for unidirectional IGHA* vs continued progress with Bi-IGHA*.
+        </figcaption>
+      </div>
+
+      <div class="figure-container">
+        <p style="margin-bottom: 0.75rem; font-size: 0.9em; color: #555;"><b>Anecdotes.</b> Full-frame comparison clips (unclipped).</p>
+        <div class="multi-figure multi-figure-2">
+          <div>
+            <video class="bi-loop-video" controls playsinline preload="metadata">
+              <source src="Content/biighastar/videos/9_comparison_biigha_cmp.mp4" type="video/mp4">
+              Your browser does not support the video tag.
+            </video>
+            <figcaption style="margin-top: 0.75rem; font-size: 0.85em;">Anecdote 1</figcaption>
+          </div>
+          <div>
+            <video class="bi-loop-video" controls playsinline preload="metadata">
+              <source src="Content/biighastar/videos/16_comparison_biigha_cmp.mp4" type="video/mp4">
+              Your browser does not support the video tag.
+            </video>
+            <figcaption style="margin-top: 0.75rem; font-size: 0.85em;">Anecdote 2</figcaption>
+          </div>
+        </div>
+      </div>
+
+      <h2 class="title is-3" style="margin-bottom: 0.5rem;">BibTeX (draft)</h2>
+      <footer class="footer" style="padding: 0 0 1.5rem 0;">
+        <div class="content" style="padding: 0;">
+          <p style="font-size: 0.85em; margin: 0; font-family: monospace; text-align: left; max-width: 800px; margin-left: auto; margin-right: auto;">
+            @article{talia2025biighastar,<br>
+            &nbsp;&nbsp;title={Bidirectional Incremental Generalized Hybrid {A*}},<br>
+            &nbsp;&nbsp;author={Talia, Sidharth and Salzman, Oren and Srinivasa, Siddhartha},<br>
+            &nbsp;&nbsp;journal={arXiv preprint arXiv:XXXX.XXXXX},<br>
+            &nbsp;&nbsp;year={2025},<br>
+            &nbsp;&nbsp;note={Replace journal/arxiv id when available}<br>
+            }
+          </p>
+        </div>
+      </footer>
+
+    </div>
+  </section>
+</body>
+</html>
