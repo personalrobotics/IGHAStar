@@ -23,6 +23,10 @@ experiment_info_default:
   division_factor: 2  # factor by which the resolution increases every level.
   max_expansions: 100000 # maximum number of expansions allowed.
   hysteresis: 1000 # hysteresis threshold for for IGHA*-H
+  preemptive_expansion: # optional GPU batching of successor expansions (IGHAStar)
+    enabled: true # when true, expand several Q_v vertices per GPU kernel launch
+    min_preemptive: 80 # only batch once the stash holds at least this many vertices
+    max_preemptive: 200 # max vertices preemptively expanded alongside each popped vertex
   near_meet_config: # configuration for BiIGHAStar near-meet validation
     num_interpolation_points: 0 # number of interpolation points for validity check
     num_perturbations: 0 # number of perturbations per interpolation point

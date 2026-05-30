@@ -52,6 +52,10 @@ public:
   int time_direction; // 1 for forward, -1 for backward
   std::vector<size_t> index;
   std::shared_ptr<Node> parent;
+  // Preemptive expansion bookkeeping: whether this node's successors have
+  // already been computed (and cached) before it was popped from Q_v.
+  bool preexpanded = false;
+  std::vector<std::shared_ptr<Node>> cached_succ;
   // Constructor
   Node(const float *pose_in, const float *intermediate_poses_,
        std::shared_ptr<Node> parent_in, float g_in, const float *resolution_,
@@ -125,6 +129,18 @@ class Environment {
   float *d_intermediate_states_instance;
   bool *d_valid_instance;
 
+  // Batched device memory for preemptive expansion. These buffers hold
+  // up to batch_capacity * n_succ rollouts so that several parent nodes can be
+  // expanded in a single GPU kernel launch. They are allocated lazily via
+  // ensure_batch_capacity() and remain nullptr when preemptive expansion is
+  // disabled.
+  float *d_controls_batched = nullptr;
+  float *d_state_batched = nullptr;
+  float *d_cost_batched = nullptr;
+  float *d_intermediate_batched = nullptr;
+  bool *d_valid_batched = nullptr;
+  int batch_capacity = 0;
+
   // Per-instance CUDA stream (allows parallel kernel execution)
   cudaStream_t cuda_stream;
 
@@ -178,6 +194,27 @@ public:
     if (d_cost_instance != nullptr) {
       cudaFree(d_cost_instance);
       d_cost_instance = nullptr;
+    }
+    // Free batched device memory (preemptive expansion)
+    if (d_controls_batched != nullptr) {
+      cudaFree(d_controls_batched);
+      d_controls_batched = nullptr;
+    }
+    if (d_state_batched != nullptr) {
+      cudaFree(d_state_batched);
+      d_state_batched = nullptr;
+    }
+    if (d_cost_batched != nullptr) {
+      cudaFree(d_cost_batched);
+      d_cost_batched = nullptr;
+    }
+    if (d_intermediate_batched != nullptr) {
+      cudaFree(d_intermediate_batched);
+      d_intermediate_batched = nullptr;
+    }
+    if (d_valid_batched != nullptr) {
+      cudaFree(d_valid_batched);
+      d_valid_batched = nullptr;
     }
     // Destroy CUDA stream
     cudaStreamDestroy(cuda_stream);
@@ -515,6 +552,126 @@ public:
     }
 
     return neighbors;
+  }
+
+  // Ensure batched device buffers can hold up to max_batch parents
+  // (max_batch * n_succ rollouts) in a single kernel launch. Buffers are grown
+  // (never shrunk) and the static control set is pre-tiled max_batch times so
+  // the existing launcher/kernel can be reused unchanged.
+  void ensure_batch_capacity(int max_batch) {
+    if (max_batch <= batch_capacity) {
+      return;
+    }
+    if (d_controls_batched != nullptr) {
+      cudaFree(d_controls_batched);
+      d_controls_batched = nullptr;
+    }
+    if (d_state_batched != nullptr) {
+      cudaFree(d_state_batched);
+      d_state_batched = nullptr;
+    }
+    if (d_cost_batched != nullptr) {
+      cudaFree(d_cost_batched);
+      d_cost_batched = nullptr;
+    }
+    if (d_intermediate_batched != nullptr) {
+      cudaFree(d_intermediate_batched);
+      d_intermediate_batched = nullptr;
+    }
+    if (d_valid_batched != nullptr) {
+      cudaFree(d_valid_batched);
+      d_valid_batched = nullptr;
+    }
+
+    int total = max_batch * n_succ;
+    cudaMalloc(&d_controls_batched, sizeof(float) * total * n_cont);
+    cudaMalloc(&d_state_batched, sizeof(float) * total * n_dims);
+    cudaMalloc(&d_intermediate_batched,
+               sizeof(float) * total * timesteps * n_dims);
+    cudaMalloc(&d_valid_batched, sizeof(bool) * total);
+    cudaMalloc(&d_cost_batched, sizeof(float) * total);
+
+    // Tile the static control set (already on the device in
+    // d_controls_instance) max_batch times so rollout k reads controls[k*NC].
+    for (int b = 0; b < max_batch; b++) {
+      cudaMemcpy(d_controls_batched + b * n_succ * n_cont, d_controls_instance,
+                 sizeof(float) * n_succ * n_cont, cudaMemcpyDeviceToDevice);
+    }
+    batch_capacity = max_batch;
+  }
+
+  // Batched successor: expands every node in `nodes` (M parents) in a single
+  // GPU kernel launch (M * n_succ rollouts) and returns one neighbor list per
+  // parent, in the same order as the input.
+  std::vector<std::vector<std::shared_ptr<Node>>>
+  Succ_batched(const std::vector<std::shared_ptr<Node>> &nodes,
+               std::shared_ptr<Node> goal) {
+    int M = static_cast<int>(nodes.size());
+    std::vector<std::vector<std::shared_ptr<Node>>> results(M);
+    if (M == 0) {
+      return results;
+    }
+
+    if (d_costmap == nullptr || d_heightmap == nullptr) {
+      std::cerr << "Error: CUDA memory not allocated. Call set_world() first."
+                << std::endl;
+      return results;
+    }
+
+    ensure_batch_capacity(M);
+
+    int total = M * n_succ;
+    std::vector<float> state(static_cast<size_t>(total) * n_dims);
+    std::vector<float> intermediate_states(static_cast<size_t>(total) *
+                                           timesteps * n_dims);
+    std::vector<float> cost(total, 0.0f);
+    bool *valid = new bool[total];
+    std::fill(valid, valid + total, true);
+
+    for (int i = 0; i < M; i++) {
+      for (int s = 0; s < n_succ; s++) {
+        int row = i * n_succ + s;
+        memcpy(&state[static_cast<size_t>(row) * n_dims], nodes[i]->pose,
+               n_dims * sizeof(float));
+      }
+    }
+
+    int batched_blocks = (total + threads - 1) / threads;
+    // std::cout << "Launching kinematic_launcher with " << total << " rollouts" << std::endl;
+    kinematic_launcher(
+        state.data(), intermediate_states.data(), d_heightmap, d_costmap, valid,
+        cost.data(), dt, timesteps, total, n_dims, n_cont, map_size_px, map_res,
+        car_l2, car_w2, max_vel, min_vel, RI, max_vert_acc, max_theta,
+        gear_switch_time, patch_length_px, patch_width_px, batched_blocks,
+        threads, d_state_batched, d_intermediate_batched, d_controls_batched,
+        d_valid_batched, d_cost_batched, cuda_stream);
+
+    float new_pose[n_dims];
+    for (int i = 0; i < M; i++) {
+      for (int s = 0; s < n_succ; s++) {
+        int row = i * n_succ + s;
+        if (valid[row]) {
+          memcpy(new_pose, &state[static_cast<size_t>(row) * n_dims],
+                 n_dims * sizeof(float));
+          float *new_intermediate_pose = new float[timesteps * n_dims];
+          memcpy(new_intermediate_pose,
+                 &intermediate_states[static_cast<size_t>(row) * timesteps *
+                                      n_dims],
+                 timesteps * n_dims * sizeof(float));
+          auto neighbor = std::make_shared<Node>(
+              new_pose, new_intermediate_pose, nodes[i],
+              nodes[i]->g + cost[row], resolution, tolerance, max_level,
+              division_factor, timesteps, local_controllability_radius,
+              time_direction);
+          delete[] new_intermediate_pose;
+          neighbor->f = neighbor->g + heuristic(neighbor->pose, goal->pose);
+          results[i].push_back(neighbor);
+        }
+      }
+    }
+
+    delete[] valid;
+    return results;
   }
 
   torch::Tensor convert_node_list_to_path_tensor(

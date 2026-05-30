@@ -69,6 +69,10 @@ public:
   int time_direction; // 1 for forward, -1 for backward
   std::vector<size_t> index;
   std::shared_ptr<Node> parent;
+  // Preemptive expansion bookkeeping: whether this node's successors have
+  // already been computed (and cached) before it was popped from Q_v.
+  bool preexpanded = false;
+  std::vector<std::shared_ptr<Node>> cached_succ;
 
   // Constructor
   Node(const float *pose_in, const float *intermediate_poses_,
@@ -422,6 +426,23 @@ public:
     }
 
     return neighbors;
+  }
+
+  // No GPU buffers in the CPU environment; preemptive expansion falls back to
+  // expanding each node sequentially.
+  void ensure_batch_capacity(int /*max_batch*/) {}
+
+  // Batched successor (CPU fallback): expands each parent via Succ and returns
+  // one neighbor list per parent, preserving input order.
+  std::vector<std::vector<std::shared_ptr<Node>>>
+  Succ_batched(const std::vector<std::shared_ptr<Node>> &nodes,
+               std::shared_ptr<Node> goal) {
+    std::vector<std::vector<std::shared_ptr<Node>>> results;
+    results.reserve(nodes.size());
+    for (const auto &node : nodes) {
+      results.push_back(Succ(node, goal));
+    }
+    return results;
   }
 
   torch::Tensor convert_node_list_to_path_tensor(

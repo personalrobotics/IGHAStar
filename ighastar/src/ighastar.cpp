@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <deque>
 #include <fstream>
 #include <memory>
 #include <mutex>
@@ -112,11 +113,55 @@ public:
   std::vector<int> expansion_list;
   std::vector<float> cost_exp_list;
 
+  // Preemptive expansion: optionally batch GPU successor calls for several Q_v
+  // vertices into a single kernel launch, caching the results until each
+  // vertex is popped. Disabled by default.
+  // - min_preemptive: gating threshold. A preemptive batch is only launched
+  //   once the stash holds at least this many vertices, so batching only
+  //   happens when there is enough work to make it worthwhile.
+  // - max_preemptive: hardware cap. Once gated on, at most this many vertices
+  //   are expanded preemptively in a single launch.
+  bool preemptive_enabled = false;
+  int min_preemptive = 0;
+  int max_preemptive = 0;
+  std::deque<std::shared_ptr<Node>> unexpanded_stash;
+  long preemptive_expansions = 0;
+
   IGHAStar(const py::dict &config, bool debug_ = false,
            int time_direction_ = 1) { // maybe have a debug mode?
     // create environment using config:
     env = new Environment(config, time_direction_);
     debug = debug_;
+
+    // Optional preemptive expansion configuration.
+    auto [pe_config, pe_found] =
+        config_utils::get_config_dict(config, "preemptive_expansion");
+    if (pe_found) {
+      preemptive_enabled = pe_config.contains("enabled")
+                               ? pe_config["enabled"].cast<bool>()
+                               : false;
+      max_preemptive = pe_config.contains("max_preemptive")
+                           ? pe_config["max_preemptive"].cast<int>()
+                           : 0;
+      // Gating threshold; defaults to max_preemptive (only batch at full size).
+      min_preemptive = pe_config.contains("min_preemptive")
+                           ? pe_config["min_preemptive"].cast<int>()
+                           : max_preemptive;
+    }
+    if (preemptive_enabled && max_preemptive > 0) {
+      // Clamp the gating threshold into [1, max_preemptive].
+      if (min_preemptive < 1) {
+        min_preemptive = 1;
+      }
+      if (min_preemptive > max_preemptive) {
+        min_preemptive = max_preemptive;
+      }
+      // Reserve device capacity for the popped vertex plus max_preemptive
+      // preemptively-expanded vertices.
+      env->ensure_batch_capacity(max_preemptive + 1);
+    } else {
+      preemptive_enabled = false;
+    }
   }
 
   ~IGHAStar() {
@@ -155,6 +200,9 @@ public:
     max_level_profile = 0;
     expansion_list.clear();
     cost_exp_list.clear();
+    // preemptive expansion reset:
+    unexpanded_stash.clear();
+    preemptive_expansions = 0;
   }
 
   // activate method for HA*M
@@ -173,6 +221,11 @@ public:
     V[level][start_node->index[level]] = start_node;
     Q_v.push(start_node);
     Q_v_hash.insert(start_node->hash);
+    // Drop any preemptive caches/stash referring to the previous round; the
+    // naive baseline restarts from the start node each round.
+    unexpanded_stash.clear();
+    start_node->preexpanded = false;
+    start_node->cached_succ.clear();
   }
 
   void initialize(std::shared_ptr<Node> start_node) {
@@ -363,6 +416,122 @@ public:
             NodePtrCompare{}, std::move(unsorted_Q_v));
   }
 
+  // Run the tolerance + approximate-dominance check on a freshly retrieved
+  // successor list and route each survivor into Q_v (active) or inactive_Q_v.
+  // When preemptive expansion is enabled, every newly discovered vertex is also
+  // appended to the unexpanded_stash so it can be preemptively expanded later.
+  void process_successors(std::shared_ptr<Node> v,
+                          std::vector<std::shared_ptr<Node>> &neighbors) {
+    (void)v;
+    for (auto &neighbor : neighbors) {
+      // tolerance check is useful in practice to eliminate vertices that
+      // are too close to be practically distinguishable (closer than map
+      // resolution) you can disable this by setting the tolerance to a very
+      // small value (1e-5), but it is not recommended.
+      bool tolerance_check = Q_v_hash.count(neighbor->hash) == 0 &&
+                             Seen_hash.count(neighbor->hash) == 0 &&
+                             inactive_Q_v_hash.count(neighbor->hash) == 0;
+      if (tolerance_check) {
+        // approximate dominance check:
+        if (neighbor->g < get_G(level, neighbor->index[level])) {
+          GUpdate(neighbor);
+          neighbor->active = true;
+          Q_v.push(neighbor);
+          Q_v_hash.insert(neighbor->hash);
+        } else {
+          neighbor->active = false;
+          inactive_Q_v.insert(neighbor);
+          inactive_Q_v_hash.insert(neighbor->hash);
+        }
+        if (preemptive_enabled) {
+          // Both active and inactive newly-discovered vertices are eligible for
+          // preemptive expansion in a later iteration.
+          unexpanded_stash.push_back(neighbor);
+        }
+      }
+    }
+  }
+
+  // Returns the successors of v while opportunistically expanding up to
+  // max_preemptive stash vertices in the same GPU kernel launch. If v was
+  // already preemptively expanded its successors are served from cache (no GPU
+  // work for v); otherwise v is expanded live as part of the batch. The
+  // preemptive batch is only launched once the stash holds at least
+  // min_preemptive vertices (so batching only happens when it is worthwhile),
+  // and is then capped at max_preemptive vertices (the hardware limit).
+  std::vector<std::shared_ptr<Node>>
+  expand_with_preemption(std::shared_ptr<Node> v,
+                         std::shared_ptr<Node> goal_node) {
+    bool v_needs_expand = !v->preexpanded;
+    // Only spend a batched GPU launch on preemptive work once the stash has
+    // accumulated at least min_preemptive vertices. Doing a preemptive batch
+    // with only a handful of nodes would underutilize the GPU, so below that
+    // threshold we defer: a cache hit returns immediately with no GPU work, and
+    // a cache miss expands only v.
+    bool do_preempt =
+        static_cast<int>(unexpanded_stash.size()) >= min_preemptive;
+
+    if (!v_needs_expand && !do_preempt) {
+      // Cache hit while the stash is still filling: serve the cached successors
+      // immediately without launching the GPU.
+      std::vector<std::shared_ptr<Node>> v_successors =
+          std::move(v->cached_succ);
+      v->cached_succ.clear();
+      return v_successors;
+    }
+
+    std::vector<std::shared_ptr<Node>> batch;
+    std::vector<std::shared_ptr<Node>> preempt_nodes;
+    if (v_needs_expand) {
+      batch.push_back(v);
+    }
+    // Gather up to max_preemptive not-yet-expanded vertices from the stash, but
+    // only when the stash is full enough to make a batched launch worthwhile.
+    while (do_preempt &&
+           static_cast<int>(preempt_nodes.size()) < max_preemptive &&
+           !unexpanded_stash.empty()) {
+      std::shared_ptr<Node> p = unexpanded_stash.front();
+      unexpanded_stash.pop_front();
+      if (p == v) {
+        continue; // v is already handled above
+      }
+      if (p->preexpanded) {
+        continue; // already expanded (e.g. popped/expanded earlier)
+      }
+      if (p->f >= Omega) {
+        continue; // no longer promising; would be pruned anyway
+      }
+      preempt_nodes.push_back(p);
+      batch.push_back(p);
+    }
+
+    std::vector<std::shared_ptr<Node>> v_successors;
+    if (!batch.empty()) {
+      std::vector<std::vector<std::shared_ptr<Node>>> results =
+          env->Succ_batched(batch, goal_node);
+      int idx = 0;
+      if (v_needs_expand) {
+        v_successors = std::move(results[idx]);
+        // v has been popped already, so we don't cache its successors; just
+        // flag it so any stale stash copy is skipped.
+        v->preexpanded = true;
+        idx++;
+      }
+      for (auto &p : preempt_nodes) {
+        p->cached_succ = std::move(results[idx]);
+        p->preexpanded = true;
+        idx++;
+        preemptive_expansions++;
+      }
+    }
+    if (!v_needs_expand) {
+      // Cache hit: consume and release the cached successors.
+      v_successors = std::move(v->cached_succ);
+      v->cached_succ.clear();
+    }
+    return v_successors;
+  }
+
   // function to do hybrid A* search and return a path as a tensor I guess:
   void search(float *start, float *goal, int expansion_limit_,
               int hysteresis_threshold_, bool ignore_goal_validity) {
@@ -448,7 +617,12 @@ public:
                 .count();
 
         start_time = std::chrono::high_resolution_clock::now();
-        std::vector<std::shared_ptr<Node>> neighbors = env->Succ(v, goal_node);
+        std::vector<std::shared_ptr<Node>> neighbors;
+        if (preemptive_enabled) {
+          neighbors = expand_with_preemption(v, goal_node);
+        } else {
+          neighbors = env->Succ(v, goal_node);
+        }
         end_time = std::chrono::high_resolution_clock::now();
         successor_time +=
             std::chrono::duration<float, std::micro>(end_time - start_time)
@@ -458,28 +632,7 @@ public:
 
         start_time = std::chrono::high_resolution_clock::now();
         // get successors:
-        for (auto &neighbor : neighbors) {
-          // tolerance check is useful in practice to eliminate vertices that
-          // are too close to be practically distinguishable (closer than map
-          // resolution) you can disable this by setting the tolerance to a very
-          // small value (1e-5), but it is not recommended.
-          bool tolerance_check = Q_v_hash.count(neighbor->hash) == 0 &&
-                                 Seen_hash.count(neighbor->hash) == 0 &&
-                                 inactive_Q_v_hash.count(neighbor->hash) == 0;
-          if (tolerance_check) {
-            // approximate dominance check:
-            if (neighbor->g < get_G(level, neighbor->index[level])) {
-              GUpdate(neighbor);
-              neighbor->active = true;
-              Q_v.push(neighbor);
-              Q_v_hash.insert(neighbor->hash);
-            } else {
-              neighbor->active = false;
-              inactive_Q_v.insert(neighbor);
-              inactive_Q_v_hash.insert(neighbor->hash);
-            }
-          }
-        }
+        process_successors(v, neighbors);
         end_time = std::chrono::high_resolution_clock::now();
         g_update_time +=
             std::chrono::duration<float, std::micro>(end_time - start_time)
@@ -564,6 +717,9 @@ public:
                            max_level_profile, Q_v_size, expansion_counter,
                            expansion_list, cost_exp_list);
   }
+
+  // Number of vertices expanded preemptively (cached) during the last search.
+  long get_preemptive_expansions() { return preemptive_expansions; }
 };
 
 class BiIGHAStar {
@@ -1642,7 +1798,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("search", &IGHAStar::search_adapter)
       .def("get_path_list", &IGHAStar::get_path_list)
       .def("get_best_path", &IGHAStar::get_best_path)
-      .def("get_profiler_info", &IGHAStar::get_profiler_info);
+      .def("get_profiler_info", &IGHAStar::get_profiler_info)
+      .def("get_preemptive_expansions",
+           &IGHAStar::get_preemptive_expansions);
 
   py::class_<BiIGHAStar>(m, "BiIGHAStar")
       .def(py::init<const py::dict &, bool>(), py::arg("config"),
