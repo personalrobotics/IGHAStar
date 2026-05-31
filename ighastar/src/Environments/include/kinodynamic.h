@@ -12,18 +12,15 @@ constexpr int warp_size = 32;
 
 // Launches kinodynamic simulation for multiple rollouts on GPU
 // Uses per-instance device memory and stream for parallel execution
-void kinodynamic_launcher(float *state, float *intermediate_states,
-                          const float *heightmap, const float *costmap,
-                          bool *valid, float *cost, float dt, int timesteps,
-                          int rollouts, int n_dims, int n_cont,
-                          const int map_size_px, float map_res, float car_l2,
-                          float car_w2, float max_vel, float min_vel, float RI,
-                          float max_vert_acc, float max_theta,
-                          float gear_switch_time, int patch_length_px,
-                          int patch_width_px, const int blocks, const int threads,
-                          float *d_state, float *d_intermediate_states,
-                          float *d_controls, bool *d_valid, float *d_cost,
-                          cudaStream_t stream);
+void kinodynamic_launcher(
+    float *state, float *intermediate_states, const float *heightmap,
+    const float *costmap, bool *valid, float *cost, float dt, int timesteps,
+    int rollouts, int n_dims, int n_cont, const int map_size_px, float map_res,
+    float car_l2, float car_w2, float max_vel, float min_vel, float RI,
+    float max_vert_acc, float max_theta, float gear_switch_time,
+    int patch_length_px, int patch_width_px, const int blocks,
+    const int threads, float *d_state, float *d_intermediate_states,
+    float *d_controls, bool *d_valid, float *d_cost, cudaStream_t stream);
 
 // Checks validity of multiple states against a bitmap on GPU
 void check_validity_launcher(const float *bitmap, int map_size_px,
@@ -53,6 +50,10 @@ public:
   size_t LCR_index;
   std::shared_ptr<Node> parent;
   int time_direction;
+  // Preemptive expansion bookkeeping: whether this node's successors have
+  // already been computed (and cached) before it was popped from Q_v.
+  bool preexpanded = false;
+  std::vector<std::shared_ptr<Node>> cached_succ;
   // Constructor
   Node(const float *pose_in, const float *intermediate_poses_,
        std::shared_ptr<Node> parent_in, float g_in, const float *resolution_,
@@ -72,8 +73,8 @@ public:
         for (int t = 0; t < timesteps; t++) {
           int src_index = (timesteps - 1 - t) * n_dims;
           int dst_index = t * n_dims;
-          memcpy(&intermediate_poses[dst_index], &intermediate_poses_[src_index],
-                 n_dims * sizeof(float));
+          memcpy(&intermediate_poses[dst_index],
+                 &intermediate_poses_[src_index], n_dims * sizeof(float));
         }
       } else {
         memcpy(intermediate_poses, intermediate_poses_,
@@ -118,12 +119,25 @@ class Environment {
   float car_l2, car_w2;
   float max_vel, min_vel, RI, max_theta, max_vert_acc, gear_switch_time;
 
-  // Per-instance CUDA device memory (allows parallel execution without conflicts)
+  // Per-instance CUDA device memory (allows parallel execution without
+  // conflicts)
   float *d_controls_instance;
   float *d_state_instance;
   float *d_cost_instance;
   float *d_intermediate_states_instance;
   bool *d_valid_instance;
+
+  // Batched device memory for preemptive expansion. These buffers hold
+  // up to batch_capacity * n_succ rollouts so that several parent nodes can be
+  // expanded in a single GPU kernel launch. They are allocated lazily via
+  // ensure_batch_capacity() and remain nullptr when preemptive expansion is
+  // disabled.
+  float *d_controls_batched = nullptr;
+  float *d_state_batched = nullptr;
+  float *d_cost_batched = nullptr;
+  float *d_intermediate_batched = nullptr;
+  bool *d_valid_batched = nullptr;
+  int batch_capacity = 0;
 
   // Per-instance CUDA stream (allows parallel kernel execution)
   cudaStream_t cuda_stream;
@@ -136,10 +150,10 @@ public:
   int timesteps;
   int time_direction;
   Environment(const py::dict &config, int time_direction_ = 1)
-      : d_heightmap(nullptr), d_costmap(nullptr), time_direction(time_direction_),
-        d_controls_instance(nullptr), d_state_instance(nullptr),
-        d_cost_instance(nullptr), d_intermediate_states_instance(nullptr),
-        d_valid_instance(nullptr) {
+      : d_heightmap(nullptr), d_costmap(nullptr),
+        time_direction(time_direction_), d_controls_instance(nullptr),
+        d_state_instance(nullptr), d_cost_instance(nullptr),
+        d_intermediate_states_instance(nullptr), d_valid_instance(nullptr) {
     auto info = config["experiment_info_default"].cast<py::dict>();
     auto node_info = info["node_info"].cast<py::dict>();
     // Top-level fields
@@ -157,15 +171,33 @@ public:
   // destructor
   ~Environment() {
     // Free per-instance CUDA device memory
-    if (d_controls_instance) cudaFree(d_controls_instance);
-    if (d_state_instance) cudaFree(d_state_instance);
-    if (d_cost_instance) cudaFree(d_cost_instance);
-    if (d_intermediate_states_instance) cudaFree(d_intermediate_states_instance);
-    if (d_valid_instance) cudaFree(d_valid_instance);
-    
+    if (d_controls_instance)
+      cudaFree(d_controls_instance);
+    if (d_state_instance)
+      cudaFree(d_state_instance);
+    if (d_cost_instance)
+      cudaFree(d_cost_instance);
+    if (d_intermediate_states_instance)
+      cudaFree(d_intermediate_states_instance);
+    if (d_valid_instance)
+      cudaFree(d_valid_instance);
+
+    // Free batched device memory (preemptive expansion)
+    if (d_controls_batched)
+      cudaFree(d_controls_batched);
+    if (d_state_batched)
+      cudaFree(d_state_batched);
+    if (d_cost_batched)
+      cudaFree(d_cost_batched);
+    if (d_intermediate_batched)
+      cudaFree(d_intermediate_batched);
+    if (d_valid_batched)
+      cudaFree(d_valid_batched);
+
     // Destroy CUDA stream
-    if (cuda_stream) cudaStreamDestroy(cuda_stream);
-    
+    if (cuda_stream)
+      cudaStreamDestroy(cuda_stream);
+
     if (d_costmap != nullptr) {
       cudaFree(d_costmap);
       d_costmap = nullptr;
@@ -242,37 +274,46 @@ public:
         ++idx;
       }
     }
-    
+
     // Allocate per-instance CUDA device memory (replaces global cuda_setup)
     cudaError_t err;
     err = cudaMalloc(&d_controls_instance, sizeof(float) * n_succ * n_cont);
     if (err != cudaSuccess) {
-      std::cerr << "CUDA error allocating d_controls_instance: " << cudaGetErrorString(err) << std::endl;
+      std::cerr << "CUDA error allocating d_controls_instance: "
+                << cudaGetErrorString(err) << std::endl;
     }
     err = cudaMalloc(&d_state_instance, n_succ * n_dims * sizeof(float));
     if (err != cudaSuccess) {
-      std::cerr << "CUDA error allocating d_state_instance: " << cudaGetErrorString(err) << std::endl;
+      std::cerr << "CUDA error allocating d_state_instance: "
+                << cudaGetErrorString(err) << std::endl;
     }
-    err = cudaMalloc(&d_intermediate_states_instance, n_succ * timesteps * n_dims * sizeof(float));
+    err = cudaMalloc(&d_intermediate_states_instance,
+                     n_succ * timesteps * n_dims * sizeof(float));
     if (err != cudaSuccess) {
-      std::cerr << "CUDA error allocating d_intermediate_states_instance: " << cudaGetErrorString(err) << std::endl;
+      std::cerr << "CUDA error allocating d_intermediate_states_instance: "
+                << cudaGetErrorString(err) << std::endl;
     }
     err = cudaMalloc(&d_valid_instance, n_succ * sizeof(bool));
     if (err != cudaSuccess) {
-      std::cerr << "CUDA error allocating d_valid_instance: " << cudaGetErrorString(err) << std::endl;
+      std::cerr << "CUDA error allocating d_valid_instance: "
+                << cudaGetErrorString(err) << std::endl;
     }
     err = cudaMalloc(&d_cost_instance, n_succ * sizeof(float));
     if (err != cudaSuccess) {
-      std::cerr << "CUDA error allocating d_cost_instance: " << cudaGetErrorString(err) << std::endl;
+      std::cerr << "CUDA error allocating d_cost_instance: "
+                << cudaGetErrorString(err) << std::endl;
     }
-    err = cudaMemcpy(d_controls_instance, controls, sizeof(float) * n_succ * n_cont, cudaMemcpyHostToDevice);
+    err = cudaMemcpy(d_controls_instance, controls,
+                     sizeof(float) * n_succ * n_cont, cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
-      std::cerr << "CUDA error copying controls: " << cudaGetErrorString(err) << std::endl;
+      std::cerr << "CUDA error copying controls: " << cudaGetErrorString(err)
+                << std::endl;
     }
     // Create CUDA stream for parallel execution
     err = cudaStreamCreate(&cuda_stream);
     if (err != cudaSuccess) {
-      std::cerr << "CUDA error creating stream: " << cudaGetErrorString(err) << std::endl;
+      std::cerr << "CUDA error creating stream: " << cudaGetErrorString(err)
+                << std::endl;
     }
     cudaDeviceSynchronize();
   }
@@ -341,7 +382,8 @@ public:
   std::shared_ptr<Node> create_Node(float *pose) {
     return std::make_shared<Node>(pose, nullptr, nullptr, 0, resolution,
                                   tolerance, max_level, division_factor,
-                                  timesteps, local_controllability_radius, time_direction);
+                                  timesteps, local_controllability_radius,
+                                  time_direction);
   }
 
   // Calculates Euclidean distance between two poses
@@ -377,9 +419,10 @@ public:
     return distance(pose, goal) / max_vel;
   }
 
-  // Compute distance between two poses for near-meet checking in bidirectional search
-  // Note that this implementation is left up to the user and can be different for different environments.
-  // The search method does not care "how" this is computed, as long as it is a valid distance metric.
+  // Compute distance between two poses for near-meet checking in bidirectional
+  // search Note that this implementation is left up to the user and can be
+  // different for different environments. The search method does not care "how"
+  // this is computed, as long as it is a valid distance metric.
   float compute_near_meet_distance(float *pose1, float *pose2) {
     return heuristic(pose1, pose2);
   }
@@ -460,14 +503,14 @@ public:
 
     // Use Gaussian distributions centered at 0 with standard deviation =
     // epsilon * epsilon_multiplier
-    std::normal_distribution<float> dist_cte(
-        0.0f, sampling_epsilon[0] * epsilon_multiplier);
-    std::normal_distribution<float> dist_ate(
-        0.0f, sampling_epsilon[1] * epsilon_multiplier);
-    std::normal_distribution<float> dist_yaw(
-        0.0f, sampling_epsilon[2] * epsilon_multiplier);
-    std::normal_distribution<float> dist_vel(
-        0.0f, sampling_epsilon[3] * epsilon_multiplier);
+    std::normal_distribution<float> dist_cte(0.0f, sampling_epsilon[0] *
+                                                       epsilon_multiplier);
+    std::normal_distribution<float> dist_ate(0.0f, sampling_epsilon[1] *
+                                                       epsilon_multiplier);
+    std::normal_distribution<float> dist_yaw(0.0f, sampling_epsilon[2] *
+                                                       epsilon_multiplier);
+    std::normal_distribution<float> dist_vel(0.0f, sampling_epsilon[3] *
+                                                       epsilon_multiplier);
 
     // Pre-compute bounds
     float clearance = sqrt(car_l2 * car_l2 + car_w2 * car_w2);
@@ -475,9 +518,8 @@ public:
     float max_x = (map_size_px * map_res) - clearance;
     float min_y = clearance;
     float max_y = (map_size_px * map_res) - clearance;
-    float epsilon_ball =
-        sqrt(sampling_epsilon[0] * sampling_epsilon[0] / 2 +
-             sampling_epsilon[1] * sampling_epsilon[1] / 2);
+    float epsilon_ball = sqrt(sampling_epsilon[0] * sampling_epsilon[0] / 2 +
+                              sampling_epsilon[1] * sampling_epsilon[1] / 2);
 
     // Sample target_count random states
     for (int i = 0; i < target_count; i++) {
@@ -494,10 +536,9 @@ public:
       float world_dx = cte * cos_yaw - ate * sin_yaw;
       float world_dy = cte * sin_yaw + ate * cos_yaw;
 
-      float sampled_pose[4] = {start_node->pose[0] + world_dx,
-                               start_node->pose[1] + world_dy,
-                               start_node->pose[2] + dyaw,
-                               start_node->pose[3] + dvel};
+      float sampled_pose[4] = {
+          start_node->pose[0] + world_dx, start_node->pose[1] + world_dy,
+          start_node->pose[2] + dyaw, start_node->pose[3] + dvel};
 
       // Clamp to valid bounds
       sampled_pose[0] = std::clamp(sampled_pose[0], min_x, max_x);
@@ -537,7 +578,8 @@ public:
         // Interpolate intermediate states between start_node and sampled_pose
         float *intermediate_poses = new float[timesteps * n_dims];
         for (int t = 0; t < timesteps; t++) {
-          float alpha = static_cast<float>(t + 1) / static_cast<float>(timesteps);
+          float alpha =
+              static_cast<float>(t + 1) / static_cast<float>(timesteps);
           for (int d = 0; d < n_dims; d++) {
             if (d == 2) {
               // For yaw, handle wrap-around
@@ -563,9 +605,10 @@ public:
 
         // Create node
         auto node = std::make_shared<Node>(
-            sampled_pose, intermediate_poses, start_node, start_node->g + g_value,
-            resolution, tolerance, max_level, division_factor, timesteps,
-            local_controllability_radius, time_direction);
+            sampled_pose, intermediate_poses, start_node,
+            start_node->g + g_value, resolution, tolerance, max_level,
+            division_factor, timesteps, local_controllability_radius,
+            time_direction);
 
         delete[] intermediate_poses;
 
@@ -606,15 +649,15 @@ public:
     for (int i = 0; i < n_succ; i++) {
       memcpy(&state[i * n_dims], node->pose, n_dims * sizeof(float));
     }
-    // No mutex needed - each Environment instance has its own CUDA device memory and stream
-    kinodynamic_launcher(state, intermediate_states, d_heightmap, d_costmap,
-                         valid, cost, dt, timesteps, n_succ, n_dims, n_cont,
-                         map_size_px, map_res, car_l2, car_w2, max_vel, min_vel,
-                         RI, max_vert_acc, max_theta, gear_switch_time,
-                         patch_length_px, patch_width_px, blocks, threads,
-                         d_state_instance, d_intermediate_states_instance,
-                         d_controls_instance, d_valid_instance, d_cost_instance,
-                         cuda_stream);
+    // No mutex needed - each Environment instance has its own CUDA device
+    // memory and stream
+    kinodynamic_launcher(
+        state, intermediate_states, d_heightmap, d_costmap, valid, cost, dt,
+        timesteps, n_succ, n_dims, n_cont, map_size_px, map_res, car_l2, car_w2,
+        max_vel, min_vel, RI, max_vert_acc, max_theta, gear_switch_time,
+        patch_length_px, patch_width_px, blocks, threads, d_state_instance,
+        d_intermediate_states_instance, d_controls_instance, d_valid_instance,
+        d_cost_instance, cuda_stream);
 
     for (int i = 0; i < n_succ; i++) {
       if (valid[i]) {
@@ -636,6 +679,125 @@ public:
     }
 
     return neighbors;
+  }
+
+  // Ensure batched device buffers can hold up to max_batch parents
+  // (max_batch * n_succ rollouts) in a single kernel launch. Buffers are grown
+  // (never shrunk) and the static control set is pre-tiled max_batch times so
+  // the existing launcher/kernel can be reused unchanged.
+  void ensure_batch_capacity(int max_batch) {
+    if (max_batch <= batch_capacity) {
+      return;
+    }
+    if (d_controls_batched != nullptr) {
+      cudaFree(d_controls_batched);
+      d_controls_batched = nullptr;
+    }
+    if (d_state_batched != nullptr) {
+      cudaFree(d_state_batched);
+      d_state_batched = nullptr;
+    }
+    if (d_cost_batched != nullptr) {
+      cudaFree(d_cost_batched);
+      d_cost_batched = nullptr;
+    }
+    if (d_intermediate_batched != nullptr) {
+      cudaFree(d_intermediate_batched);
+      d_intermediate_batched = nullptr;
+    }
+    if (d_valid_batched != nullptr) {
+      cudaFree(d_valid_batched);
+      d_valid_batched = nullptr;
+    }
+
+    int total = max_batch * n_succ;
+    cudaMalloc(&d_controls_batched, sizeof(float) * total * n_cont);
+    cudaMalloc(&d_state_batched, sizeof(float) * total * n_dims);
+    cudaMalloc(&d_intermediate_batched,
+               sizeof(float) * total * timesteps * n_dims);
+    cudaMalloc(&d_valid_batched, sizeof(bool) * total);
+    cudaMalloc(&d_cost_batched, sizeof(float) * total);
+
+    // Tile the static control set (already on the device in
+    // d_controls_instance) max_batch times so rollout k reads controls[k*NC].
+    for (int b = 0; b < max_batch; b++) {
+      cudaMemcpy(d_controls_batched + b * n_succ * n_cont, d_controls_instance,
+                 sizeof(float) * n_succ * n_cont, cudaMemcpyDeviceToDevice);
+    }
+    batch_capacity = max_batch;
+  }
+
+  // Batched successor: expands every node in `nodes` (M parents) in a single
+  // GPU kernel launch (M * n_succ rollouts) and returns one neighbor list per
+  // parent, in the same order as the input.
+  std::vector<std::vector<std::shared_ptr<Node>>>
+  Succ_batched(const std::vector<std::shared_ptr<Node>> &nodes,
+               std::shared_ptr<Node> goal) {
+    int M = static_cast<int>(nodes.size());
+    std::vector<std::vector<std::shared_ptr<Node>>> results(M);
+    if (M == 0) {
+      return results;
+    }
+
+    if (d_costmap == nullptr || d_heightmap == nullptr) {
+      std::cerr << "Error: CUDA memory not allocated. Call set_world() first."
+                << std::endl;
+      return results;
+    }
+
+    ensure_batch_capacity(M);
+
+    int total = M * n_succ;
+    std::vector<float> state(static_cast<size_t>(total) * n_dims);
+    std::vector<float> intermediate_states(static_cast<size_t>(total) *
+                                           timesteps * n_dims);
+    std::vector<float> cost(total, 0.0f);
+    bool *valid = new bool[total];
+    std::fill(valid, valid + total, true);
+
+    for (int i = 0; i < M; i++) {
+      for (int s = 0; s < n_succ; s++) {
+        int row = i * n_succ + s;
+        memcpy(&state[static_cast<size_t>(row) * n_dims], nodes[i]->pose,
+               n_dims * sizeof(float));
+      }
+    }
+
+    int batched_blocks = (total + threads - 1) / threads;
+    kinodynamic_launcher(
+        state.data(), intermediate_states.data(), d_heightmap, d_costmap, valid,
+        cost.data(), dt, timesteps, total, n_dims, n_cont, map_size_px, map_res,
+        car_l2, car_w2, max_vel, min_vel, RI, max_vert_acc, max_theta,
+        gear_switch_time, patch_length_px, patch_width_px, batched_blocks,
+        threads, d_state_batched, d_intermediate_batched, d_controls_batched,
+        d_valid_batched, d_cost_batched, cuda_stream);
+
+    float new_pose[n_dims];
+    for (int i = 0; i < M; i++) {
+      for (int s = 0; s < n_succ; s++) {
+        int row = i * n_succ + s;
+        if (valid[row]) {
+          memcpy(new_pose, &state[static_cast<size_t>(row) * n_dims],
+                 n_dims * sizeof(float));
+          float *new_intermediate_pose = new float[timesteps * n_dims];
+          memcpy(new_intermediate_pose,
+                 &intermediate_states[static_cast<size_t>(row) * timesteps *
+                                      n_dims],
+                 timesteps * n_dims * sizeof(float));
+          auto neighbor = std::make_shared<Node>(
+              new_pose, new_intermediate_pose, nodes[i],
+              nodes[i]->g + cost[row], resolution, tolerance, max_level,
+              division_factor, timesteps, local_controllability_radius,
+              time_direction);
+          delete[] new_intermediate_pose;
+          neighbor->f = neighbor->g + heuristic(neighbor->pose, goal->pose);
+          results[i].push_back(neighbor);
+        }
+      }
+    }
+
+    delete[] valid;
+    return results;
   }
 
   torch::Tensor convert_node_list_to_path_tensor(
@@ -672,8 +834,9 @@ public:
 
     // Second pass: create tensor of exact size and populate it
     int tensor_size = extended_path.size();
-    auto path_tensor = torch::zeros({tensor_size, n_dims + 1},
-                                    torch::TensorOptions().dtype(torch::kFloat32));
+    auto path_tensor =
+        torch::zeros({tensor_size, n_dims + 1},
+                     torch::TensorOptions().dtype(torch::kFloat32));
 
     for (size_t i = 0; i < extended_path.size(); i++) {
       for (int d = 0; d < n_dims; d++) {

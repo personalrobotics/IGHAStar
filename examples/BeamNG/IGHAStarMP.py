@@ -17,7 +17,7 @@ class IGHAStarMP:
         self.query_queue = mp.Queue(5)
         self.result_queue = mp.Queue(5)
         self.bidirectional = bidirectional
-        
+
         self.process = mp.Process(
             target=self._planner_process,
             args=(configs, self.query_queue, self.result_queue, bidirectional),
@@ -29,8 +29,11 @@ class IGHAStarMP:
         self.expansion_counter = 0
 
     def _planner_process(
-        self, configs: Dict[str, Any], query_queue: Any, result_queue: Any, 
-        bidirectional: bool = False
+        self,
+        configs: Dict[str, Any],
+        query_queue: Any,
+        result_queue: Any,
+        bidirectional: bool = False,
     ) -> None:
         """
         Planner process: loads the CUDA/C++ kernel and runs the IGHA* planner in response to queries.
@@ -41,7 +44,9 @@ class IGHAStarMP:
         from ighastar.scripts.common_utils import create_planner
 
         planner = create_planner(configs, bidirectional=bidirectional)
-        print(f"[IGHAStarMP] Planner loaded ({'BiIGHAStar' if bidirectional else 'IGHAStar'}).")
+        print(
+            f"[IGHAStarMP] Planner loaded ({'BiIGHAStar' if bidirectional else 'IGHAStar'})."
+        )
 
         map_res = configs["experiment_info_default"]["node_info"]["map_res"]
         offset = None

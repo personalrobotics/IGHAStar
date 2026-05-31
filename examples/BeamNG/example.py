@@ -132,18 +132,26 @@ def main(
                 cooldown_timer = 0
 
                 first_path = False
-                default_expansion_limit = Config["Planner_config"]["experiment_info_default"][
-                    "max_expansions"
-                ]
-                bidirectional = Config["Planner_config"]["experiment_info_default"].get("bidirectional", False)
+                default_expansion_limit = Config["Planner_config"][
+                    "experiment_info_default"
+                ]["max_expansions"]
+                bidirectional = Config["Planner_config"]["experiment_info_default"].get(
+                    "bidirectional", False
+                )
                 if bidirectional:
                     expansion_limit = default_expansion_limit // 4
-                    Config["Planner_config"]["experiment_info_default"]["max_expansions"] = expansion_limit
-                    print(f"\033[92mExpansion limit: {expansion_limit} (default unidirectional: {default_expansion_limit})\033[0m")
+                    Config["Planner_config"]["experiment_info_default"][
+                        "max_expansions"
+                    ] = expansion_limit
+                    print(
+                        f"\033[92mExpansion limit: {expansion_limit} (default unidirectional: {default_expansion_limit})\033[0m"
+                    )
                 else:
                     expansion_limit = default_expansion_limit
                     print(f"Expansion limit: {expansion_limit}")
-                planner = IGHAStarMP(Config["Planner_config"], bidirectional=bidirectional)
+                planner = IGHAStarMP(
+                    Config["Planner_config"], bidirectional=bidirectional
+                )
                 time.sleep(2)
                 planner.reset()
 

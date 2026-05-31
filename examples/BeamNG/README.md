@@ -8,6 +8,12 @@ This folder contains an example integration of the IGHA* planner with the BeamNG
 
 This example demonstrates how to use the IGHA* global planner and MPPI controller to drive a simulated vehicle in BeamNG. The system plans a path using a costmap generated from BEV (bird's-eye view) map data, then tracks that path in closed-loop with a learned or analytical vehicle model.
 
+The planner supports both standard IGHA* and **bidirectional search (BiIGHA*)**, which can significantly reduce the number of expansions needed to find a solution by searching from both the start and goal simultaneously.
+
+![BiIGHA* Example](../../Content/BeamNG/BeamNG_bi_example.png)
+
+The green part of the path represents the path found through forward search, and the blue part indicates the part found through backward search.
+
 ## Prerequisites
 
 - **BeamNGRL** must be installed separately. You must use the `devel` branch, as the TCUDA dynamics model is only available there.
@@ -19,6 +25,7 @@ This example demonstrates how to use the IGHA* global planner and MPPI controlle
 1. **Configure your test case:**
    - Edit `examples/BeamNG/Configs/example.yaml` to set planner, vehicle, and scenario parameters.
    - The `scenarios` field (a list of scenario names) determines which test case(s) will be run. Each scenario should have a corresponding waypoint file in `examples/BeamNG/Waypoints/` (e.g., `0.pkl`).
+   - To enable bidirectional search, set `bidirectional: true` in the `Planner_config.experiment_info_default` section.
 
 2. **Run the example:**
    ```bash
@@ -36,12 +43,28 @@ The main configuration file is `examples/BeamNG/Configs/example.yaml`. Key secti
 - **Map_config**: Map size, resolution, and BEV map settings.
 - **Dynamics_config**: Vehicle model parameters (wheelbase, steering limits, etc.).
 - **Sampling_config**: Noise and sampling settings for the controller.
-- **Planner_config**: Parameters for the IGHA* planner, including the main `experiment_info_default` block (resolution, epsilon, max_expansions, etc.).
+- **Planner_config**: Parameters for the IGHA* planner, including the main `experiment_info_default` block (resolution, epsilon, max_expansions, bidirectional settings, etc.).
 - **Cost_config**: Weights and thresholds for the cost function used in planning and control.
 - **RPS_config**: Parameters for the steering limiter and rollover prevention.
 - **scenarios**: List of scenario names to run (each must have a corresponding waypoint file).
 - **start_pos/start_quat**: Default vehicle start pose (can be overridden by scenario).
 - **vehicle**: Vehicle make and model.
+
+### Bidirectional Search Parameters
+
+The planner supports bidirectional search (BiIGHA*), which searches from both start and goal simultaneously. This can reduce the number of expansions needed, especially in complex environments. The following parameters control bidirectional behavior within `experiment_info_default`:
+
+| Parameter | Description |
+|-----------|-------------|
+| `bidirectional` | Set to `true` to enable BiIGHA*, `false` for standard IGHA* |
+| `backward_epsilon` | Goal region tolerances for backward search `[ate, cte, heading, vel]` |
+| `LCR` | Local Controllability Radius - defines the region where forward and backward searches can meet `[x, y, heading, vel]` |
+| `near_meet_config.enabled` | Enable near-meet connection strategy |
+| `near_meet_config.num_interpolation_points` | Points used to interpolate connections between trees |
+| `near_meet_config.num_perturbations` | Number of perturbations to attempt when connecting (0-3) |
+| `goal_sampling_config.enabled` | Enable sampling states near goal to get around the issue of exact goal state being unreachable |
+| `goal_sampling_config.num_samples` | Number of samples for goal region |
+| `goal_sampling_config.sigma` | Sampling distribution spread `[x, y, heading, vel]` |
 
 ## Adding or Changing a Scenario
 

@@ -10,7 +10,9 @@ from ighastar.scripts.common_utils import create_planner, BASE_DIR
 from typing import Optional
 
 
-def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bool = False) -> None:
+def main(
+    yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bool = False
+) -> None:
     assert yaml_path, "Please provide a valid YAML configuration file path."
     print("Loading config from:", yaml_path)
     with open(yaml_path, "r") as file:
@@ -62,7 +64,9 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
             expansion_limit = 1000  # Per-thread limit for bidirectional search
         else:
             expansion_limit = 5000  # Per-thread limit for bidirectional search
-        print(f"\033[92mExpansion limit: {expansion_limit} (default unidirectional: {default_expansion_limit})\033[0m")
+        print(
+            f"\033[92mExpansion limit: {expansion_limit} (default unidirectional: {default_expansion_limit})\033[0m"
+        )
     else:
         expansion_limit = default_expansion_limit
         print(f"Expansion limit: {expansion_limit}")
@@ -158,7 +162,7 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
             label="Goal",
             zorder=10,
         )
-        
+
         if node_type == "kinodynamic" or node_type == "kinematic":
             # Plot car orientations along the path
             plot_car(
@@ -169,7 +173,7 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
                 color="green",
                 label="Start",
             )
-            
+
             timesteps = node_info["timesteps"]
             for i in range(len(path) - 1):
                 if i % timesteps == 0:
@@ -214,7 +218,9 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
 
         # Add legend and labels
         plt.legend(loc="upper right")
-        plt.title(f"{planner_type} Path Planning - {node_type.capitalize()} Environment")
+        plt.title(
+            f"{planner_type} Path Planning - {node_type.capitalize()} Environment"
+        )
         plt.xlabel("X Position")
         plt.ylabel("Y Position")
 
@@ -225,7 +231,9 @@ def main(yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bo
         # Save figure to output directory (create if needed)
         output_dir = os.path.join(BASE_DIR.parent, "Content/standalone")
         os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, f"{map_name}_{node_type}_{planner_type}.png")
+        output_path = os.path.join(
+            output_dir, f"{map_name}_{node_type}_{planner_type}.png"
+        )
         plt.savefig(output_path)
         print(f"Saved to: {output_path}")
         plt.show()
@@ -247,11 +255,14 @@ if __name__ == "__main__":
         "--test-case", type=str, default="case1", help="Test case identifier (optional)"
     )
     parser.add_argument(
-        "--bidirectional", "-b",
+        "--bidirectional",
+        "-b",
         action="store_true",
-        help="Use bidirectional BiIGHAStar planner instead of unidirectional IGHAStar"
+        help="Use bidirectional BiIGHAStar planner instead of unidirectional IGHAStar",
     )
     # we assume the config is from examples/standalone folder:
     args = parser.parse_args()
     yaml_path = os.path.join(BASE_DIR.parent, "examples", "standalone", args.config)
-    main(yaml_path=yaml_path, test_case=args.test_case, bidirectional=args.bidirectional)
+    main(
+        yaml_path=yaml_path, test_case=args.test_case, bidirectional=args.bidirectional
+    )
