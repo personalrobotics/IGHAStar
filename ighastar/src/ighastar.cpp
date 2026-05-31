@@ -492,14 +492,10 @@ public:
            !unexpanded_stash.empty()) {
       std::shared_ptr<Node> p = unexpanded_stash.front();
       unexpanded_stash.pop_front();
-      if (p == v) {
-        continue; // v is already handled above
-      }
-      if (p->preexpanded) {
-        continue; // already expanded (e.g. popped/expanded earlier)
-      }
-      if (p->f >= Omega) {
-        continue; // no longer promising; would be pruned anyway
+      // Skip: v (already handled above), already-expanded vertices, and
+      // vertices no longer promising (would be pruned anyway).
+      if (p == v || p->preexpanded || p->f >= Omega) {
+        continue;
       }
       preempt_nodes.push_back(p);
       batch.push_back(p);
@@ -1378,8 +1374,13 @@ public:
         if (debug) {
           log_stream << "generate successors" << std::endl;
         }
+        // When preemptive expansion is enabled, this also opportunistically
+        // expands stash vertices for this search direction in the same GPU
+        // launch (each direction has its own env/stream and stash).
         std::vector<std::shared_ptr<Node>> neighbors =
-            search->env->Succ(v, goal_node);
+            search->preemptive_enabled
+                ? search->expand_with_preemption(v, goal_node)
+                : search->env->Succ(v, goal_node);
         end_time = std::chrono::high_resolution_clock::now();
         successor_time +=
             std::chrono::duration<float, std::micro>(end_time - start_time)
@@ -1412,6 +1413,11 @@ public:
               neighbor->active = false;
               search->inactive_Q_v.insert(neighbor);
               search->inactive_Q_v_hash.insert(neighbor->hash);
+            }
+            if (search->preemptive_enabled) {
+              // Newly discovered vertex becomes eligible for preemptive
+              // expansion in a later iteration of this search direction.
+              search->unexpanded_stash.push_back(neighbor);
             }
             if (debug) {
               log_stream << "inserted node into Q_v and updated G" << std::endl;
@@ -1766,6 +1772,12 @@ public:
 
   float get_best_cost() { return shared_Omega.load(); }
 
+  // Total vertices expanded preemptively across both search directions.
+  long get_preemptive_expansions() {
+    return forward_search->preemptive_expansions +
+           backward_search->preemptive_expansions;
+  }
+
   // get the profiler info, similar to IGHAStar but aggregated from both
   // searches
   std::tuple<float, float, float, float, int, int, int, int, std::vector<int>,
@@ -1810,5 +1822,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("get_best_path", &BiIGHAStar::get_best_path)
       .def("get_total_expansions", &BiIGHAStar::get_total_expansions)
       .def("get_best_cost", &BiIGHAStar::get_best_cost)
-      .def("get_profiler_info", &BiIGHAStar::get_profiler_info);
+      .def("get_profiler_info", &BiIGHAStar::get_profiler_info)
+      .def("get_preemptive_expansions",
+           &BiIGHAStar::get_preemptive_expansions);
 }
