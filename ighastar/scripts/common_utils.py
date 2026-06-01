@@ -59,21 +59,6 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
     # Check CUDA availability
     cuda_available = torch.cuda.is_available()
 
-    if not cuda_available:
-        print("CUDA not available, using CPU versions")
-        env_macro = {
-            "simple": "-DUSE_SIMPLE_ENV",
-            "kinematic": "-DUSE_KINEMATIC_CPU_ENV",
-            "kinodynamic": "-DUSE_KINODYNAMIC_CPU_ENV",
-        }[env_name]
-    else:
-        print("CUDA available, using GPU versions")
-        env_macro = {
-            "simple": "-DUSE_SIMPLE_ENV",
-            "kinematic": "-DUSE_KINEMATIC_ENV",
-            "kinodynamic": "-DUSE_KINODYNAMIC_ENV",
-        }[env_name]
-
     cpp_path = BASE_DIR / "src" / "ighastar.cpp"
     env_include_path = BASE_DIR / "src" / "Environments" / "include"
     utils_path = BASE_DIR / "src" / "utils"
@@ -90,6 +75,53 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             str(src_path),
             boost_include,
         ]
+
+    # Generic, OMPL-style environment: header-only, dims fixed at compile time
+    # via -DN_DIMS / -DN_CONT / -DHASH_DIMS read from the config. The user's
+    # dynamics/cost/validity/heuristic/goal_test/sample_controls callables are
+    # passed through the `configs` dict to the Environment constructor.
+    if env_name == "generic":
+        info = configs["experiment_info_default"]
+        state_dim = int(info["state_dim"])
+        control_dim = int(info["control_dim"])
+        hash_dims = int(info.get("hash_dims", state_dim))
+        extra_cflags = [
+            "-std=c++17",
+            "-O3",
+            # Silence benign pybind visibility warnings from py::function members.
+            "-Wno-attributes",
+            "-DUSE_GENERIC_ENV",
+            f"-DN_DIMS={state_dim}",
+            f"-DN_CONT={control_dim}",
+            f"-DHASH_DIMS={hash_dims}",
+        ]
+        # Distinct module name per (state_dim, control_dim, hash_dims) so builds
+        # with different dimensions do not collide in the torch extension cache.
+        kernel = load(
+            name=f"ighastar_generic_{state_dim}_{control_dim}_{hash_dims}",
+            sources=[str(cpp_path)],
+            extra_include_paths=extra_includes,
+            extra_cflags=extra_cflags,
+            verbose=True,
+        )
+        if bidirectional:
+            return kernel.BiIGHAStar(configs, False)
+        return kernel.IGHAStar(configs, False)
+
+    if not cuda_available:
+        print("CUDA not available, using CPU versions")
+        env_macro = {
+            "simple": "-DUSE_SIMPLE_ENV",
+            "kinematic": "-DUSE_KINEMATIC_CPU_ENV",
+            "kinodynamic": "-DUSE_KINODYNAMIC_CPU_ENV",
+        }[env_name]
+    else:
+        print("CUDA available, using GPU versions")
+        env_macro = {
+            "simple": "-DUSE_SIMPLE_ENV",
+            "kinematic": "-DUSE_KINEMATIC_ENV",
+            "kinodynamic": "-DUSE_KINODYNAMIC_ENV",
+        }[env_name]
 
     if env_name != "simple":
         if cuda_available:
