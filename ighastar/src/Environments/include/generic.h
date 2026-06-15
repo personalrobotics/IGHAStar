@@ -64,6 +64,7 @@ public:
   // already been computed (and cached) before it was popped from Q_v.
   bool preexpanded = false;
   std::vector<std::shared_ptr<Node>> cached_succ;
+  float control[n_cont] = {};
   // Constructor
   Node(const float *pose_in, const float *intermediate_poses_,
        std::shared_ptr<Node> parent_in, float g_in, const float *resolution_,
@@ -372,6 +373,7 @@ public:
             new_pose, roll, nodes[i], nodes[i]->g + costp[row], resolution,
             tolerance, max_level, division_factor, rollout_T,
             local_controllability_radius, time_direction);
+        memcpy(neighbor->control, cp + k * n_cont, n_cont * sizeof(float));
         neighbor->f = neighbor->g + hp[row];
         results[i].push_back(neighbor);
       }
@@ -432,5 +434,37 @@ public:
       a[i][n_dims] = extended_path[i].g;
     }
     return path_tensor;
+  }
+
+  torch::Tensor convert_node_list_to_controls_tensor(
+      std::vector<std::shared_ptr<Node>> node_list) {
+    int n = 0;
+    for (size_t i = 0; i < node_list.size(); i++) {
+      std::shared_ptr<Node> node = node_list[i];
+      if (node->parent == nullptr || node->intermediate_poses == nullptr) {
+        continue;
+      }
+      n += timesteps;
+    }
+    auto controls_tensor =
+        torch::zeros({n, n_cont}, torch::TensorOptions().dtype(torch::kFloat32));
+    if (n == 0) {
+      return controls_tensor;
+    }
+    auto a = controls_tensor.accessor<float, 2>();
+    int r = 0;
+    for (size_t i = 0; i < node_list.size(); i++) {
+      std::shared_ptr<Node> node = node_list[i];
+      if (node->parent == nullptr || node->intermediate_poses == nullptr) {
+        continue;
+      }
+      for (int j = 0; j < timesteps; j++) {
+        for (int d = 0; d < n_cont; d++) {
+          a[r][d] = node->control[d];
+        }
+        r++;
+      }
+    }
+    return controls_tensor;
   }
 };

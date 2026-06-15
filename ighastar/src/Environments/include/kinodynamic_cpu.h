@@ -55,6 +55,7 @@ public:
   // already been computed (and cached) before it was popped from Q_v.
   bool preexpanded = false;
   std::vector<std::shared_ptr<Node>> cached_succ;
+  float control[n_cont] = {};
 
   // Constructor
   Node(const float *pose_in, const float *intermediate_poses_,
@@ -400,6 +401,7 @@ public:
             new_pose, new_intermediate_pose, node, node->g + cost[i],
             resolution, tolerance, max_level, division_factor, timesteps,
             local_controllability_radius, time_direction);
+        memcpy(neighbor->control, &controls[i * n_cont], n_cont * sizeof(float));
         f = neighbor->g + heuristic(neighbor->pose, goal->pose);
         neighbor->f = f;
         neighbors.push_back(neighbor);
@@ -472,5 +474,34 @@ public:
     }
 
     return path_tensor;
+  }
+
+  torch::Tensor convert_node_list_to_controls_tensor(
+      std::vector<std::shared_ptr<Node>> node_list) {
+    if (node_list.empty()) {
+      return torch::zeros({0, n_cont},
+                          torch::TensorOptions().dtype(torch::kFloat32));
+    }
+    int n = 0;
+    for (size_t i = 0; i < node_list.size(); i++) {
+      if (node_list[i]->parent != nullptr) {
+        n += timesteps;
+      }
+    }
+    auto controls_tensor =
+        torch::zeros({n, n_cont}, torch::TensorOptions().dtype(torch::kFloat32));
+    int r = 0;
+    for (size_t i = 0; i < node_list.size(); i++) {
+      if (node_list[i]->parent == nullptr) {
+        continue;
+      }
+      for (int j = 0; j < timesteps; j++) {
+        for (int d = 0; d < n_cont; d++) {
+          controls_tensor[r][d] = node_list[i]->control[d];
+        }
+        r++;
+      }
+    }
+    return controls_tensor;
   }
 };

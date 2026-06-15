@@ -701,6 +701,11 @@ public:
     return path_tensor;
   }
 
+  std::tuple<torch::Tensor, torch::Tensor> get_best_path_with_controls() {
+    return {env->convert_node_list_to_path_tensor(best_path),
+            env->convert_node_list_to_controls_tensor(best_path)};
+  }
+
   // get the profiler info, I want to get the averages for timing, Q_v size, and
   // number of switches:
   std::tuple<float, float, float, float, int, int, int, int, std::vector<int>,
@@ -1761,6 +1766,19 @@ public:
     return path;
   }
 
+  std::tuple<torch::Tensor, torch::Tensor> get_best_path_with_controls() {
+    if (shared_Omega.load() > 1000.0f) {
+      return {torch::zeros({0, n_dims + 1},
+                           torch::TensorOptions().dtype(torch::kFloat32)),
+              torch::zeros({0, n_cont},
+                           torch::TensorOptions().dtype(torch::kFloat32))};
+    }
+    auto &path_nodes = best_path_list[best_path_list.size() - 1];
+    return {forward_search->env->convert_node_list_to_path_tensor(path_nodes),
+            forward_search->env->convert_node_list_to_controls_tensor(
+                path_nodes)};
+  }
+
   std::vector<torch::Tensor> get_path_list() {
     std::vector<torch::Tensor> path_list;
     for (auto &path : best_path_list) {
@@ -1812,6 +1830,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("search", &IGHAStar::search_adapter)
       .def("get_path_list", &IGHAStar::get_path_list)
       .def("get_best_path", &IGHAStar::get_best_path)
+      .def("get_best_path_with_controls", &IGHAStar::get_best_path_with_controls)
       .def("get_profiler_info", &IGHAStar::get_profiler_info)
       .def("get_preemptive_expansions",
            &IGHAStar::get_preemptive_expansions);
@@ -1822,6 +1841,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("search", &BiIGHAStar::search_adapter)
       .def("get_path_list", &BiIGHAStar::get_path_list)
       .def("get_best_path", &BiIGHAStar::get_best_path)
+      .def("get_best_path_with_controls",
+           &BiIGHAStar::get_best_path_with_controls)
       .def("get_total_expansions", &BiIGHAStar::get_total_expansions)
       .def("get_best_cost", &BiIGHAStar::get_best_cost)
       .def("get_profiler_info", &BiIGHAStar::get_profiler_info)

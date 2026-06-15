@@ -54,6 +54,7 @@ public:
   // already been computed (and cached) before it was popped from Q_v.
   bool preexpanded = false;
   std::vector<std::shared_ptr<Node>> cached_succ;
+  float control[n_cont] = {};
   // Constructor
   Node(const float *pose_in, const float *intermediate_poses_,
        std::shared_ptr<Node> parent_in, float g_in, const float *resolution_,
@@ -138,6 +139,7 @@ class Environment {
   float *d_intermediate_batched = nullptr;
   bool *d_valid_batched = nullptr;
   int batch_capacity = 0;
+  std::vector<float> h_controls;
 
   // Per-instance CUDA stream (allows parallel kernel execution)
   cudaStream_t cuda_stream;
@@ -265,12 +267,12 @@ public:
     n_succ = int(steering_list.size()) * int(throttle_list.size());
     float step_size = info["step_size"].cast<float>();
 
-    float controls[n_succ * n_cont];
+    h_controls.resize(n_succ * n_cont);
     int idx = 0;
     for (int i = 0; i < throttle_list.size(); ++i) {
       for (int j = 0; j < steering_list.size(); ++j) {
-        controls[idx * n_cont] = tanf(steering_list[j] / 57.3) / (car_l2 * 2);
-        controls[idx * n_cont + 1] = throttle_list[i] * step_size;
+        h_controls[idx * n_cont] = tanf(steering_list[j] / 57.3) / (car_l2 * 2);
+        h_controls[idx * n_cont + 1] = throttle_list[i] * step_size;
         ++idx;
       }
     }
@@ -303,7 +305,7 @@ public:
       std::cerr << "CUDA error allocating d_cost_instance: "
                 << cudaGetErrorString(err) << std::endl;
     }
-    err = cudaMemcpy(d_controls_instance, controls,
+    err = cudaMemcpy(d_controls_instance, h_controls.data(),
                      sizeof(float) * n_succ * n_cont, cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
       std::cerr << "CUDA error copying controls: " << cudaGetErrorString(err)
@@ -671,6 +673,8 @@ public:
             new_pose, new_intermediate_pose, node, node->g + cost[i],
             resolution, tolerance, max_level, division_factor, timesteps,
             local_controllability_radius, time_direction);
+        memcpy(neighbor->control, &h_controls[i * n_cont],
+               n_cont * sizeof(float));
         delete[] new_intermediate_pose;
         f = neighbor->g + heuristic(neighbor->pose, goal->pose);
         neighbor->f = f;
@@ -789,6 +793,8 @@ public:
               nodes[i]->g + cost[row], resolution, tolerance, max_level,
               division_factor, timesteps, local_controllability_radius,
               time_direction);
+          memcpy(neighbor->control, &h_controls[s * n_cont],
+                 n_cont * sizeof(float));
           delete[] new_intermediate_pose;
           neighbor->f = neighbor->g + heuristic(neighbor->pose, goal->pose);
           results[i].push_back(neighbor);
@@ -846,5 +852,34 @@ public:
     }
 
     return path_tensor;
+  }
+
+  torch::Tensor convert_node_list_to_controls_tensor(
+      std::vector<std::shared_ptr<Node>> node_list) {
+    if (node_list.empty()) {
+      return torch::zeros({0, n_cont},
+                          torch::TensorOptions().dtype(torch::kFloat32));
+    }
+    int n = 0;
+    for (size_t i = 0; i < node_list.size(); i++) {
+      if (node_list[i]->parent != nullptr) {
+        n += timesteps;
+      }
+    }
+    auto controls_tensor =
+        torch::zeros({n, n_cont}, torch::TensorOptions().dtype(torch::kFloat32));
+    int r = 0;
+    for (size_t i = 0; i < node_list.size(); i++) {
+      if (node_list[i]->parent == nullptr) {
+        continue;
+      }
+      for (int j = 0; j < timesteps; j++) {
+        for (int d = 0; d < n_cont; d++) {
+          controls_tensor[r][d] = node_list[i]->control[d];
+        }
+        r++;
+      }
+    }
+    return controls_tensor;
   }
 };

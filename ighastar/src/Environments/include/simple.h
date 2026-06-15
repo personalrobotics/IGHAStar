@@ -5,6 +5,7 @@
 using namespace std;
 
 constexpr int n_dims = 2;
+constexpr int n_cont = 1;
 
 size_t calc_hash(float *pose, const float *resolution) {
   std::size_t hash_val = 0;
@@ -33,6 +34,7 @@ public:
   // already been computed (and cached) before it was popped from Q_v.
   bool preexpanded = false;
   std::vector<std::shared_ptr<Node>> cached_succ;
+  float control[n_cont] = {};
 
   // Constructor matching kinodynamic pattern (intermediate_poses ignored for
   // simple env)
@@ -265,6 +267,7 @@ public:
             new_pose, nullptr, node, node->g + step_size, resolution, tolerance,
             max_level, division_factor, timesteps, local_controllability_radius,
             time_direction);
+        neighbor->control[0] = i * (2 * M_PI / n_succ);
         f = neighbor->g + heuristic(neighbor->pose, goal->pose);
         neighbor->f = f;
         neighbors.push_back(neighbor);
@@ -308,5 +311,23 @@ public:
       path_tensor[i][n_dims] = node_list[i]->g * node_list[i]->time_direction;
     }
     return path_tensor;
+  }
+
+  torch::Tensor convert_node_list_to_controls_tensor(
+      std::vector<std::shared_ptr<Node>> node_list) {
+    if (node_list.empty()) {
+      return torch::zeros({0, n_cont},
+                          torch::TensorOptions().dtype(torch::kFloat32));
+    }
+    int path_length = node_list.size();
+    auto controls_tensor =
+        torch::zeros({path_length, n_cont},
+                     torch::TensorOptions().dtype(torch::kFloat32));
+    for (int i = 0; i < path_length; i++) {
+      for (int d = 0; d < n_cont; d++) {
+        controls_tensor[i][d] = node_list[i]->control[d];
+      }
+    }
+    return controls_tensor;
   }
 };

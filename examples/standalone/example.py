@@ -11,7 +11,10 @@ from typing import Optional
 
 
 def main(
-    yaml_path: str = "", test_case: Optional[str] = None, bidirectional: bool = False
+    yaml_path: str = "",
+    test_case: Optional[str] = None,
+    bidirectional: bool = False,
+    print_controls: bool = False,
 ) -> None:
     assert yaml_path, "Please provide a valid YAML configuration file path."
     print("Loading config from:", yaml_path)
@@ -131,7 +134,14 @@ def main(
     if success:
         print("✓ Optimal path found!")
         print("Getting best path...")
-        path = planner.get_best_path().numpy()
+        if print_controls:
+            path, controls = planner.get_best_path_with_controls()
+            path = path.numpy()
+            controls = controls.numpy()
+            print(f"Controls ({controls.shape[0]} rows, {controls.shape[1]} dims):")
+            print(controls)
+        else:
+            path = planner.get_best_path().numpy()
 
         # Create visualization
         show_map(plt, bitmap, node_type)
@@ -260,9 +270,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Use bidirectional BiIGHAStar planner instead of unidirectional IGHAStar",
     )
+    parser.add_argument(
+        "--print-controls",
+        action="store_true",
+        help="Print the control sequence alongside the path",
+    )
     # we assume the config is from examples/standalone folder:
     args = parser.parse_args()
     yaml_path = os.path.join(BASE_DIR.parent, "examples", "standalone", args.config)
     main(
-        yaml_path=yaml_path, test_case=args.test_case, bidirectional=args.bidirectional
+        yaml_path=yaml_path,
+        test_case=args.test_case,
+        bidirectional=args.bidirectional,
+        print_controls=args.print_controls,
     )
