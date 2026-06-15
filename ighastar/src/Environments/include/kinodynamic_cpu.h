@@ -55,14 +55,18 @@ public:
   // already been computed (and cached) before it was popped from Q_v.
   bool preexpanded = false;
   std::vector<std::shared_ptr<Node>> cached_succ;
+  float control[n_cont] = {};
+  float *intermediate_controls = nullptr;
 
   // Constructor
   Node(const float *pose_in, const float *intermediate_poses_,
        std::shared_ptr<Node> parent_in, float g_in, const float *resolution_,
        float *tolerance, int max_level, float division_factor, int timesteps,
-       const float *LCR_, int time_direction_ = 1)
-      : intermediate_poses(nullptr), g(g_in), f(0), parent(parent_in),
-        active(true), rank(0), level(0), time_direction(time_direction_) {
+       const float *LCR_, int time_direction_ = 1,
+       const float *intermediate_controls_ = nullptr)
+      : intermediate_poses(nullptr), intermediate_controls(nullptr), g(g_in),
+        f(0), parent(parent_in), active(true), rank(0), level(0),
+        time_direction(time_direction_) {
     for (int i = 0; i < n_dims; i++) {
       pose[i] = pose_in[i];
     }
@@ -80,6 +84,12 @@ public:
         memcpy(intermediate_poses, intermediate_poses_,
                timesteps * n_dims * sizeof(float));
       }
+    }
+    if (parent_in != nullptr && intermediate_controls_ != nullptr) {
+      intermediate_controls = new float[timesteps * n_cont];
+      memcpy(intermediate_controls, intermediate_controls_,
+             timesteps * n_cont * sizeof(float));
+      memcpy(control, intermediate_controls_, n_cont * sizeof(float));
     }
     hash = calc_hash(pose, tolerance);
     // Compute LCR_index using local_controllability_radius
@@ -100,6 +110,9 @@ public:
   ~Node() {
     if (intermediate_poses) {
       delete[] intermediate_poses;
+    }
+    if (intermediate_controls) {
+      delete[] intermediate_controls;
     }
   }
 };
@@ -223,12 +236,17 @@ public:
     n_succ = int(steering_list.size()) * int(throttle_list.size());
     float step_size = info["step_size"].cast<float>();
 
-    controls = new float[n_succ * n_cont];
+    controls = new float[n_succ * timesteps * n_cont];
     int idx = 0;
     for (size_t i = 0; i < throttle_list.size(); ++i) {
       for (size_t j = 0; j < steering_list.size(); ++j) {
-        controls[idx * n_cont] = tanf(steering_list[j] / 57.3) / (car_l2 * 2);
-        controls[idx * n_cont + 1] = throttle_list[i] * step_size;
+        float edge_control[n_cont];
+        edge_control[0] = tanf(steering_list[j] / 57.3) / (car_l2 * 2);
+        edge_control[1] = throttle_list[i] * step_size;
+        for (int t = 0; t < timesteps; t++) {
+          memcpy(&controls[(idx * timesteps + t) * n_cont], edge_control,
+                 n_cont * sizeof(float));
+        }
         ++idx;
       }
     }
@@ -396,10 +414,17 @@ public:
         memcpy(new_intermediate_pose,
                &intermediate_states[i * timesteps * n_dims],
                timesteps * n_dims * sizeof(float));
+        float *controls_seq = new float[timesteps * n_cont];
+        for (int t = 0; t < timesteps; t++) {
+          memcpy(controls_seq + t * n_cont,
+                 &controls[(i * timesteps + t) * n_cont], n_cont * sizeof(float));
+        }
         neighbor = std::make_shared<Node>(
             new_pose, new_intermediate_pose, node, node->g + cost[i],
             resolution, tolerance, max_level, division_factor, timesteps,
-            local_controllability_radius, time_direction);
+            local_controllability_radius, time_direction, controls_seq);
+        delete[] new_intermediate_pose;
+        delete[] controls_seq;
         f = neighbor->g + heuristic(neighbor->pose, goal->pose);
         neighbor->f = f;
         neighbors.push_back(neighbor);
@@ -472,5 +497,39 @@ public:
     }
 
     return path_tensor;
+  }
+
+  torch::Tensor convert_node_list_to_controls_tensor(
+      std::vector<std::shared_ptr<Node>> node_list) {
+    if (node_list.empty()) {
+      return torch::zeros({0, n_cont},
+                          torch::TensorOptions().dtype(torch::kFloat32));
+    }
+    int n = 0;
+    for (size_t i = 0; i < node_list.size(); i++) {
+      if (node_list[i]->parent != nullptr) {
+        n += timesteps;
+      }
+    }
+    auto controls_tensor =
+        torch::zeros({n, n_cont}, torch::TensorOptions().dtype(torch::kFloat32));
+    int r = 0;
+    for (size_t i = 0; i < node_list.size(); i++) {
+      if (node_list[i]->parent == nullptr) {
+        continue;
+      }
+      for (int j = 0; j < timesteps; j++) {
+        for (int d = 0; d < n_cont; d++) {
+          if (node_list[i]->intermediate_controls != nullptr) {
+            controls_tensor[r][d] =
+                node_list[i]->intermediate_controls[j * n_cont + d];
+          } else {
+            controls_tensor[r][d] = node_list[i]->control[d];
+          }
+        }
+        r++;
+      }
+    }
+    return controls_tensor;
   }
 };
