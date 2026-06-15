@@ -145,18 +145,14 @@ __global__ void kinodynamic_kernel(float *state, float *intermediate_states,
   float res_inv = 1.0f / BEVmap_res;
 
   int state_base = k * NX;
-  int control_base = k * NC;
   int intermediate_index;
-
-  float curvature = controls[control_base + st_index];
-  float ax = controls[control_base + th_index];
 
   float x = state[state_base + x_index];
   float y = state[state_base + y_index];
   float yaw = state[state_base + yaw_index];
   float vx = state[state_base + vx_index];
   float vz = 0.0f, vy = 0.0f;
-  float wz = curvature * vx;
+  float wz = 0.0f;
 
   // Compute initial footprint & orientation
   float cy = cosf(yaw), sy = sinf(yaw);
@@ -170,6 +166,11 @@ __global__ void kinodynamic_kernel(float *state, float *intermediate_states,
   valid[k] = true;
 
   for (int t = 1; t <= timesteps; t++) {
+    int control_base = k * timesteps * NC + (t - 1) * NC;
+    float curvature = controls[control_base + st_index];
+    float ax = controls[control_base + th_index];
+    wz = curvature * vx;
+
     cy = cosf(yaw);
     sy = sinf(yaw);
     get_footprint_z(fl, fr, bl, br, z, x, y, cy, sy, BEVmap_height,
@@ -238,6 +239,7 @@ void kinodynamic_launcher(
                   stream);
   cudaMemcpyAsync(d_cost, cost, n_succ * sizeof(float), cudaMemcpyHostToDevice,
                   stream);
+  // controls layout: [rollout][timestep][n_cont] — caller must upload before launch
 
   kinodynamic_kernel<<<blocks, threads, 0, stream>>>(
       d_state, d_intermediate_states, d_controls, heightmap, costmap, d_valid,

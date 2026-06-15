@@ -118,16 +118,13 @@ __global__ void kinematic_kernel(float *state, float *intermediate_states,
   float res_inv = 1.0f / BEVmap_res;
 
   int state_base = k * NX;
-  int control_base = k * NC;
   int intermediate_index;
-
-  float curvature = controls[control_base + st_index];
-  float vx = controls[control_base + th_index];
 
   float x = state[state_base + x_index];
   float y = state[state_base + y_index];
   float yaw = state[state_base + yaw_index];
-  float wz = curvature * vx;
+  float vx = state[state_base + vx_index];
+  float wz = 0.0f;
   float vy = 0, vz = 0;
 
   // Compute initial footprint & orientation
@@ -137,6 +134,11 @@ __global__ void kinematic_kernel(float *state, float *intermediate_states,
   valid[k] = true;
 
   for (int t = 1; t <= timesteps; t++) {
+    int control_base = k * timesteps * NC + (t - 1) * NC;
+    float curvature = controls[control_base + st_index];
+    vx = controls[control_base + th_index];
+    wz = curvature * vx;
+
     cy = cosf(yaw);
     sy = sinf(yaw);
     get_footprint_z(fl, fr, bl, br, z, x, y, cy, sy, BEVmap_height,

@@ -55,13 +55,16 @@ public:
   bool preexpanded = false;
   std::vector<std::shared_ptr<Node>> cached_succ;
   float control[n_cont] = {};
+  float *intermediate_controls = nullptr;
   // Constructor
   Node(const float *pose_in, const float *intermediate_poses_,
        std::shared_ptr<Node> parent_in, float g_in, const float *resolution_,
        float *tolerance, int max_level, float division_factor, int timesteps,
-       const float *LCR_, int time_direction_ = 1)
+       const float *LCR_, int time_direction_ = 1,
+       const float *intermediate_controls_ = nullptr)
       : g(g_in), f(0), parent(parent_in), active(true), rank(0), level(0),
-        intermediate_poses(nullptr), time_direction(time_direction_) {
+        intermediate_poses(nullptr), intermediate_controls(nullptr),
+        time_direction(time_direction_) {
     for (int i = 0; i < n_dims; i++) {
       pose[i] = pose_in[i];
     }
@@ -81,6 +84,12 @@ public:
         memcpy(intermediate_poses, intermediate_poses_,
                timesteps * n_dims * sizeof(float));
       }
+    }
+    if (parent_in != nullptr && intermediate_controls_ != nullptr) {
+      intermediate_controls = new float[timesteps * n_cont];
+      memcpy(intermediate_controls, intermediate_controls_,
+             timesteps * n_cont * sizeof(float));
+      memcpy(control, intermediate_controls_, n_cont * sizeof(float));
     }
     // Compute LCR_index using local_controllability_radius from config
     LCR_index = calc_hash(pose, LCR_);
@@ -102,6 +111,9 @@ public:
   ~Node() {
     if (intermediate_poses) {
       delete[] intermediate_poses;
+    }
+    if (intermediate_controls) {
+      delete[] intermediate_controls;
     }
   }
 };
@@ -279,7 +291,8 @@ public:
 
     // Allocate per-instance CUDA device memory (replaces global cuda_setup)
     cudaError_t err;
-    err = cudaMalloc(&d_controls_instance, sizeof(float) * n_succ * n_cont);
+    err = cudaMalloc(&d_controls_instance,
+                     sizeof(float) * n_succ * timesteps * n_cont);
     if (err != cudaSuccess) {
       std::cerr << "CUDA error allocating d_controls_instance: "
                 << cudaGetErrorString(err) << std::endl;
@@ -305,8 +318,16 @@ public:
       std::cerr << "CUDA error allocating d_cost_instance: "
                 << cudaGetErrorString(err) << std::endl;
     }
-    err = cudaMemcpy(d_controls_instance, h_controls.data(),
-                     sizeof(float) * n_succ * n_cont, cudaMemcpyHostToDevice);
+    std::vector<float> controls_tiled(n_succ * timesteps * n_cont);
+    for (int i = 0; i < n_succ; i++) {
+      for (int t = 0; t < timesteps; t++) {
+        memcpy(&controls_tiled[(i * timesteps + t) * n_cont],
+               &h_controls[i * n_cont], n_cont * sizeof(float));
+      }
+    }
+    err = cudaMemcpy(d_controls_instance, controls_tiled.data(),
+                     sizeof(float) * n_succ * timesteps * n_cont,
+                     cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
       std::cerr << "CUDA error copying controls: " << cudaGetErrorString(err)
                 << std::endl;
@@ -669,13 +690,17 @@ public:
         memcpy(new_intermediate_pose,
                &intermediate_states[i * timesteps * n_dims],
                timesteps * n_dims * sizeof(float));
+        float *controls_seq = new float[timesteps * n_cont];
+        for (int t = 0; t < timesteps; t++) {
+          memcpy(controls_seq + t * n_cont, &h_controls[i * n_cont],
+                 n_cont * sizeof(float));
+        }
         neighbor = std::make_shared<Node>(
             new_pose, new_intermediate_pose, node, node->g + cost[i],
             resolution, tolerance, max_level, division_factor, timesteps,
-            local_controllability_radius, time_direction);
-        memcpy(neighbor->control, &h_controls[i * n_cont],
-               n_cont * sizeof(float));
+            local_controllability_radius, time_direction, controls_seq);
         delete[] new_intermediate_pose;
+        delete[] controls_seq;
         f = neighbor->g + heuristic(neighbor->pose, goal->pose);
         neighbor->f = f;
         neighbors.push_back(neighbor);
@@ -715,19 +740,14 @@ public:
     }
 
     int total = max_batch * n_succ;
-    cudaMalloc(&d_controls_batched, sizeof(float) * total * n_cont);
+    cudaMalloc(&d_controls_batched,
+               sizeof(float) * total * timesteps * n_cont);
     cudaMalloc(&d_state_batched, sizeof(float) * total * n_dims);
     cudaMalloc(&d_intermediate_batched,
                sizeof(float) * total * timesteps * n_dims);
     cudaMalloc(&d_valid_batched, sizeof(bool) * total);
     cudaMalloc(&d_cost_batched, sizeof(float) * total);
 
-    // Tile the static control set (already on the device in
-    // d_controls_instance) max_batch times so rollout k reads controls[k*NC].
-    for (int b = 0; b < max_batch; b++) {
-      cudaMemcpy(d_controls_batched + b * n_succ * n_cont, d_controls_instance,
-                 sizeof(float) * n_succ * n_cont, cudaMemcpyDeviceToDevice);
-    }
     batch_capacity = max_batch;
   }
 
@@ -767,6 +787,21 @@ public:
       }
     }
 
+    std::vector<float> controls_batched(static_cast<size_t>(total) * timesteps *
+                                        n_cont);
+    for (int i = 0; i < M; i++) {
+      for (int s = 0; s < n_succ; s++) {
+        int rollout = i * n_succ + s;
+        for (int t = 0; t < timesteps; t++) {
+          memcpy(&controls_batched[(rollout * timesteps + t) * n_cont],
+                 &h_controls[s * n_cont], n_cont * sizeof(float));
+        }
+      }
+    }
+    cudaMemcpyAsync(d_controls_batched, controls_batched.data(),
+                    sizeof(float) * total * timesteps * n_cont,
+                    cudaMemcpyHostToDevice, cuda_stream);
+
     int batched_blocks = (total + threads - 1) / threads;
     kinodynamic_launcher(
         state.data(), intermediate_states.data(), d_heightmap, d_costmap, valid,
@@ -788,14 +823,18 @@ public:
                  &intermediate_states[static_cast<size_t>(row) * timesteps *
                                       n_dims],
                  timesteps * n_dims * sizeof(float));
+          float *controls_seq = new float[timesteps * n_cont];
+          for (int t = 0; t < timesteps; t++) {
+            memcpy(controls_seq + t * n_cont, &h_controls[s * n_cont],
+                   n_cont * sizeof(float));
+          }
           auto neighbor = std::make_shared<Node>(
               new_pose, new_intermediate_pose, nodes[i],
               nodes[i]->g + cost[row], resolution, tolerance, max_level,
               division_factor, timesteps, local_controllability_radius,
-              time_direction);
-          memcpy(neighbor->control, &h_controls[s * n_cont],
-                 n_cont * sizeof(float));
+              time_direction, controls_seq);
           delete[] new_intermediate_pose;
+          delete[] controls_seq;
           neighbor->f = neighbor->g + heuristic(neighbor->pose, goal->pose);
           results[i].push_back(neighbor);
         }
@@ -875,11 +914,46 @@ public:
       }
       for (int j = 0; j < timesteps; j++) {
         for (int d = 0; d < n_cont; d++) {
-          controls_tensor[r][d] = node_list[i]->control[d];
+          if (node_list[i]->intermediate_controls != nullptr) {
+            controls_tensor[r][d] =
+                node_list[i]->intermediate_controls[j * n_cont + d];
+          } else {
+            controls_tensor[r][d] = node_list[i]->control[d];
+          }
         }
         r++;
       }
     }
     return controls_tensor;
+  }
+
+  // Single rollout with a full per-step control sequence [timesteps, n_cont].
+  void rollout_control_sequence(float *state, float *intermediate_states,
+                                const float *controls_seq, bool *valid,
+                                float *cost) {
+    if (d_costmap == nullptr || d_heightmap == nullptr) {
+      std::cerr << "Error: CUDA memory not allocated. Call set_world() first."
+                << std::endl;
+      *valid = false;
+      *cost = 0.0f;
+      return;
+    }
+    float state_buf[n_dims];
+    memcpy(state_buf, state, n_dims * sizeof(float));
+    bool valid_buf = true;
+    float cost_buf = 0.0f;
+    cudaMemcpyAsync(d_controls_instance, controls_seq,
+                    sizeof(float) * timesteps * n_cont, cudaMemcpyHostToDevice,
+                    cuda_stream);
+    kinodynamic_launcher(
+        state_buf, intermediate_states, d_heightmap, d_costmap, &valid_buf,
+        &cost_buf, dt, timesteps, 1, n_dims, n_cont, map_size_px, map_res,
+        car_l2, car_w2, max_vel, min_vel, RI, max_vert_acc, max_theta,
+        gear_switch_time, patch_length_px, patch_width_px, 1, threads,
+        d_state_instance, d_intermediate_states_instance, d_controls_instance,
+        d_valid_instance, d_cost_instance, cuda_stream);
+    memcpy(state, state_buf, n_dims * sizeof(float));
+    *valid = valid_buf;
+    *cost = cost_buf;
   }
 };

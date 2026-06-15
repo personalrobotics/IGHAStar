@@ -35,15 +35,18 @@ public:
   bool preexpanded = false;
   std::vector<std::shared_ptr<Node>> cached_succ;
   float control[n_cont] = {};
+  float *intermediate_controls = nullptr;
 
   // Constructor matching kinodynamic pattern (intermediate_poses ignored for
   // simple env)
   Node(const float *pose_in, const float *intermediate_poses_,
        std::shared_ptr<Node> parent_in, float g_in, const float *resolution_,
        const float *tolerance, int max_level, float division_factor,
-       int timesteps, const float *LCR_, int time_direction_ = 1)
-      : intermediate_poses(nullptr), g(g_in), f(0), parent(parent_in),
-        active(true), rank(0), level(0), time_direction(time_direction_) {
+       int timesteps, const float *LCR_, int time_direction_ = 1,
+       const float *intermediate_controls_ = nullptr)
+      : intermediate_poses(nullptr), intermediate_controls(nullptr), g(g_in),
+        f(0), parent(parent_in), active(true), rank(0), level(0),
+        time_direction(time_direction_) {
     for (int i = 0; i < n_dims; i++) {
       pose[i] = pose_in[i];
     }
@@ -59,6 +62,18 @@ public:
       for (int j = 0; j < n_dims; j++) {
         resolution[j] = resolution[j] / division_factor;
       }
+    }
+    if (parent_in != nullptr && intermediate_controls_ != nullptr) {
+      intermediate_controls = new float[timesteps * n_cont];
+      memcpy(intermediate_controls, intermediate_controls_,
+             timesteps * n_cont * sizeof(float));
+      memcpy(control, intermediate_controls_, n_cont * sizeof(float));
+    }
+  }
+
+  ~Node() {
+    if (intermediate_controls) {
+      delete[] intermediate_controls;
     }
   }
 };
@@ -263,11 +278,16 @@ public:
         new_pose[0] = x;
         new_pose[1] = y;
 
+        float heading = i * (2 * M_PI / n_succ);
+        float *controls_seq = new float[timesteps * n_cont];
+        for (int t = 0; t < timesteps; t++) {
+          controls_seq[t * n_cont] = heading;
+        }
         neighbor = std::make_shared<Node>(
             new_pose, nullptr, node, node->g + step_size, resolution, tolerance,
             max_level, division_factor, timesteps, local_controllability_radius,
-            time_direction);
-        neighbor->control[0] = i * (2 * M_PI / n_succ);
+            time_direction, controls_seq);
+        delete[] controls_seq;
         f = neighbor->g + heuristic(neighbor->pose, goal->pose);
         neighbor->f = f;
         neighbors.push_back(neighbor);
@@ -325,7 +345,11 @@ public:
                      torch::TensorOptions().dtype(torch::kFloat32));
     for (int i = 0; i < path_length; i++) {
       for (int d = 0; d < n_cont; d++) {
-        controls_tensor[i][d] = node_list[i]->control[d];
+        if (node_list[i]->intermediate_controls != nullptr) {
+          controls_tensor[i][d] = node_list[i]->intermediate_controls[d];
+        } else {
+          controls_tensor[i][d] = node_list[i]->control[d];
+        }
       }
     }
     return controls_tensor;

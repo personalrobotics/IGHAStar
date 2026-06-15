@@ -65,13 +65,16 @@ public:
   bool preexpanded = false;
   std::vector<std::shared_ptr<Node>> cached_succ;
   float control[n_cont] = {};
+  float *intermediate_controls = nullptr;
   // Constructor
   Node(const float *pose_in, const float *intermediate_poses_,
        std::shared_ptr<Node> parent_in, float g_in, const float *resolution_,
        float *tolerance, int max_level, float division_factor, int timesteps,
-       const float *LCR_, int time_direction_ = 1)
-      : intermediate_poses(nullptr), g(g_in), f(0), parent(parent_in),
-        active(true), rank(0), level(0), time_direction(time_direction_) {
+       const float *LCR_, int time_direction_ = 1,
+       const float *intermediate_controls_ = nullptr)
+      : intermediate_poses(nullptr), intermediate_controls(nullptr), g(g_in),
+        f(0), parent(parent_in), active(true), rank(0), level(0),
+        time_direction(time_direction_) {
     for (int i = 0; i < n_dims; i++) {
       pose[i] = pose_in[i];
     }
@@ -92,6 +95,12 @@ public:
                timesteps * n_dims * sizeof(float));
       }
     }
+    if (parent_in != nullptr && intermediate_controls_ != nullptr) {
+      intermediate_controls = new float[timesteps * n_cont];
+      memcpy(intermediate_controls, intermediate_controls_,
+             timesteps * n_cont * sizeof(float));
+      memcpy(control, intermediate_controls_, n_cont * sizeof(float));
+    }
     // Compute LCR_index using local_controllability_radius from config
     LCR_index = calc_hash(pose, LCR_);
     hash = calc_hash(pose, tolerance);
@@ -111,6 +120,9 @@ public:
   ~Node() {
     if (intermediate_poses) {
       delete[] intermediate_poses;
+    }
+    if (intermediate_controls) {
+      delete[] intermediate_controls;
     }
   }
 };
@@ -369,11 +381,16 @@ public:
         // 2D case this is just the single final state.
         const float *roll =
             rollp + static_cast<size_t>(row) * rollout_T * n_dims;
+        float *controls_seq = new float[rollout_T * n_cont];
+        for (int t = 0; t < rollout_T; t++) {
+          memcpy(controls_seq + t * n_cont, cp + k * n_cont,
+                 n_cont * sizeof(float));
+        }
         auto neighbor = std::make_shared<Node>(
             new_pose, roll, nodes[i], nodes[i]->g + costp[row], resolution,
             tolerance, max_level, division_factor, rollout_T,
-            local_controllability_radius, time_direction);
-        memcpy(neighbor->control, cp + k * n_cont, n_cont * sizeof(float));
+            local_controllability_radius, time_direction, controls_seq);
+        delete[] controls_seq;
         neighbor->f = neighbor->g + hp[row];
         results[i].push_back(neighbor);
       }
@@ -460,7 +477,11 @@ public:
       }
       for (int j = 0; j < timesteps; j++) {
         for (int d = 0; d < n_cont; d++) {
-          a[r][d] = node->control[d];
+          if (node->intermediate_controls != nullptr) {
+            a[r][d] = node->intermediate_controls[j * n_cont + d];
+          } else {
+            a[r][d] = node->control[d];
+          }
         }
         r++;
       }
