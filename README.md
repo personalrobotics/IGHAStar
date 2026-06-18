@@ -6,15 +6,79 @@
 
 </div>
 
-**IGHA*** is an anytime kinodynamic tree-search planner that dynamically organizes vertex expansions without rigid grid-based pruning. **BiIGHA*** extends it with bidirectional search, often finding good solutions with far fewer expansions. The core is C++/CUDA ([ighastar/src/ighastar.cpp](ighastar/src/ighastar.cpp)), exposed to Python via PyTorch JIT compilation.
-
-For algorithm details, figures, and paper results, see the [project website](https://personalrobotics.github.io/IGHAStar/).
+<figure align="center">
+  <img src="Content/IGHAStar_main_fig.png" alt="IGHAStar Main Figure" width="1000"/>
+  <figcaption><b>Fig. 1:</b> The issue with Hybrid A* Search. Too coarse grid resolution risks failure (a), while too fine leads to excessive expansions and slow planning (e).</figcaption>
+</figure>
+<br>
+<br>
+We address the problem of efficiently organizing
+search over very large trees, which arises in many applications
+such as autonomous driving, aerial vehicles, and so on; here, we
+are motivated by off-road autonomy, where real-time planning is
+essential.
+Classical approaches use graphs of motion primitives
+and exploit dominance to mitigate the curse of dimensionality
+and prune expansions efficiently. However, for complex dynamics,
+repeatedly solving two-point boundary-value problems makes
+graph construction too slow for fast kinodynamic planning.
+Hybrid A* (HA*) addressed this challenge by searching over a
+tree of motion primitives and introducing approximate pruning
+using a grid-based dominance check.
+However, choosing the grid
+resolution is difficult: too coarse risks failure (Fig. 1(a)), while too fine
+leads to excessive expansions and slow planning (Fig. 1(e)).
+To overcome this, we propose Incremental Generalized Hybrid A* (IGHA*), an
+anytime tree-search framework that dynamically organizes vertex expansions
+without rigid pruning.
+IGHA* provably matches or outperforms HA*, and has been tested in both simulation (Fig. 2, left) and in the real world on a
+small scale off-road platform (Fig. 2, right). We also provide **BiIGHA***, a bidirectional variant that searches from both start and goal simultaneously, further reducing expansions in many scenarios.
 
 <p align="center">
-  <img src="Content/standalone/race-2_kinodynamic.png" alt="Kinodynamic planning example" width="500"/>
-  <br>
-  <em>Kinodynamic planning on off-road terrain (standalone example).</em>
+
+<table>
+  <tr>
+    <td><img src="Content/ighastar_sim.gif" alt="IGHAStar Simulation" width="470"/></td>
+    <td><img src="Content/ighastar_real.gif" alt="IGHAStar Real-World" width="470"/></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><b>Fig. 2:</b> IGHA* in simulation (left) and real-world testing on a small-scale off-road platform (right).</td>
+  </tr>
+</table>
+
 </p>
+Generally speaking, IGHA* will find better paths given the same compute budget,
+compared to a smart multi-resolution version of HA* (HA*M),
+which produces suboptimal (looping) paths, visible in the simulation comparison.<br><br>
+
+### Bidirectional IGHA* (BiIGHA*)
+<figure align="center">
+  <img src="Content/BiIGHAStar_main_fig.png" alt="BiIGHAStar Main Figure" width="1000"/>
+  <figcaption><b>Fig. 3:</b> Comparison of IGHA* (Uni) and BiIGHA* (Bi). At the base resolution, IGHA* fails (a), whereas BiIGHA*'s backward search succeeds (b). IGHA* must refine the resolution to obtain first a suboptimal (c) then optimal solution (e). In contrast, BiIGHA* recovers equivalent-cost solutions at lower resolutions via near-meets (d, f), using far fewer expansions.</figcaption>
+</figure>
+<br>
+<br>
+IGHA*'s key innovation is *freezing* vertices for later iterations rather than pruning them outright. However, these frozen vertices can temporarily hide solution-supporting vertices from the search. BiIGHA* extends IGHA* with bidirectional search to mitigate this effect. Beyond the classical benefit of reduced search depth, searching from both start and goal fundamentally reduces the impact of frozen vertices obscuring solutions (Fig. 4, Left). BiIGHA* preserves IGHA*'s guarantees on monotonic cost improvement and termination, while empirically requiring significantly fewer expansions across a range of planning problems.
+
+<p align="center">
+
+<table>
+  <tr>
+    <td><img src="Content/biigha_comparison_bench.gif" alt="BiIGHA* vs IGHA* Benchmark" width="470"/></td>
+    <td><img src="Content/biigha_comparison_sim.gif" alt="BiIGHA* vs IGHA* Simulation" width="470"/></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><b>Fig. 4:</b> (Left) 3-DoF benchmark showing how bidirectional search mitigates the frozen vertex barrier, (Right) BiIGHA* (top) vs IGHA* (bottom) in simulation.</td>
+  </tr>
+</table>
+
+</p>
+
+In practice this translates to the planner producing good solutions under tighter computational budgets, where unidirectional IGHA* may not find any solution at all (Fig. 4, right). The examples below run with far fewer expansions when you pass `--bidirectional`; the per-thread expansion limit is printed in green on the command line.
+
+The core is C++/CUDA ([ighastar/src/ighastar.cpp](ighastar/src/ighastar.cpp)), exposed to Python via [PyTorch C++/CUDA](https://docs.pytorch.org/tutorials/advanced/cpp_custom_ops.html#cpp-custom-ops-tutorial) JIT compilation. The first run compiles and caches the extension; CUDA is used when available, with CPU fallback otherwise.
+
+For extended algorithm discussion and additional figures, see the [project website](https://personalrobotics.github.io/IGHAStar/). For API, configuration, and integration guides, see [Documentation](#documentation) below.
 
 ## Quickstart
 
