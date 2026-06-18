@@ -1,5 +1,9 @@
 # Creating a Custom Environment for IGHAStar
 
+**Most users should start with the [generic environment](../../docs/generic_environment.md)** (Python callbacks, no new C++/CUDA). This document covers **hand-written C++ environments** for maximum performance with a fixed representation.
+
+See also [docs/extending.md](../../docs/extending.md) for choosing an integration path.
+
 ## Folder Structure
 
 ```

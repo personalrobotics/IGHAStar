@@ -1,5 +1,7 @@
 # IGHAStar ROS Example
 
+> **High-friction integration example.** Complete the standalone examples first ([docs/examples.md](../../docs/examples.md)).
+
 This folder contains a ROS-based example for the IGHA* path planner. The code here is really an example script to demonstrate how one would use the planner in the loop on their robot. 
 It demonstrates how to integrate the IGHA* planner with ROS topics for maps, odometry, waypoints, and visualization.
 For simplicity (not needing to fiddle with rviz), there is a built in visualization in the example.

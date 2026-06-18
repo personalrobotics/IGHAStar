@@ -1,5 +1,7 @@
 # BeamNG Example Integration
 
+> **Very high-friction integration example.** Complete the standalone examples first ([docs/examples.md](../../docs/examples.md)).
+
 This folder contains an example integration of the IGHA* planner with the BeamNG simulator, using the [BeamNGRL](https://github.com/prl-mushr/BeamNGRL/tree/devel) framework.
 
 ** disclaimer **: The actual performance of the MPC may vary on your system; you may need to tweak the parameters for the sampling scheme a little bit. The values used here are the values that worked on our system when running in lock-step with the simulator.
@@ -36,6 +38,8 @@ The green part of the path represents the path found through forward search, and
    - You can find the rest of the flags in the example.py's main function (for passing in a different config or waypoint folder).
 
 ## Configuration File Structure
+
+Shared planner keys (`resolution`, `hysteresis`, `preemptive_expansion`, BiIGHA* settings) are documented in [docs/configuration.md](../../docs/configuration.md).
 
 The main configuration file is `examples/BeamNG/Configs/example.yaml`. Key sections:
 

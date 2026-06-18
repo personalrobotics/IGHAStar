@@ -2,6 +2,18 @@
 
 This document explains how to configure and use IGHAStar for different planning scenarios.
 
+For the full parameter reference see [docs/configuration.md](../../docs/configuration.md). For a custom Python problem (no new C++) see [docs/generic_environment.md](../../docs/generic_environment.md).
+
+## Quick commands
+
+```bash
+# Kinodynamic car on off-road map
+python examples/standalone/example.py --config Configs/kinodynamic_example.yml
+
+# Custom 2D problem via Python callbacks
+python examples/standalone/generic_integrator.py
+```
+
 ## Configuration Files
 
 Configuration files are located in `examples/standalone/Configs/` and include:
@@ -14,6 +26,7 @@ Configuration files are located in `examples/standalone/Configs/` and include:
 - `kinematic_example.yml` - Kinematic planning configuration
 - `kinodynamic_example.yml` - Kinodynamic planning configuration  
 - `simple_example.yml` - Simple planning configuration
+- `generic_integrator.yml` - Generic (Python callback) environment
 - `ros_kinodynamic_example.yml` - ROS integration configuration
 
 ## Modifying Start and Goal Points
@@ -84,6 +97,8 @@ python examples/standalone/example.py --config examples/standalone/Configs/kinem
 If no test case is specified, the default start/goal from the configuration file will be used.
 
 ## Parameter Descriptions
+
+See [docs/configuration.md](../../docs/configuration.md) for the complete YAML reference. Summary below:
 
 ### Map Parameters
 - `name`: Name of the map file
