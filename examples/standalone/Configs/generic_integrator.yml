@@ -1,0 +1,24 @@
+# Generic (OMPL-style) environment example: 2D point-mass reaching a goal
+# region with an 8-direction control set. The dynamics / cost / validity /
+# heuristic / goal_test / sample_controls callables are attached in Python
+# (see generic_integrator.py) since they cannot be serialized in YAML.
+experiment_info_default:
+  state_dim: 2 # n_dims (compiled in as -DN_DIMS)
+  control_dim: 2 # n_cont (compiled in as -DN_CONT)
+  hash_dims: 2 # number of leading dims used for the grid hash (-DHASH_DIMS)
+  num_controls: 8 # branching factor K (controls applied per expansion)
+  resolution: [0.5, 0.5] # starting grid resolution per dimension
+  tolerance: [0.1, 0.1] # dedup tolerance per dimension
+  bounds_lower: [0.0, 0.0] # state-space lower bounds
+  bounds_upper: [10.0, 10.0] # state-space upper bounds
+  max_level: 4 # number of resolution levels
+  division_factor: 2.0 # resolution shrink factor per level
+  max_expansions: 50000 # search budget (passed to search())
+  hysteresis: 1000 # resolution-switch hysteresis threshold
+  preemptive_expansion: # optional GPU/batched preemptive expansion
+    enabled: false
+    min_preemptive: 8
+    max_preemptive: 32
+  node_info:
+    node_type: "generic"
+    timesteps: 1

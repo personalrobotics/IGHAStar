@@ -89,17 +89,14 @@ void kinematic_launcher_cpu(float *state, float *intermediate_states,
 
   for (int k = 0; k < rollouts; k++) {
     int state_base = k * n_dims;
-    int control_base = k * n_cont;
 
     // Extract current state
     float x = state[state_base + 0];
     float y = state[state_base + 1];
     float yaw = state[state_base + 2];
+    float vx = state[state_base + 3];
 
-    // Extract controls from controls array
-    float curvature = controls[control_base + 0]; // steering
-    float vx = controls[control_base + 1];        // throttle/wheelspeed
-    float wz = curvature * vx;                    // angular velocity
+    float wz = 0.0f;
 
     // Additional variables for 3D motion (like CUDA version)
     float vy = 0, vz = 0;
@@ -114,6 +111,11 @@ void kinematic_launcher_cpu(float *state, float *intermediate_states,
     valid[k] = true;
 
     for (int t = 1; t <= timesteps; t++) {
+      int control_base = k * timesteps * n_cont + (t - 1) * n_cont;
+      float curvature = controls[control_base + 0];
+      vx = controls[control_base + 1];
+      wz = curvature * vx;
+
       cy = cosf(yaw);
       sy = sinf(yaw);
       get_footprint_z_cpu(fl, fr, bl, br, z, x, y, cy, sy, heightmap,

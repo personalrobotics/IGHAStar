@@ -140,7 +140,10 @@ def plot_arrow(
     ec: str = "k",
 ) -> None:
     """Plot arrow."""
-    if not isinstance(x, float):
+    # Treat any array-like (list / numpy array / numpy scalar with ndim>0) as a
+    # batch; numpy scalars (e.g. numpy.float32) are NOT Python floats, so check
+    # dimensionality rather than the exact type.
+    if np.ndim(x) > 0:
         for i_x, i_y, i_yaw in zip(x, y, yaw):
             plot_arrow(i_x, i_y, i_yaw)
     else:

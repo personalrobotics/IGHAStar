@@ -90,7 +90,6 @@ void kinodynamic_launcher_cpu(
 
   for (int k = 0; k < rollouts; k++) {
     int state_base = k * n_dims;
-    int control_base = k * n_cont;
 
     // Extract current state
     float x = state[state_base + 0];
@@ -98,11 +97,7 @@ void kinodynamic_launcher_cpu(
     float yaw = state[state_base + 2];
     float vx = state[state_base + 3];
 
-    // Extract controls from controls array
-    float curvature = controls[control_base + 0]; // steering
-    float ax = controls[control_base + 1];        // throttle/wheelspeed
-
-    float vy = 0, vz = 0, wz = curvature * vx;
+    float vy = 0, vz = 0, wz = 0.0f;
 
     // Compute initial footprint & orientation (exactly like CUDA version)
     float cy = cosf(yaw), sy = sinf(yaw);
@@ -119,6 +114,10 @@ void kinodynamic_launcher_cpu(
 
     // Simulate for timesteps
     for (int t = 0; t < timesteps; t++) {
+      int control_base = k * timesteps * n_cont + t * n_cont;
+      float curvature = controls[control_base + 0];
+      float ax = controls[control_base + 1];
+
       cy = cosf(yaw);
       sy = sinf(yaw);
       get_footprint_z_cpu(fl, fr, bl, br, z, x, y, cy, sy, heightmap,
