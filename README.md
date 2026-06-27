@@ -115,6 +115,8 @@ pip install -e .
 
 **Note:** This step is required to make the IGHA* modules importable from anywhere in your environment.
 
+**Python version:** IGHA* requires Python 3.8+. On many Ubuntu systems, `python` still points to Python 2.7 — use `python3` to run the examples below.
+
 ## Usage
 
 ### Running the Standalone Example
@@ -134,16 +136,16 @@ The main example script supports different planning modes through configuration 
 
 ```bash
 # Use default kinematic configuration
-python examples/standalone/example.py
+python3 examples/standalone/example.py
 
 # Specify a different configuration file
-python examples/standalone/example.py --config Configs/kinodynamic_example.yml
+python3 examples/standalone/example.py --config Configs/kinodynamic_example.yml
 
 # Use simple planning configuration
-python examples/standalone/example.py --config Configs/simple_example.yml
+python3 examples/standalone/example.py --config Configs/simple_example.yml
 
 # Use a specific test case
-python examples/standalone/example.py --config Configs/kinematic_example.yml --test-case case2
+python3 examples/standalone/example.py --config Configs/kinematic_example.yml --test-case case2
 ```
 
 #### Bidirectional Search (BiIGHA*)
@@ -152,13 +154,13 @@ To use bidirectional search, add the `--bidirectional` flag:
 
 ```bash
 # Bidirectional kinematic planning
-python examples/standalone/example.py --bidirectional
+python3 examples/standalone/example.py --bidirectional
 
 # Bidirectional kinodynamic planning
-python examples/standalone/example.py --config Configs/kinodynamic_example.yml --bidirectional
+python3 examples/standalone/example.py --config Configs/kinodynamic_example.yml --bidirectional
 
 # Bidirectional simple planning
-python examples/standalone/example.py --config Configs/simple_example.yml --bidirectional
+python3 examples/standalone/example.py --config Configs/simple_example.yml --bidirectional
 ```
 
 <p align="center">

@@ -187,7 +187,6 @@ __global__ void kinodynamic_kernel(float *state, float *intermediate_states,
     cr = cosf(roll), sr = sinf(roll);
 
     vx += (ax * cp + sp * GRAVITY) * dt;
-    vx = clamp(vx, min_vel, max_vel);
     ay = vx * wz - sr * GRAVITY;
     az = GRAVITY * cp * cr - vx * wy +
          wx * wx * car_w2; // assuming car width/2 ~ car cg height
@@ -204,6 +203,7 @@ __global__ void kinodynamic_kernel(float *state, float *intermediate_states,
 
     valid[k] = valid[k] && fabsf(az - GRAVITY) < max_vert_acc;
     valid[k] = valid[k] && fabsf(ay / az) < RI;
+    valid[k] = valid[k] && vx > min_vel && vx < max_vel;
     valid[k] = valid[k] && fabsf(pitch) < max_theta && fabsf(roll) < max_theta;
 
     intermediate_index = k * timesteps * NX + (t - 1) * NX;
