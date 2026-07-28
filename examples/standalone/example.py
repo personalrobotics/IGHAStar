@@ -15,6 +15,7 @@ def main(
     test_case: Optional[str] = None,
     bidirectional: bool = False,
     print_controls: bool = False,
+    viser: bool = False,
 ) -> None:
     assert yaml_path, "Please provide a valid YAML configuration file path."
     print("Loading config from:", yaml_path)
@@ -46,16 +47,17 @@ def main(
     node_info = experiment_info["node_info"]
     node_type = node_info["node_type"]
     map_res = node_info["map_res"]
+    map_type = get_map_type(node_info)
     epsilon = experiment_info["epsilon"][0]
     print(f"Node type: {node_type}")
+    print(f"Map type: {map_type}")
     print(f"Map: {map_name}")
     print(f"Start: {start}")
     print(f"Goal: {goal}")
 
     print("Loading bitmap...")
     # Fix the map directory path to be relative to the examples directory
-    if not os.path.isabs(map_dir):
-        map_dir = os.path.join(BASE_DIR.parent, "examples/standalone", map_dir)
+    map_dir = resolve_map_dir(map_dir)
     print(f"Map directory: {map_dir}")
     bitmap = get_map(map_name, map_dir=map_dir, map_size=map_size, node_info=node_info)
     print(f"Bitmap loaded, shape: {bitmap.shape}")
@@ -143,8 +145,16 @@ def main(
         else:
             path = planner.get_best_path().numpy()
 
+        output_dir = os.path.join(BASE_DIR.parent, "Content/standalone")
+        os.makedirs(output_dir, exist_ok=True)
+        path_file = os.path.join(
+            output_dir, f"{map_name}_{node_type}_{map_type}_{planner_type}_path.npy"
+        )
+        np.save(path_file, path)
+        print(f"Saved path to: {path_file}")
+
         # Create visualization
-        show_map(plt, bitmap, node_type)
+        show_map(plt, bitmap, node_type, node_info=node_info)
 
         # Check for direction info (last column) to color by search direction
         # Positive = forward search (green), Negative = backward search (purple)
@@ -239,8 +249,6 @@ def main(
 
         print("Displaying visualization...")
         # Save figure to output directory (create if needed)
-        output_dir = os.path.join(BASE_DIR.parent, "Content/standalone")
-        os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(
             output_dir, f"{map_name}_{node_type}_{planner_type}.png"
         )
@@ -248,6 +256,11 @@ def main(
         print(f"Saved to: {output_path}")
         plt.show()
         print("✓ Visualization complete!")
+
+        if viser:
+            from viser_replay import replay_trajectory
+
+            replay_trajectory(path, bitmap, node_info)
     else:
         print("✗ No path found - the goal may be unreachable")
 
@@ -275,6 +288,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Print the control sequence alongside the path",
     )
+    parser.add_argument(
+        "--viser",
+        action="store_true",
+        help="Replay the trajectory over the terrain in Viser after planning",
+    )
     # we assume the config is from examples/standalone folder:
     args = parser.parse_args()
     yaml_path = os.path.join(BASE_DIR.parent, "examples", "standalone", args.config)
@@ -283,4 +301,5 @@ if __name__ == "__main__":
         test_case=args.test_case,
         bidirectional=args.bidirectional,
         print_controls=args.print_controls,
+        viser=args.viser,
     )

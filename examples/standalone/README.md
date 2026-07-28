@@ -16,6 +16,105 @@ Configuration files are located in `examples/standalone/Configs/` and include:
 - `simple_example.yml` - Simple planning configuration
 - `ros_kinodynamic_example.yml` - ROS integration configuration
 
+## ESDF Terrain Queries and Viser Demo
+
+The kinodynamic planner can use either of two terrain representations. Selection is entirely through configuration; the vehicle dynamics and search algorithm are unchanged.
+
+| `map_type` | World tensor | Height query | Traversability query |
+|---|---|---|---|
+| `elevation` (default) | `H x W x 2` (costmap, heightmap) | elevation map | costmap |
+| `esdf` | `H x W x nz x 4` (distance, R, G, B) | ESDF zero-crossing | ESDF color luminance |
+
+ESDF mode requires CUDA. The CPU kinodynamic environment supports elevation maps only.
+
+### Optional dependencies
+
+```bash
+# From the repository root
+pip install -e ".[viz]"
+```
+
+This installs `scipy` (synthetic ESDF construction), `viser` (3D debug views), and `trimesh` (terrain meshes in the replay).
+
+### Configuration
+
+In `Configs/kinodynamic_example.yml`:
+
+```yaml
+node_info:
+  node_type: "kinodynamic"
+  map_type: "elevation"   # or "esdf"
+  esdf:                   # only used when map_type is "esdf"
+    voxel_z: 0.25
+    z_margin: 1.0
+    method: "plane"       # "plane" (sub-voxel surface) or "edt"
+    cache: "Maps/Offroad/race-2_esdf.npz"
+```
+
+### 1. Build and inspect the synthetic ESDF
+
+The synthetic ESDF is generated from the same elevation map and costmap the planner already uses. Geometry comes from the heightmap; obstacles are encoded as black (obstacle) / white (free) colour voxels.
+
+```bash
+cd examples/standalone
+
+# Build the ESDF, write the cache, and open a Viser inspector
+python3 make_synthetic_esdf.py -c Configs/kinodynamic_example.yml
+```
+
+Open **http://localhost:8080** in a browser. The scene shows near-surface ESDF voxels coloured by the traversability layer, plus reference images of the source elevation map and costmap. Use the GUI checkboxes to toggle the recovered surface and a distance slice along z.
+
+Useful flags:
+
+```bash
+# Build/cache only (no browser view)
+python3 make_synthetic_esdf.py -c Configs/kinodynamic_example.yml --no-viser
+
+# Override voxel size or use a different Viser port
+python3 make_synthetic_esdf.py -c Configs/kinodynamic_example.yml --voxel-z 0.25 --port 8080
+```
+
+If the cache at `Maps/Offroad/race-2_esdf.npz` is missing when you plan with `map_type: esdf`, `example.py` will build it automatically on first load.
+
+### 2. Plan with the ESDF
+
+Set `map_type: "esdf"` in `Configs/kinodynamic_example.yml`, then:
+
+```bash
+cd examples/standalone
+
+# Plan and open a Viser trajectory replay when a path is found
+python3 example.py --config Configs/kinodynamic_example.yml --test-case case1 --viser
+```
+
+Without `--viser`, the usual matplotlib plot is still shown, and the path is also saved under `Content/standalone/` as `*_path.npy` for later replay.
+
+Switch back to the elevation pipeline at any time by setting `map_type: "elevation"` (or removing the key); existing configs keep working.
+
+### 3. Replay a saved trajectory in Viser
+
+```bash
+cd examples/standalone
+
+# Replay over the ESDF
+python3 viser_replay.py -c Configs/kinodynamic_example.yml \
+  --map-type esdf --port 8081 \
+  --path ../../Content/standalone/race-2_kinodynamic_esdf_IGHAStar_path.npy
+
+# Replay the same path over the elevation map (side-by-side comparison)
+python3 viser_replay.py -c Configs/kinodynamic_example.yml \
+  --map-type elevation --port 8082 \
+  --path ../../Content/standalone/race-2_kinodynamic_esdf_IGHAStar_path.npy
+```
+
+Open the printed localhost URL. The GUI has play/pause, a state slider, and a live readout of body height, roll, pitch, and velocity. Paths from `get_best_path()` are goal-first; the replay reverses them so the vehicle drives start → goal.
+
+<p align="center">
+  <img src="../../Content/standalone/ighastar_on_terrain.gif" alt="Viser trajectory replay over terrain" width="700"/>
+  <br>
+  <em>Viser replay: vehicle following a planned trajectory over the terrain.</em>
+</p>
+
 ## Modifying Start and Goal Points
 
 To change the start and goal positions for path planning, you can either:
@@ -114,4 +213,11 @@ If no test case is specified, the default start/goal from the configuration file
 - `del_vel`: Maximum velocity change in m/s
 - `max_vert_acc`: Maximum vertical acceleration in m/s²
 - `RI`: Rolling resistance coefficient
-- `gear_switch_time`: Time penalty for gear switching (multiplies reverse distance) 
+- `gear_switch_time`: Time penalty for gear switching (multiplies reverse distance)
+
+### Terrain Representation Parameters (kinodynamic only)
+- `map_type`: `"elevation"` (default) or `"esdf"`
+- `esdf.voxel_z`: Vertical voxel size of the ESDF grid, in meters
+- `esdf.z_margin`: Free space kept above/below the terrain when building the ESDF, in meters
+- `esdf.method`: `"plane"` (default; sub-voxel exact surface) or `"edt"` (voxel-quantized Euclidean distance transform)
+- `esdf.cache`: Path to the cached `.npz` ESDF (built by `make_synthetic_esdf.py` or on first load)
