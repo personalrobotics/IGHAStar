@@ -55,7 +55,12 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
     Returns:
         The created planner instance
     """
-    env_name = configs["experiment_info_default"]["node_info"]["node_type"]
+    node_info = configs["experiment_info_default"]["node_info"]
+    env_name = node_info["node_type"]
+    # esdf_bev is flattened to a 2D BEV in Python; the Environment only knows
+    # elevation vs live esdf.
+    if str(node_info.get("map_type", "elevation")).lower() == "esdf_bev":
+        node_info["map_type"] = "elevation"
     # Check CUDA availability
     cuda_available = torch.cuda.is_available()
 

@@ -18,14 +18,15 @@ Configuration files are located in `examples/standalone/Configs/` and include:
 
 ## ESDF Terrain Queries and Viser Demo
 
-The kinodynamic planner can use either of two terrain representations. Selection is entirely through configuration; the vehicle dynamics and search algorithm are unchanged.
+The kinodynamic planner can use three terrain representations. Selection is entirely through configuration; the vehicle dynamics and search algorithm are unchanged.
 
 | `map_type` | World tensor | Height query | Traversability query |
 |---|---|---|---|
 | `elevation` (default) | `H x W x 2` (costmap, heightmap) | elevation map | costmap |
-| `esdf` | `H x W x nz x 4` (distance, R, G, B) | ESDF zero-crossing | ESDF color luminance |
+| `esdf_bev` | `H x W x 2` (flattened once from ESDF) | elevation map | costmap |
+| `esdf` | `H x W x nz x 4` (distance, R, G, B) | live ESDF zero-crossing | live ESDF color luminance |
 
-ESDF mode requires CUDA. The CPU kinodynamic environment supports elevation maps only.
+`esdf_bev` is the recommended ESDF path for planning: a standalone CUDA utility (`ighastar.scripts.esdf_bev`) flattens the dense colored ESDF into a fixed BEV once, then the planner uses the fast 2D elevation backend. Live `esdf` queries remain available for debugging. Both ESDF modes require CUDA. The CPU kinodynamic environment supports elevation maps only.
 
 ### Optional dependencies
 
@@ -43,8 +44,8 @@ In `Configs/kinodynamic_example.yml`:
 ```yaml
 node_info:
   node_type: "kinodynamic"
-  map_type: "elevation"   # or "esdf"
-  esdf:                   # only used when map_type is "esdf"
+  map_type: "elevation"   # or "esdf_bev" / "esdf"
+  esdf:                   # used when map_type is "esdf" or "esdf_bev"
     voxel_z: 0.25
     z_margin: 1.0
     method: "plane"       # "plane" (sub-voxel surface) or "edt"
@@ -74,18 +75,20 @@ python3 make_synthetic_esdf.py -c Configs/kinodynamic_example.yml --no-viser
 python3 make_synthetic_esdf.py -c Configs/kinodynamic_example.yml --voxel-z 0.25 --port 8080
 ```
 
-If the cache at `Maps/Offroad/race-2_esdf.npz` is missing when you plan with `map_type: esdf`, `example.py` will build it automatically on first load.
+If the cache at `Maps/Offroad/race-2_esdf.npz` is missing when you plan with `map_type: esdf` or `esdf_bev`, `example.py` will build it automatically on first load.
 
-### 2. Plan with the ESDF
+### 2. Plan with an ESDF-derived BEV
 
-Set `map_type: "esdf"` in `Configs/kinodynamic_example.yml`, then:
+Set `map_type: "esdf_bev"` in `Configs/kinodynamic_example.yml`, then:
 
 ```bash
 cd examples/standalone
 
-# Plan and open a Viser trajectory replay when a path is found
+# Flatten ESDF → BEV once, plan on the fast 2D path, optional Viser replay
 python3 example.py --config Configs/kinodynamic_example.yml --test-case case1 --viser
 ```
+
+For live 3D ESDF queries instead (slower; useful for debugging), set `map_type: "esdf"`.
 
 Without `--viser`, the usual matplotlib plot is still shown, and the path is also saved under `Content/standalone/` as `*_path.npy` for later replay.
 
@@ -216,7 +219,7 @@ If no test case is specified, the default start/goal from the configuration file
 - `gear_switch_time`: Time penalty for gear switching (multiplies reverse distance)
 
 ### Terrain Representation Parameters (kinodynamic only)
-- `map_type`: `"elevation"` (default) or `"esdf"`
+- `map_type`: `"elevation"` (default), `"esdf_bev"` (flatten ESDF once via CUDA, then 2D queries), or `"esdf"` (live 3D queries)
 - `esdf.voxel_z`: Vertical voxel size of the ESDF grid, in meters
 - `esdf.z_margin`: Free space kept above/below the terrain when building the ESDF, in meters
 - `esdf.method`: `"plane"` (default; sub-voxel exact surface) or `"edt"` (voxel-quantized Euclidean distance transform)

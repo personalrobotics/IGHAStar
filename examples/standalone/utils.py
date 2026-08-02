@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import cv2
 import torch
 import numpy as np
@@ -64,9 +65,12 @@ def get_map(
         return bitmap
     elif node == "kinodynamic":
         bitmap = get_kinodynamic_map(map_name, map_dir, map_size, node_info)
-        if get_map_type(node_info) != "esdf":
-            return bitmap
-        return get_kinodynamic_esdf(bitmap, map_name, map_dir, node_info)
+        map_type = get_map_type(node_info)
+        if map_type == "esdf":
+            return get_kinodynamic_esdf(bitmap, map_name, map_dir, node_info)
+        if map_type == "esdf_bev":
+            return get_kinodynamic_esdf_bev(bitmap, map_name, map_dir, node_info)
+        return bitmap
 
 
 def get_kinodynamic_map(
@@ -113,6 +117,17 @@ def get_kinodynamic_esdf(
     ``node_info["esdf"]`` because the C++ environment reads ``voxel_z`` and
     ``z_min`` from the config: the tensor carries voxel data only.
     """
+    esdf = _load_or_build_esdf(bitmap, map_name, map_dir, node_info)
+    return esdf_utils.esdf_to_world_tensor(esdf)
+
+
+def _load_or_build_esdf(
+    bitmap: torch.Tensor,
+    map_name: str,
+    map_dir: str,
+    node_info: dict,
+) -> Dict[str, Any]:
+    """Load the synthetic ESDF cache, rebuilding it if missing or stale."""
     esdf_config = node_info.setdefault("esdf", {}) or {}
     node_info["esdf"] = esdf_config
     voxel_xy = float(node_info["map_res"])
@@ -144,7 +159,45 @@ def get_kinodynamic_esdf(
         print(f"Saved synthetic ESDF to: {path}")
 
     esdf_config.update(esdf_utils.esdf_metadata(esdf))
-    return esdf_utils.esdf_to_world_tensor(esdf)
+    # Ensure float32 distance in memory even when freshly built as float16.
+    if esdf["distance"].dtype != np.float32:
+        esdf["distance"] = np.ascontiguousarray(esdf["distance"], dtype=np.float32)
+    if esdf["color"].dtype != np.uint8:
+        esdf["color"] = np.ascontiguousarray(esdf["color"], dtype=np.uint8)
+    return esdf
+
+
+def get_kinodynamic_esdf_bev(
+    bitmap: torch.Tensor,
+    map_name: str,
+    map_dir: str,
+    node_info: dict,
+) -> torch.Tensor:
+    """Flatten the synthetic ESDF once into an ``H x W x 2`` elev+cost BEV.
+
+    Uses the standalone ``esdf_to_bev`` CUDA utility (not the live ESDF query
+    path). The planner then sees a normal elevation-mode world tensor.
+    """
+    from ighastar.scripts.esdf_bev import esdf_dict_to_bev, warmup
+
+    esdf = _load_or_build_esdf(bitmap, map_name, map_dir, node_info)
+    # Do not charge torch-extension load / JIT against the convert timer.
+    warmup()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    start = time.perf_counter()
+    elev, cost = esdf_dict_to_bev(esdf, return_cpu=True)
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elapsed_ms = (time.perf_counter() - start) * 1e3
+    print(
+        f"ESDF → elevation/costmap conversion took {elapsed_ms:.3f} ms "
+        f"({elev.shape[0]} x {elev.shape[1]} BEV)"
+    )
+    world = torch.empty((elev.shape[0], elev.shape[1], 2), dtype=torch.float32)
+    world[..., 0] = cost
+    world[..., 1] = elev
+    return world
 
 
 def esdf_from_config(bitmap: torch.Tensor, node_info: dict) -> Dict[str, Any]:

@@ -189,9 +189,14 @@ def save_esdf(path: str, esdf: Dict[str, Any]) -> None:
 
 def load_esdf(path: str) -> Dict[str, Any]:
     with np.load(path, allow_pickle=False) as data:
+        # Promote to float32 once at load. The on-disk cache may be float16 to
+        # save space; callers (especially ESDF→BEV) should not pay that cast on
+        # every convert.
+        distance = np.ascontiguousarray(data["distance"], dtype=np.float32)
+        color = np.ascontiguousarray(data["color"], dtype=np.uint8)
         return {
-            "distance": data["distance"],
-            "color": data["color"],
+            "distance": distance,
+            "color": color,
             "voxel_xy": float(data["voxel_xy"]),
             "voxel_z": float(data["voxel_z"]),
             "z_min": float(data["z_min"]),

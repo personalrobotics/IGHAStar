@@ -24,7 +24,7 @@ experiment_info_default:
   max_expansions: 100000 # maximum number of expansions allowed.
   hysteresis: 1000 # hysteresis threshold for for IGHA*-H
   preemptive_expansion: # optional GPU batching of successor expansions (IGHAStar)
-    enabled: true # when true, expand several Q_v vertices per GPU kernel launch
+    enabled: false # when true, expand several Q_v vertices per GPU kernel launch
     min_preemptive: 64 # only batch once the stash holds at least this many vertices
     max_preemptive: 100 # max vertices preemptively expanded alongside each popped vertex
   near_meet_config: # configuration for BiIGHAStar near-meet validation
@@ -42,8 +42,11 @@ experiment_info_default:
     sigma: [2.0, 2.0, 0.2, 5.0] # sampling standard deviation per dimension
   node_info:
     node_type: "kinodynamic"
-    map_type: "elevation" # "elevation" for elevation map + costmap, "esdf" for the 3D ESDF
-    esdf: # only used when map_type is "esdf"
+    # map_type: "elevation"  # elevation map + costmap (fast 2D queries)
+    # map_type: "esdf"       # live 3D ESDF queries (debug / equivalence)
+    # map_type: "esdf_bev"   # flatten ESDF once via CUDA util, then 2D queries
+    map_type: "esdf_bev"
+    esdf: # used when map_type is "esdf" or "esdf_bev"
       voxel_z: 0.25 # vertical voxel size of the ESDF grid, in meters
       z_margin: 1.0 # free space kept above/below the terrain, in meters
       method: "plane" # "plane" (sub-voxel exact surface) or "edt" (voxel-quantized)
