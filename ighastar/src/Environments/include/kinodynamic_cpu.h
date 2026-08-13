@@ -254,6 +254,10 @@ public:
 
   // Sets the world map (costmap and heightmap) from a PyTorch tensor
   void set_world(torch::Tensor world) {
+    TORCH_CHECK(world.dim() != 4,
+                "The CPU kinodynamic environment does not support ESDF worlds "
+                "(4D tensors); use the CUDA environment or set map_type to "
+                "'elevation'");
     TORCH_CHECK(world.dim() == 3, "World tensor must be 3D (H x W x 2)");
     TORCH_CHECK(world.size(2) == 2,
                 "Last dimension must have size 2 (costmap + heightmap)");

@@ -1,7 +1,11 @@
+#include "terrain_map.h"
+#include <algorithm>
 #include <boost/functional/hash.hpp>
+#include <cctype>
 #include <cuda_runtime.h>
 #include <memory>
 #include <random>
+#include <string>
 #include <torch/extension.h>
 
 using namespace std;
@@ -13,20 +17,19 @@ constexpr int warp_size = 32;
 // Launches kinodynamic simulation for multiple rollouts on GPU
 // Uses per-instance device memory and stream for parallel execution
 void kinodynamic_launcher(
-    float *state, float *intermediate_states, const float *heightmap,
-    const float *costmap, bool *valid, float *cost, float dt, int timesteps,
-    int rollouts, int n_dims, int n_cont, const int map_size_px, float map_res,
-    float car_l2, float car_w2, float max_vel, float min_vel, float RI,
-    float max_vert_acc, float max_theta, float gear_switch_time,
+    float *state, float *intermediate_states, const TerrainMap &map,
+    bool *valid, float *cost, float dt, int timesteps, int rollouts, int n_dims,
+    int n_cont, float car_l2, float car_w2, float max_vel, float min_vel,
+    float RI, float max_vert_acc, float max_theta, float gear_switch_time,
     int patch_length_px, int patch_width_px, const int blocks,
     const int threads, float *d_state, float *d_intermediate_states,
     float *d_controls, bool *d_valid, float *d_cost, cudaStream_t stream);
 
-// Checks validity of multiple states against a bitmap on GPU
-void check_validity_launcher(const float *bitmap, int map_size_px,
-                             float map_res, float *states, int patch_length_px,
-                             int patch_width_px, float car_l2, float car_w2,
-                             int n_states, int n_dims, bool *result);
+// Checks validity of multiple states against the traversability layer on GPU
+void check_validity_launcher(const TerrainMap &map, float *states,
+                             int patch_length_px, int patch_width_px,
+                             float car_l2, float car_w2, int n_states,
+                             int n_dims, bool *result);
 
 size_t calc_hash(float *pose, const float *resolution) {
   std::size_t hash_val =
@@ -128,6 +131,15 @@ struct NodePtrCompare {
 class Environment {
   int map_size_px, threads, blocks, n_succ, patch_length_px, patch_width_px;
   float *d_heightmap, *d_costmap;
+  // ESDF representation: signed distance and colour voxels, only allocated
+  // when map_type is MAP_ESDF.
+  float *d_esdf = nullptr;
+  uchar4 *d_esdf_color = nullptr;
+  // Which representation the terrain queries read, and the descriptor handed
+  // to the kernels.
+  int map_type = MAP_ELEVATION;
+  float esdf_voxel_z = 0.0f, esdf_z_min = 0.0f;
+  TerrainMap terrain_map;
   float dt, map_res;
   float car_l2, car_w2;
   float max_vel, min_vel, RI, max_theta, max_vert_acc, gear_switch_time;
@@ -175,6 +187,7 @@ public:
     max_level = info["max_level"].cast<int>();
     division_factor = info["division_factor"].cast<float>();
 
+    set_map_config(node_info);
     set_resolutions(info, node_info);
     set_car_params(node_info);
 
@@ -212,6 +225,43 @@ public:
     if (cuda_stream)
       cudaStreamDestroy(cuda_stream);
 
+    free_world();
+  }
+
+  // Reads which terrain representation the planner should query. Absent
+  // map_type means the elevation map + costmap, so existing configs are
+  // unaffected.
+  void set_map_config(py::dict &node_info) {
+    map_type = MAP_ELEVATION;
+    if (node_info.contains("map_type")) {
+      std::string requested = node_info["map_type"].cast<std::string>();
+      std::transform(requested.begin(), requested.end(), requested.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      if (requested == "esdf") {
+        map_type = MAP_ESDF;
+      } else {
+        TORCH_CHECK(requested == "elevation", "Unknown map_type '", requested,
+                    "' (expected 'elevation' or 'esdf')");
+      }
+    }
+    if (map_type != MAP_ESDF) {
+      return;
+    }
+    // The world tensor carries voxel data only, so the grid geometry comes
+    // from the config. get_map() writes it there when it loads the ESDF.
+    TORCH_CHECK(node_info.contains("esdf"),
+                "map_type is 'esdf' but the config has no 'esdf' block");
+    auto esdf_info = node_info["esdf"].cast<py::dict>();
+    TORCH_CHECK(esdf_info.contains("voxel_z") && esdf_info.contains("z_min"),
+                "The 'esdf' config block must carry 'voxel_z' and 'z_min'; "
+                "these are filled in when the ESDF is loaded");
+    esdf_voxel_z = esdf_info["voxel_z"].cast<float>();
+    esdf_z_min = esdf_info["z_min"].cast<float>();
+    TORCH_CHECK(esdf_voxel_z > 0.0f, "esdf voxel_z must be positive");
+  }
+
+  // Releases whichever world representation is currently loaded
+  void free_world() {
     if (d_costmap != nullptr) {
       cudaFree(d_costmap);
       d_costmap = nullptr;
@@ -220,6 +270,23 @@ public:
       cudaFree(d_heightmap);
       d_heightmap = nullptr;
     }
+    if (d_esdf != nullptr) {
+      cudaFree(d_esdf);
+      d_esdf = nullptr;
+    }
+    if (d_esdf_color != nullptr) {
+      cudaFree(d_esdf_color);
+      d_esdf_color = nullptr;
+    }
+    terrain_map = TerrainMap();
+  }
+
+  // True once a world has been loaded for the configured representation
+  bool world_ready() const {
+    if (map_type == MAP_ELEVATION) {
+      return d_heightmap != nullptr && d_costmap != nullptr;
+    }
+    return d_esdf != nullptr && d_esdf_color != nullptr;
   }
 
   // Sets resolution, tolerance, and epsilon values for different dimensions
@@ -341,18 +408,26 @@ public:
     cudaDeviceSynchronize();
   }
 
-  // Sets the world map (costmap and heightmap) from a PyTorch tensor
+  // Sets the world from a PyTorch tensor. A 3D (H x W x 2) tensor is the
+  // costmap + heightmap; a 4D (H x W x nz x 4) tensor is an ESDF holding
+  // [signed distance, R, G, B] per voxel.
   void set_world(torch::Tensor world) {
-    // Clean up existing CUDA memory
-    if (d_costmap != nullptr) {
-      cudaFree(d_costmap);
-      d_costmap = nullptr;
+    free_world();
+    if (world.dim() == 4) {
+      TORCH_CHECK(map_type == MAP_ESDF,
+                  "Received a 4D ESDF world tensor but map_type is "
+                  "'elevation'; set map_type to 'esdf' in the config");
+      set_world_esdf(world);
+      return;
     }
-    if (d_heightmap != nullptr) {
-      cudaFree(d_heightmap);
-      d_heightmap = nullptr;
-    }
+    TORCH_CHECK(map_type == MAP_ELEVATION,
+                "map_type is 'esdf' but the world tensor is not a 4D ESDF "
+                "(H x W x nz x 4)");
+    set_world_elevation(world);
+  }
 
+  // Sets the world map (costmap and heightmap) from a PyTorch tensor
+  void set_world_elevation(torch::Tensor world) {
     TORCH_CHECK(world.dim() == 3, "World tensor must be 3D (H x W x 2)");
     TORCH_CHECK(world.size(2) == 2,
                 "Last dimension must have size 2 (costmap + heightmap)");
@@ -399,6 +474,77 @@ public:
 
     map_size_px = H; // assume H = W
                      // print the map size:
+
+    terrain_map.type = MAP_ELEVATION;
+    terrain_map.elev = d_heightmap;
+    terrain_map.cost = d_costmap;
+    terrain_map.nx = W;
+    terrain_map.ny = H;
+    terrain_map.voxel_xy = map_res;
+    terrain_map.res_inv = 1.0f / map_res;
+  }
+
+  // Sets the world from an ESDF: a 4D (H x W x nz x 4) tensor whose channels
+  // are [signed distance, R, G, B]. The z axis is contiguous within a column,
+  // which is the layout the column march in map_to_elev() expects.
+  void set_world_esdf(torch::Tensor world) {
+    TORCH_CHECK(world.dim() == 4, "ESDF tensor must be 4D (H x W x nz x 4)");
+    TORCH_CHECK(world.size(3) == 4,
+                "Last dimension must have size 4 (distance + RGB)");
+    TORCH_CHECK(world.dtype() == torch::kFloat32,
+                "ESDF tensor must be float32");
+    TORCH_CHECK(world.device().is_cpu(), "ESDF tensor must be on CPU");
+
+    int H = world.size(0);
+    int W = world.size(1);
+    int NZ = world.size(2);
+    TORCH_CHECK(NZ > 1, "ESDF must have at least two voxels along z");
+    size_t n_voxels = size_t(H) * size_t(W) * size_t(NZ);
+
+    // Split the interleaved tensor into a distance grid and a colour grid, so
+    // the colour layer costs four bytes per voxel on the device instead of
+    // twelve.
+    auto contiguous = world.contiguous();
+    const float *source = contiguous.data_ptr<float>();
+    std::vector<float> distance(n_voxels);
+    std::vector<uchar4> color(n_voxels);
+    for (size_t i = 0; i < n_voxels; i++) {
+      const float *voxel = source + i * 4;
+      distance[i] = voxel[0];
+      color[i] = make_uchar4(static_cast<unsigned char>(
+                                 std::min(std::max(voxel[1], 0.0f), 255.0f)),
+                             static_cast<unsigned char>(
+                                 std::min(std::max(voxel[2], 0.0f), 255.0f)),
+                             static_cast<unsigned char>(
+                                 std::min(std::max(voxel[3], 0.0f), 255.0f)),
+                             255);
+    }
+
+    cudaError_t esdf_alloc =
+        cudaMalloc(&d_esdf, n_voxels * sizeof(float));
+    cudaError_t color_alloc =
+        cudaMalloc(&d_esdf_color, n_voxels * sizeof(uchar4));
+    if (esdf_alloc != cudaSuccess || color_alloc != cudaSuccess) {
+      free_world();
+      throw std::runtime_error("CUDA memory allocation failed for the ESDF");
+    }
+    cudaMemcpy(d_esdf, distance.data(), n_voxels * sizeof(float),
+               cudaMemcpyHostToDevice);
+    cudaMemcpy(d_esdf_color, color.data(), n_voxels * sizeof(uchar4),
+               cudaMemcpyHostToDevice);
+
+    map_size_px = H; // assume H = W
+
+    terrain_map.type = MAP_ESDF;
+    terrain_map.esdf = d_esdf;
+    terrain_map.color = d_esdf_color;
+    terrain_map.nx = W;
+    terrain_map.ny = H;
+    terrain_map.nz = NZ;
+    terrain_map.voxel_xy = map_res;
+    terrain_map.voxel_z = esdf_voxel_z;
+    terrain_map.z_min = esdf_z_min;
+    terrain_map.res_inv = 1.0f / map_res;
   }
 
   // Creates a new Node with the given pose
@@ -453,7 +599,7 @@ public:
   // Checks validity of start and goal positions
   void check_validity(float *start, float *goal, bool *result) {
     // Check if CUDA memory is allocated
-    if (d_costmap == nullptr || d_heightmap == nullptr) {
+    if (!world_ready()) {
       std::cerr << "Error: CUDA memory not allocated. Call set_world() first."
                 << std::endl;
       result[0] = false;
@@ -465,9 +611,8 @@ public:
     float states[2 * n_dims];
     memcpy(states, start, n_dims * sizeof(float));
     memcpy(states + n_dims, goal, n_dims * sizeof(float));
-    check_validity_launcher(d_costmap, map_size_px, map_res, states,
-                            patch_length_px, patch_width_px, car_l2, car_w2, 2,
-                            n_dims, result);
+    check_validity_launcher(terrain_map, states, patch_length_px,
+                            patch_width_px, car_l2, car_w2, 2, n_dims, result);
   }
 
   // Batched validity check for multiple states
@@ -492,9 +637,9 @@ public:
     std::fill(result_array, result_array + n_states, true);
 
     // Call CUDA launcher
-    check_validity_launcher(d_costmap, map_size_px, map_res, states_array,
-                            patch_length_px, patch_width_px, car_l2, car_w2,
-                            n_states, n_dims, result_array);
+    check_validity_launcher(terrain_map, states_array, patch_length_px,
+                            patch_width_px, car_l2, car_w2, n_states, n_dims,
+                            result_array);
 
     // Copy results back
     for (int i = 0; i < n_states; i++) {
@@ -654,7 +799,7 @@ public:
     float new_pose[n_dims], f;
 
     // Check if CUDA memory is allocated
-    if (d_costmap == nullptr || d_heightmap == nullptr) {
+    if (!world_ready()) {
       std::cerr << "Error: CUDA memory not allocated. Call set_world() first."
                 << std::endl;
       return neighbors;
@@ -675,10 +820,10 @@ public:
     // No mutex needed - each Environment instance has its own CUDA device
     // memory and stream
     kinodynamic_launcher(
-        state, intermediate_states, d_heightmap, d_costmap, valid, cost, dt,
-        timesteps, n_succ, n_dims, n_cont, map_size_px, map_res, car_l2, car_w2,
-        max_vel, min_vel, RI, max_vert_acc, max_theta, gear_switch_time,
-        patch_length_px, patch_width_px, blocks, threads, d_state_instance,
+        state, intermediate_states, terrain_map, valid, cost, dt, timesteps,
+        n_succ, n_dims, n_cont, car_l2, car_w2, max_vel, min_vel, RI,
+        max_vert_acc, max_theta, gear_switch_time, patch_length_px,
+        patch_width_px, blocks, threads, d_state_instance,
         d_intermediate_states_instance, d_controls_instance, d_valid_instance,
         d_cost_instance, cuda_stream);
 
@@ -763,7 +908,7 @@ public:
       return results;
     }
 
-    if (d_costmap == nullptr || d_heightmap == nullptr) {
+    if (!world_ready()) {
       std::cerr << "Error: CUDA memory not allocated. Call set_world() first."
                 << std::endl;
       return results;
@@ -804,11 +949,11 @@ public:
 
     int batched_blocks = (total + threads - 1) / threads;
     kinodynamic_launcher(
-        state.data(), intermediate_states.data(), d_heightmap, d_costmap, valid,
-        cost.data(), dt, timesteps, total, n_dims, n_cont, map_size_px, map_res,
-        car_l2, car_w2, max_vel, min_vel, RI, max_vert_acc, max_theta,
-        gear_switch_time, patch_length_px, patch_width_px, batched_blocks,
-        threads, d_state_batched, d_intermediate_batched, d_controls_batched,
+        state.data(), intermediate_states.data(), terrain_map, valid,
+        cost.data(), dt, timesteps, total, n_dims, n_cont, car_l2, car_w2,
+        max_vel, min_vel, RI, max_vert_acc, max_theta, gear_switch_time,
+        patch_length_px, patch_width_px, batched_blocks, threads,
+        d_state_batched, d_intermediate_batched, d_controls_batched,
         d_valid_batched, d_cost_batched, cuda_stream);
 
     float new_pose[n_dims];
@@ -931,7 +1076,7 @@ public:
   void rollout_control_sequence(float *state, float *intermediate_states,
                                 const float *controls_seq, bool *valid,
                                 float *cost) {
-    if (d_costmap == nullptr || d_heightmap == nullptr) {
+    if (!world_ready()) {
       std::cerr << "Error: CUDA memory not allocated. Call set_world() first."
                 << std::endl;
       *valid = false;
@@ -946,12 +1091,12 @@ public:
                     sizeof(float) * timesteps * n_cont, cudaMemcpyHostToDevice,
                     cuda_stream);
     kinodynamic_launcher(
-        state_buf, intermediate_states, d_heightmap, d_costmap, &valid_buf,
-        &cost_buf, dt, timesteps, 1, n_dims, n_cont, map_size_px, map_res,
-        car_l2, car_w2, max_vel, min_vel, RI, max_vert_acc, max_theta,
-        gear_switch_time, patch_length_px, patch_width_px, 1, threads,
-        d_state_instance, d_intermediate_states_instance, d_controls_instance,
-        d_valid_instance, d_cost_instance, cuda_stream);
+        state_buf, intermediate_states, terrain_map, &valid_buf, &cost_buf, dt,
+        timesteps, 1, n_dims, n_cont, car_l2, car_w2, max_vel, min_vel, RI,
+        max_vert_acc, max_theta, gear_switch_time, patch_length_px,
+        patch_width_px, 1, threads, d_state_instance,
+        d_intermediate_states_instance, d_controls_instance, d_valid_instance,
+        d_cost_instance, cuda_stream);
     memcpy(state, state_buf, n_dims * sizeof(float));
     *valid = valid_buf;
     *cost = cost_buf;

@@ -1,3 +1,4 @@
+#include "terrain_map.h"
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -24,20 +25,72 @@ __device__ float wrap_to_pi(float x) {
   return std::fmod(x + M_PI, 2 * M_PI) - M_PI;
 }
 
-// Maps world coordinates to elevation value from heightmap (device function)
-__device__ float map_to_elev(float x, float y, const float *elev,
-                             int map_size_px, float res_inv) {
-  int img_X = clamp(static_cast<int>((x * res_inv)), 0, map_size_px - 1);
-  int img_Y = clamp(static_cast<int>((y * res_inv)), 0, map_size_px - 1);
-  return elev[img_Y * map_size_px + img_X];
+// Maximum number of steps the ESDF column march is allowed to take. The march
+// makes at least one voxel of progress per step, and typically converges in
+// two or three, so this is only a safety net.
+#define MAX_MARCH_STEPS 32
+
+// Index of the ESDF column holding world coordinates (x, y) (device function)
+__device__ int esdf_column(float x, float y, const TerrainMap &map) {
+  int img_X = clamp(static_cast<int>((x * map.res_inv)), 0, map.nx - 1);
+  int img_Y = clamp(static_cast<int>((y * map.res_inv)), 0, map.ny - 1);
+  return (img_Y * map.nx + img_X) * map.nz;
+}
+
+// Finds the terrain surface in an ESDF column: march down from the top of the
+// column, stepping by the signed distance (which never exceeds the vertical
+// gap to the surface, so we cannot step past it), then linearly interpolate
+// between the two voxels straddling the zero crossing (device function).
+__device__ float esdf_surface_z(float x, float y, const TerrainMap &map) {
+  const int column = esdf_column(x, y, map);
+  int k = map.nz - 1;
+  float d = map.esdf[column + k];
+  for (int step = 0; step < MAX_MARCH_STEPS && d > 0.0f && k > 0; step++) {
+    k = max(k - max(1, static_cast<int>(d / map.voxel_z)), 0);
+    d = map.esdf[column + k];
+  }
+  float d_lo = d;
+  float d_hi = map.esdf[column + min(k + 1, map.nz - 1)];
+  float delta = d_hi - d_lo;
+  float frac = (fabsf(delta) > 1e-12f) ? (-d_lo / delta) : 0.0f;
+  frac = clamp(frac, 0.0f, 1.0f);
+  return map.z_min + (float(k) + frac) * map.voxel_z;
+}
+
+// Maps world coordinates to terrain height, from whichever representation the
+// world was loaded with (device function)
+__device__ float map_to_elev(float x, float y, const TerrainMap &map) {
+  if (map.type == MAP_ELEVATION) {
+    int img_X = clamp(static_cast<int>((x * map.res_inv)), 0, map.nx - 1);
+    int img_Y = clamp(static_cast<int>((y * map.res_inv)), 0, map.ny - 1);
+    return map.elev[img_Y * map.nx + img_X];
+  }
+  return esdf_surface_z(x, y, map);
+}
+
+// Maps world coordinates to a traversability value on the same 0-255 scale as
+// the costmap: 255 is free, 0 is an obstacle (device function)
+__device__ float map_to_cost(float x, float y, const TerrainMap &map) {
+  if (map.type == MAP_ELEVATION) {
+    int img_X = clamp(static_cast<int>((x * map.res_inv)), 0, map.nx - 1);
+    int img_Y = clamp(static_cast<int>((y * map.res_inv)), 0, map.ny - 1);
+    return map.cost[img_Y * map.nx + img_X];
+  }
+  // ESDF: the colour of the voxel at the recovered surface, as luminance.
+  const int column = esdf_column(x, y, map);
+  int k = clamp(static_cast<int>((esdf_surface_z(x, y, map) - map.z_min) /
+                                 map.voxel_z),
+                0, map.nz - 1);
+  uchar4 c = map.color[column + k];
+  return 0.299f * float(c.x) + 0.587f * float(c.y) + 0.114f * float(c.z);
 }
 
 // Computes the 3D footprint coordinates and center height of the car (device
 // function)
 __device__ void get_footprint_z(float *fl, float *fr, float *bl, float *br,
                                 float &z, float x, float y, float cy, float sy,
-                                const float *elev, int map_size_px,
-                                float res_inv, float car_l2, float car_w2) {
+                                const TerrainMap &map, float car_l2,
+                                float car_w2) {
   fl[0] = car_l2 * cy - car_w2 * sy + x;
   fl[1] = car_l2 * sy + car_w2 * cy + y;
 
@@ -50,13 +103,13 @@ __device__ void get_footprint_z(float *fl, float *fr, float *bl, float *br,
   br[0] = (-1) * car_l2 * cy - (-1) * car_w2 * sy + x;
   br[1] = (-1) * car_l2 * sy + (-1) * car_w2 * cy + y;
 
-  float z_cent = map_to_elev(0, 0, elev, map_size_px, res_inv);
-  z = map_to_elev(x, y, elev, map_size_px, res_inv) - z_cent;
+  float z_cent = map_to_elev(0, 0, map);
+  z = map_to_elev(x, y, map) - z_cent;
 
-  fl[2] = map_to_elev(fl[0], fl[1], elev, map_size_px, res_inv) - z_cent;
-  fr[2] = map_to_elev(fr[0], fr[1], elev, map_size_px, res_inv) - z_cent;
-  bl[2] = map_to_elev(bl[0], bl[1], elev, map_size_px, res_inv) - z_cent;
-  br[2] = map_to_elev(br[0], br[1], elev, map_size_px, res_inv) - z_cent;
+  fl[2] = map_to_elev(fl[0], fl[1], map) - z_cent;
+  fr[2] = map_to_elev(fr[0], fr[1], map) - z_cent;
+  bl[2] = map_to_elev(bl[0], bl[1], map) - z_cent;
+  br[2] = map_to_elev(br[0], br[1], map) - z_cent;
 }
 
 /*
@@ -74,9 +127,7 @@ list of constants:
 */
 /*
 list of reused variables:
-    bitmap = BEVmap_cost
-    map_size_px = map_size
-    map_res = map_res
+    map = TerrainMap (costmap or ESDF colour layer)
     d_intermediate_states = d_intermediate_states
     patch_length_px = patch_length_px
     patch_width_px = patch_width_px
@@ -85,12 +136,13 @@ list of reused variables:
     d_valid = d_valid
 */
 
-// Checks validity of multiple states against a bitmap (CUDA kernel)
+// Checks validity of multiple states against the traversability layer (CUDA
+// kernel)
 __global__ void
-check_validity_batch_kernel(const float *bitmap, int map_size_px, float map_res,
-                            float *d_intermediate_states, int patch_length_px,
-                            int patch_width_px, float car_l2, float car_w2,
-                            int NX, int timesteps, bool *d_valid) {
+check_validity_batch_kernel(TerrainMap map, float *d_intermediate_states,
+                            int patch_length_px, int patch_width_px,
+                            float car_l2, float car_w2, int NX, int timesteps,
+                            bool *d_valid) {
   int t = blockIdx.x;
   int k = blockIdx.y;
   int i = threadIdx.x;
@@ -109,40 +161,35 @@ check_validity_batch_kernel(const float *bitmap, int map_size_px, float map_res,
 
   float cy = cosf(theta);
   float sy = sinf(theta);
-  float offset_x = (i * map_res) - car_l2;
-  float offset_y = (j * map_res) - car_w2;
+  float offset_x = (i * map.voxel_xy) - car_l2;
+  float offset_y = (j * map.voxel_xy) - car_w2;
 
   float px = offset_x * cy - offset_y * sy + x;
   float py = offset_x * sy + offset_y * cy + y;
 
-  if (px < 0 || px >= map_size_px * map_res || py < 0 ||
-      py >= map_size_px * map_res) {
+  if (px < 0 || px >= map.nx * map.voxel_xy || py < 0 ||
+      py >= map.ny * map.voxel_xy) {
     d_valid[k] = false;
     return;
   }
 
-  if (map_to_elev(px, py, bitmap, map_size_px, 1.0f / map_res) <= 250.0f) {
+  if (map_to_cost(px, py, map) <= 250.0f) {
     d_valid[k] = false;
   }
 }
 
 // Launches kinodynamic simulation for multiple rollouts (CUDA kernel)
 __global__ void kinodynamic_kernel(float *state, float *intermediate_states,
-                                   float *controls, const float *BEVmap_height,
-                                   const float *BEVmap_cost, bool *valid,
+                                   float *controls, TerrainMap map, bool *valid,
                                    float *cost, float dt, int timesteps,
-                                   int rollouts, int NX, int NC,
-                                   const int BEVmap_size_px, float BEVmap_res,
-                                   float car_l2, float car_w2, float max_vel,
-                                   float min_vel, float RI, float max_vert_acc,
+                                   int rollouts, int NX, int NC, float car_l2,
+                                   float car_w2, float max_vel, float min_vel,
+                                   float RI, float max_vert_acc,
                                    float max_theta, float gear_switch_time) {
   int k = blockIdx.x * blockDim.x + threadIdx.x; // rollout ID
 
   if (k >= rollouts)
     return;
-
-  // Constants
-  float res_inv = 1.0f / BEVmap_res;
 
   int state_base = k * NX;
   int intermediate_index;
@@ -157,8 +204,7 @@ __global__ void kinodynamic_kernel(float *state, float *intermediate_states,
   // Compute initial footprint & orientation
   float cy = cosf(yaw), sy = sinf(yaw);
   float fl[3], fr[3], bl[3], br[3], z;
-  get_footprint_z(fl, fr, bl, br, z, x, y, cy, sy, BEVmap_height,
-                  BEVmap_size_px, res_inv, car_l2, car_w2);
+  get_footprint_z(fl, fr, bl, br, z, x, y, cy, sy, map, car_l2, car_w2);
   float last_roll = atan2f((fl[2] + bl[2]) - (fr[2] + br[2]), 4 * car_w2);
   float last_pitch = atan2f((bl[2] + br[2]) - (fl[2] + fr[2]), 4 * car_l2);
   float roll, pitch, wx, wy, cp, sp, cr, sr, ay, az;
@@ -173,8 +219,7 @@ __global__ void kinodynamic_kernel(float *state, float *intermediate_states,
 
     cy = cosf(yaw);
     sy = sinf(yaw);
-    get_footprint_z(fl, fr, bl, br, z, x, y, cy, sy, BEVmap_height,
-                    BEVmap_size_px, res_inv, car_l2, car_w2);
+    get_footprint_z(fl, fr, bl, br, z, x, y, cy, sy, map, car_l2, car_w2);
     roll = atan2f((fl[2] + bl[2]) - (fr[2] + br[2]), 4 * car_w2);
     pitch = atan2f((bl[2] + br[2]) - (fl[2] + fr[2]), 4 * car_l2);
 
@@ -223,14 +268,13 @@ __global__ void kinodynamic_kernel(float *state, float *intermediate_states,
 }
 
 void kinodynamic_launcher(
-    float *state, float *intermediate_states, const float *heightmap,
-    const float *costmap, bool *valid, float *cost, float dt, int timesteps,
-    int n_succ, int NX, int NC, const int map_size, float map_res, float car_l2,
-    float car_w2, float max_vel, float min_vel, float RI, float max_vert_acc,
-    float max_theta, float gear_switch_time, int patch_length_px,
-    int patch_width_px, const int blocks, const int threads, float *d_state,
-    float *d_intermediate_states, float *d_controls, bool *d_valid,
-    float *d_cost, cudaStream_t stream) {
+    float *state, float *intermediate_states, const TerrainMap &map,
+    bool *valid, float *cost, float dt, int timesteps, int n_succ, int NX,
+    int NC, float car_l2, float car_w2, float max_vel, float min_vel, float RI,
+    float max_vert_acc, float max_theta, float gear_switch_time,
+    int patch_length_px, int patch_width_px, const int blocks,
+    const int threads, float *d_state, float *d_intermediate_states,
+    float *d_controls, bool *d_valid, float *d_cost, cudaStream_t stream) {
   dim3 valid_threads(patch_length_px, patch_width_px);
   dim3 valid_blocks(timesteps, n_succ);
   cudaMemcpyAsync(d_state, state, sizeof(float) * n_succ * NX,
@@ -242,12 +286,12 @@ void kinodynamic_launcher(
   // controls layout: [rollout][timestep][n_cont] — caller must upload before launch
 
   kinodynamic_kernel<<<blocks, threads, 0, stream>>>(
-      d_state, d_intermediate_states, d_controls, heightmap, costmap, d_valid,
-      d_cost, dt, timesteps, n_succ, NX, NC, map_size, map_res, car_l2, car_w2,
-      max_vel, min_vel, RI, max_vert_acc, max_theta, gear_switch_time);
+      d_state, d_intermediate_states, d_controls, map, d_valid, d_cost, dt,
+      timesteps, n_succ, NX, NC, car_l2, car_w2, max_vel, min_vel, RI,
+      max_vert_acc, max_theta, gear_switch_time);
   check_validity_batch_kernel<<<valid_blocks, valid_threads, 0, stream>>>(
-      costmap, map_size, map_res, d_intermediate_states, patch_length_px,
-      patch_width_px, car_l2, car_w2, NX, timesteps, d_valid);
+      map, d_intermediate_states, patch_length_px, patch_width_px, car_l2,
+      car_w2, NX, timesteps, d_valid);
   cudaMemcpyAsync(state, d_state, sizeof(float) * n_succ * NX,
                   cudaMemcpyDeviceToHost, stream);
   cudaMemcpyAsync(valid, d_valid, sizeof(bool) * n_succ, cudaMemcpyDeviceToHost,
@@ -260,10 +304,10 @@ void kinodynamic_launcher(
   cudaStreamSynchronize(stream);
 }
 
-void check_validity_launcher(const float *costmap, int map_size_px,
-                             float map_res, float *states, int patch_length_px,
-                             int patch_width_px, float car_l2, float car_w2,
-                             int n_states, int NX, bool *result) {
+void check_validity_launcher(const TerrainMap &map, float *states,
+                             int patch_length_px, int patch_width_px,
+                             float car_l2, float car_w2, int n_states, int NX,
+                             bool *result) {
   dim3 threads(patch_length_px, patch_width_px);
   dim3 blocks(1, n_states);
   bool *d_result;
@@ -275,8 +319,8 @@ void check_validity_launcher(const float *costmap, int map_size_px,
              cudaMemcpyHostToDevice);
 
   check_validity_batch_kernel<<<blocks, threads>>>(
-      costmap, map_size_px, map_res, d_validity_states, patch_length_px,
-      patch_width_px, car_l2, car_w2, NX, 1, d_result);
+      map, d_validity_states, patch_length_px, patch_width_px, car_l2, car_w2,
+      NX, 1, d_result);
 
   cudaMemcpy(result, d_result, n_states * sizeof(bool), cudaMemcpyDeviceToHost);
   cudaFree(d_result);

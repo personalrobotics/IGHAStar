@@ -51,6 +51,18 @@ The `time_direction` parameter is used for bidirectional search: `1` for forward
   ```
 Loads the map or world representation from a PyTorch tensor.
 
+The CUDA kinodynamic environment accepts two representations and picks between
+them on the rank of the tensor: a 3D `H x W x 2` tensor is an elevation map plus
+costmap, and a 4D `H x W x nz x 4` tensor is an ESDF whose channels are
+`[signed distance, R, G, B]`. Which one the terrain queries expect is set by
+`map_type` (`"elevation"` or `"esdf"`) in `node_info`; it defaults to
+`"elevation"`. In ESDF mode `map_to_elev()` recovers the terrain height from the
+zero crossing of a column and `map_to_cost()` reads the colour of the surface
+voxel, so the physics and the collision checker are unchanged. The ESDF grid
+geometry (`voxel_z`, `z_min`) travels in the `esdf` block of `node_info`, since
+the tensor carries voxel data only. The CPU kinodynamic environment supports the
+elevation representation only and rejects 4D tensors.
+
 **create_Node**
   ```cpp
   std::shared_ptr<Node> create_Node(float *pose);

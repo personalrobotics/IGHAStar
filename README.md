@@ -176,6 +176,32 @@ python3 examples/standalone/example.py --config Configs/simple_example.yml --bid
   </table>
 </p>
 
+#### Kinodynamic ESDF Terrain Queries and Viser Demo
+
+The kinodynamic environment can query terrain from either an elevation map + costmap (`map_type: elevation`, the default) or a synthetic 3D ESDF (`map_type: esdf`). The vehicle dynamics are unchanged; only the height and traversability lookups differ. ESDF support currently requires CUDA.
+
+Optional visualization dependencies (Viser, SciPy, trimesh):
+
+```bash
+pip install -e ".[viz]"
+```
+
+From the repository root:
+
+```bash
+cd examples/standalone
+
+# 1. Build a synthetic ESDF from the elevation/cost maps and inspect it in Viser
+#    Open http://localhost:8080 in a browser
+python3 make_synthetic_esdf.py -c Configs/kinodynamic_example.yml
+
+# 2. Plan with the ESDF (set map_type: "esdf" in kinodynamic_example.yml first),
+#    then replay the trajectory over the terrain in Viser
+python3 example.py --config Configs/kinodynamic_example.yml --test-case case1 --viser
+```
+
+You can also replay a saved path later with `viser_replay.py`. Full configuration notes and side-by-side elevation vs ESDF comparison are in [examples/standalone/README.md](examples/standalone/README.md#esdf-terrain-queries-and-viser-demo).
+
 For detailed configuration and usage instructions, see [examples/standalone/README.md](examples/standalone/README.md).
 For information on how to create your own Environment, see [ighastar/Environments/README.md](ighastar/src/Environments/README.md)
 
@@ -202,6 +228,9 @@ IGHAStar/
 │   ├── standalone/             # Standalone examples (no external dependencies)
 │   │   ├── example.py          # Main example script
 │   │   ├── utils.py            # Standalone utilities
+│   │   ├── esdf_utils.py       # Synthetic ESDF construction helpers
+│   │   ├── make_synthetic_esdf.py  # Build/inspect a synthetic ESDF in Viser
+│   │   ├── viser_replay.py     # Trajectory replay over elevation or ESDF
 │   │   ├── README.md           # Detailed usage guide
 │   │   ├── Configs/            # Configuration files (*.yml)
 │   │   └── Maps/               # Map files (Offroad, street-png, generated)

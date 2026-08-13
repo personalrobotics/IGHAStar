@@ -18,6 +18,14 @@ dependencies = [
     "pyyaml"
 ]
 
+[project.optional-dependencies]
+# Synthetic ESDF generation and the Viser debugging views.
+viz = [
+    "scipy",
+    "viser",
+    "trimesh"
+]
+
 [tool.setuptools.packages.find]
 include = ["ighastar*"]
 exclude = ["Content*", "examples*", "scripts*"]
