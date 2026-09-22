@@ -28,6 +28,8 @@
 // END ENVIRONMENT
 #include "utils/config_utils.h"
 #include "utils/sampling_utils.h"
+#include "utils/tree_utils.h"
+#include "utils/tree_utils.cpp"
 #include <chrono>
 #include <iomanip>
 #include <pybind11/stl.h>
@@ -238,9 +240,12 @@ public:
     release_preemptive_caches();
     start_node->preexpanded = false;
     start_node->cached_succ.clear();
+    start_node->expand_index = -1;
   }
 
   void initialize(std::shared_ptr<Node> start_node) {
+    start_node->discover_index = 0;
+    start_node->expand_index = -1;
     Q_v.push(start_node);
     Q_v_hash.insert(start_node->hash);
     igha::unordered_map<int, std::shared_ptr<Node>> v;
@@ -444,6 +449,7 @@ public:
                              Seen_hash.count(neighbor->hash) == 0 &&
                              inactive_Q_v_hash.count(neighbor->hash) == 0;
       if (tolerance_check) {
+        neighbor->discover_index = expansion_counter;
         // approximate dominance check:
         if (neighbor->g < get_G(level, neighbor->index[level])) {
           GUpdate(neighbor);
@@ -638,6 +644,7 @@ public:
                 .count();
 
         expansion_counter++;
+        v->expand_index = expansion_counter;
 
         start_time = std::chrono::high_resolution_clock::now();
         // get successors:
@@ -734,6 +741,12 @@ public:
 
   // Number of vertices expanded preemptively (cached) during the last search.
   long get_preemptive_expansions() { return preemptive_expansions; }
+
+  // Export Seen ∪ Q_v ∪ inactive_Q_v as a Python dict for viz / ML.
+  py::dict export_search_tree() {
+    return tree_utils::export_search_tree(Seen, Q_v, inactive_Q_v,
+                                          env->timesteps, expansion_counter);
+  }
 };
 
 class BiIGHAStar {
@@ -1417,7 +1430,8 @@ public:
                 .count();
 
         search->expansion_counter++;
-        total_expansions.fetch_add(1);
+        int global_exp = total_expansions.fetch_add(1) + 1;
+        v->expand_index = global_exp;
 
         start_time = std::chrono::high_resolution_clock::now();
         // Process successors - mirrors IGHAStar
@@ -1430,6 +1444,7 @@ public:
             log_stream << "check tolerance" << std::endl;
           }
           if (tolerance_check) {
+            neighbor->discover_index = global_exp;
             if (debug) {
               log_stream << "update G" << std::endl;
             }
@@ -1821,6 +1836,17 @@ public:
            backward_search->preemptive_expansions;
   }
 
+  // Export forward and backward trees; expansion indices use the global counter.
+  py::dict export_search_tree() {
+    py::dict out;
+    out["forward"] = forward_search->export_search_tree();
+    out["backward"] = backward_search->export_search_tree();
+    out["expansion_count"] = total_expansions.load();
+    // Per-tree expansion_count still reflects each direction's local counter;
+    // override the top-level scrub range with the global total.
+    return out;
+  }
+
   // get the profiler info, similar to IGHAStar but aggregated from both
   // searches
   std::tuple<float, float, float, float, int, int, int, int, std::vector<int>,
@@ -1870,7 +1896,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("get_best_path_with_controls", &IGHAStar::get_best_path_with_controls)
       .def("get_profiler_info", &IGHAStar::get_profiler_info)
       .def("get_preemptive_expansions",
-           &IGHAStar::get_preemptive_expansions);
+           &IGHAStar::get_preemptive_expansions)
+      .def("export_search_tree", &IGHAStar::export_search_tree);
 
   py::class_<BiIGHAStar>(m, "BiIGHAStar", py::module_local())
       .def(py::init<const py::dict &, bool>(), py::arg("config"),
@@ -1884,5 +1911,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("get_best_cost", &BiIGHAStar::get_best_cost)
       .def("get_profiler_info", &BiIGHAStar::get_profiler_info)
       .def("get_preemptive_expansions",
-           &BiIGHAStar::get_preemptive_expansions);
+           &BiIGHAStar::get_preemptive_expansions)
+      .def("export_search_tree", &BiIGHAStar::export_search_tree);
 }
