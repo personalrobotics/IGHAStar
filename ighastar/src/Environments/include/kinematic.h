@@ -56,6 +56,9 @@ public:
   // already been computed (and cached) before it was popped from Q_v.
   bool preexpanded = false;
   std::vector<std::shared_ptr<Node>> cached_succ;
+  // Expansion bookkeeping for tree export / visualization.
+  int discover_index = -1;
+  int expand_index = -1;
   float control[n_cont] = {};
   float *intermediate_controls = nullptr;
   // Constructor

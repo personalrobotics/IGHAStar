@@ -118,6 +118,25 @@ Open the printed localhost URL. The GUI has play/pause, a state slider, and a li
   <em>Viser replay: vehicle following a planned trajectory over the terrain.</em>
 </p>
 
+### 4. Scrub search-tree growth in Viser
+
+After a search, `export_search_tree()` returns the nodes in Seen ∪ Q_v ∪ inactive (with discover/expand indices and intermediate poses). `viser_tree.py` is a minimal example of saving/loading that dict and drawing growth:
+
+```bash
+cd examples/standalone
+
+# Bidirectional plan + scrub (green = forward, purple = backward)
+python3 viser_tree.py -c Configs/kinodynamic_example.yml --test-case case1
+
+# Save, then replay offline
+python3 viser_tree.py -c Configs/kinodynamic_example.yml --test-case case1 \
+  --save ../../Content/standalone/race-2_tree.pkl
+python3 viser_tree.py -c Configs/kinodynamic_example.yml \
+  --tree ../../Content/standalone/race-2_tree.pkl
+```
+
+Use `--no-bidirectional` for a unidirectional tree (green only). Trees are drawn over the elevation+cost terrain. Color is chosen from each node's `time_direction` (green forward, purple backward). The Expansion slider shows segments for edges whose `discover_index` is at most the current expansion.
+
 ## Modifying Start and Goal Points
 
 To change the start and goal positions for path planning, you can either:
