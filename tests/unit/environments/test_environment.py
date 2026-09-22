@@ -106,6 +106,40 @@ class EnvironmentTester:
                     },
                 }
             }
+        elif self.env_type == "holonomic_6D":
+            self.test_config = {
+                "experiment_info_default": {
+                    "resolution": 4.0,
+                    "epsilon": [2.0, 2.0, 0.2, 2.0, 2.0, 0.5],
+                    "tolerance": 0.5,
+                    "max_level": 5,
+                    "division_factor": 2.0,
+                    "max_expansions": 100000,
+                    "hysteresis": 1000,
+                    "node_info": {
+                        "node_type": "holonomic_6D",
+                        "length": 2.6,
+                        "width": 1.6,
+                        "map_res": 0.1,
+                        "dt": 0.05,
+                        "timesteps": 10,
+                        "ax_list": [-1.0, 0.0, 1.0],
+                        "ay_list": [-1.0, 0.0, 1.0],
+                        "alpha_list": [-1.0, 0.0, 1.0],
+                        "accel_max": 5.0,
+                        "alpha_max": 2.0,
+                        "max_omega": 3.0,
+                        "del_theta": 90.0,
+                        "del_vel": 2.5,
+                        "del_omega": 1.0,
+                        "RI": 0.8,
+                        "max_vert_acc": 3.0,
+                        "min_vel": -10.0,
+                        "max_vel": 10.0,
+                        "max_theta": 30.0,
+                    },
+                }
+            }
         elif self.env_type == "simple":
             self.test_config = {
                 "experiment_info_default": {
@@ -170,13 +204,18 @@ class EnvironmentTester:
         else:
             print("CUDA available, using GPU versions")
 
+        if self.env_type == "holonomic_6D" and not cuda_available:
+            raise RuntimeError(
+                "holonomic_6D requires CUDA; no CPU fallback is available"
+            )
+
         # Set up environment macro and sources following common_utils.py pattern
         if self.env_type == "simple":
             print("Using header-only version (simple environment)")
             env_macro = env_header_flag("simple.h")
             sources = [str(pathlib.Path(__file__).parent / "test.cpp")]
             extra_cuda_cflags = []
-        elif cuda_available:
+        elif self.env_type == "holonomic_6D" or cuda_available:
             # Use CUDA version
             env_macro = env_header_flag("{}.h".format(self.env_type))
             cuda_path = (
@@ -273,6 +312,24 @@ class EnvironmentTester:
                 [1.0, 1.0, 3.14, 2.0], dtype=torch.float32
             )
 
+        elif self.env_type == "holonomic_6D":
+            self.test_pose_tensor = torch.tensor(
+                [5.0, 5.0, 0.0, 1.0, 0.0, 0.0], dtype=torch.float32
+            )
+
+            self.start_tensor = torch.tensor(
+                [5.0, 5.0, 0.0, 1.0, 0.0, 0.0], dtype=torch.float32
+            )
+            self.goal_tensor = torch.tensor(
+                [7.0, 7.0, 1.57, 1.0, 0.0, 0.0], dtype=torch.float32
+            )
+            self.close_goal_tensor = torch.tensor(
+                [5.01, 5.01, 0.01, 1.01, 0.01, 0.01], dtype=torch.float32
+            )
+            self.far_goal_tensor = torch.tensor(
+                [1.0, 1.0, 3.14, 2.0, 0.0, 0.0], dtype=torch.float32
+            )
+
     def run_all_tests(self):
         """Run all environment function tests."""
         print("Running {} Environment Function Tests".format(self.env_type.title()))
@@ -305,7 +362,7 @@ def main():
     parser = argparse.ArgumentParser(description="Test environment functions")
     parser.add_argument(
         "--env",
-        choices=["kinematic", "kinodynamic", "simple"],
+        choices=["kinematic", "kinodynamic", "holonomic_6D", "simple"],
         default="kinematic",
         help="Environment type to test",
     )

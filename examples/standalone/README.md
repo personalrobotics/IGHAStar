@@ -12,7 +12,8 @@ Configuration files are located in `examples/standalone/Configs/` and include:
 
 ### Available Configuration Files
 - `kinematic_example.yml` - Kinematic planning configuration
-- `kinodynamic_example.yml` - Kinodynamic planning configuration  
+- `kinodynamic_example.yml` - Kinodynamic planning configuration
+- `holonomic_6d_example.yml` - Holonomic 6-DoF hovercraft configuration
 - `simple_example.yml` - Simple planning configuration
 - `ros_kinodynamic_example.yml` - ROS integration configuration
 - `generic_integrator.yml` - Generic environment (Python callbacks; `generic_torch_integrator.py` reuses it with `node_type: "generic_torch"`)

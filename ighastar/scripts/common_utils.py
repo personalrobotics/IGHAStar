@@ -290,7 +290,13 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             return kernel.BiIGHAStar(configs, False)
         return kernel.IGHAStar(configs, False)
 
-    if not cuda_available:
+    if env_name == "holonomic_6D":
+        if not cuda_available:
+            raise RuntimeError(
+                "holonomic_6D requires CUDA; no CPU fallback is available"
+            )
+        env_header = "holonomic_6D.h"
+    elif not cuda_available:
         print("CUDA not available, using CPU versions")
         env_header = {
             "simple": "simple.h",
@@ -311,7 +317,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
     # "_eh" = IGHASTAR_ENV_HEADER era; avoids reusing old USE_*_ENV builds.
     mod_name = f"ighastar_{env_name}_{build_tag}_eh"
     if env_name != "simple":
-        if cuda_available:
+        if cuda_available or env_name == "holonomic_6D":
             # Use CUDA version
             cuda_path = BASE_DIR / "src" / "Environments" / "src" / f"{env_name}.cu"
             kernel = _ext_load(

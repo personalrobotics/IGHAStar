@@ -19,6 +19,7 @@ Environments/
 │   ├── kinodynamic.h
 │   ├── kinodynamic_cpu.h
 │   ├── simple.h
+│   ├── holonomic_6D.h
 │   ├── pusht.h            # PushT (Chipmunk CPU)
 │   ├── pusht_physics.h
 │   ├── generic_common.h   # Node + shared logic of the generic envs
@@ -28,7 +29,8 @@ Environments/
 │   ├── kinematic.cu
 │   ├── kinematic_cpu.cpp
 │   ├── kinodynamic.cu
-│   └── kinodynamic_cpu.cpp
+│   ├── kinodynamic_cpu.cpp
+│   └── holonomic_6D.cu
 └── README.md
 ```
 
@@ -192,7 +194,19 @@ struct NodePtrCompare {
 
 ## Example
 
-See the files in `include/` (e.g., `kinematic.h`, `kinodynamic.h`, `simple.h`) for concrete examples of how to implement these interfaces.
+See the files in `include/` (e.g., `kinematic.h`, `kinodynamic.h`, `holonomic_6D.h`, `simple.h`) for concrete examples of how to implement these interfaces.
+
+### holonomic_6D state layout
+
+The `holonomic_6D` environment models a 6-DoF hovercraft with terrain effects (ported from `hovercraft_launcher`):
+
+| Index | State / control |
+|---|---|
+| 0–2 | x, y, yaw |
+| 3–5 | vx_body, vy_body, omega |
+| control 0–2 | ax, ay, alpha (normalized, scaled by `accel_max` / `alpha_max`) |
+
+Cost is time only: `timesteps * dt`. CUDA is required; there is no CPU fallback.
 
 ## Choosing the environment header (`IGHASTAR_ENV_HEADER`)
 
