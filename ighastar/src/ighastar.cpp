@@ -26,6 +26,8 @@
 #include <kinodynamic.h>
 #elif defined(USE_KINODYNAMIC_CPU_ENV)
 #include <kinodynamic_cpu.h>
+#elif defined(USE_HOLONOMIC_6D_ENV)
+#include <holonomic_6D.h>
 #elif defined(USE_GENERIC_ENV)
 #include <generic.h>
 #else

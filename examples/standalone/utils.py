@@ -63,7 +63,7 @@ def get_map(
         bitmap[..., 1] *= 0
         bitmap[..., 0] = (bitmap[..., 0] > 1) * 255.0
         return bitmap
-    elif node == "kinodynamic":
+    elif node == "kinodynamic" or node == "holonomic_6D":
         bitmap = get_kinodynamic_map(map_name, map_dir, map_size, node_info)
         map_type = get_map_type(node_info)
         if map_type == "esdf":
@@ -263,7 +263,7 @@ def show_map(
 ) -> None:
     if node_type == "simple":
         plt.imshow(bitmap, cmap="gray", alpha=alpha)
-    elif node_type == "kinodynamic":
+    elif node_type == "kinodynamic" or node_type == "holonomic_6D":
         costmap, elevation_map = terrain_layers(bitmap, node_info)
         costmap_color = np.clip(costmap, 0, 255).astype(np.uint8)
         pink = np.array([255, 105, 180], dtype=np.uint8)  # BGR format

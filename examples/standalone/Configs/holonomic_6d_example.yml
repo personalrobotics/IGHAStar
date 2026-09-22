@@ -1,0 +1,63 @@
+map:
+  name: "race-2"
+  dir: "Maps/Offroad"
+  size: [512, 512]
+  res: &map_res 0.1
+  test_cases:
+    case1:
+      start: [5.6, 8.9, 1.5844149127199794, 2.0, 0.0, 0.0]
+      goal: [21.1, 46.1, 0.608009209539623, 2.0, 0.0, 0.0]
+    case2:
+      start: [11.9, 16.8, 1.3574384016819936, 1.5, 0.0, 0.0]
+      goal: [46.6, 25.0, 0.19076360687480998, 1.5, 0.0, 0.0]
+experiment_info_default:
+  resolution: 4.0
+  epsilon: [2, 2, 0.2, 2.0, 2.0, 0.5]  # ate, cte, heading, vx, vy, omega
+  backward_epsilon: [2, 2, 0.2, 2.0, 2.0, 0.5]
+  LCR: [1.5, 1.5, 0.2, 2.0, 2.0, 0.5]
+  tolerance: 0.5
+  max_level: 5
+  division_factor: 2
+  max_expansions: 100000
+  hysteresis: 1000
+  preemptive_expansion:
+    enabled: false
+    min_preemptive: 64
+    max_preemptive: 100
+  near_meet_config:
+    num_interpolation_points: 0
+    num_perturbations: 0
+    perturbation_scale: 1.0
+  goal_sampling_config:
+    enabled: true
+    space_type: "SE2"
+    angular_dims: [2]
+    num_samples: 32
+    sigma: [2.0, 2.0, 0.2, 2.0, 2.0, 0.5]
+  node_info:
+    node_type: "holonomic_6D"
+    map_type: "esdf_bev"
+    esdf:
+      voxel_z: 0.25
+      z_margin: 1.0
+      method: "plane"
+      cache: "Maps/Offroad/race-2_esdf.npz"
+    length: 2.6
+    width: 1.6
+    map_res: *map_res
+    dt: 0.05
+    timesteps: 10
+    ax_list: [-1.0, 0.0, 1.0]
+    ay_list: [-1.0, 0.0, 1.0]
+    alpha_list: [-1.0, 0.0, 1.0]
+    accel_max: 5.0
+    alpha_max: 2.0
+    max_omega: 3.0
+    del_theta: 90.0
+    del_vel: 2.5
+    del_omega: 1.0
+    RI: 0.8
+    max_vert_acc: 3.0
+    min_vel: -10.0
+    max_vel: 10.0
+    max_theta: 30.0

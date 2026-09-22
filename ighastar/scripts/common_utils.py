@@ -113,7 +113,13 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             return kernel.BiIGHAStar(configs, False)
         return kernel.IGHAStar(configs, False)
 
-    if not cuda_available:
+    if env_name == "holonomic_6D":
+        if not cuda_available:
+            raise RuntimeError(
+                "holonomic_6D requires CUDA; no CPU fallback is available"
+            )
+        env_macro = "-DUSE_HOLONOMIC_6D_ENV"
+    elif not cuda_available:
         print("CUDA not available, using CPU versions")
         env_macro = {
             "simple": "-DUSE_SIMPLE_ENV",
@@ -129,7 +135,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
         }[env_name]
 
     if env_name != "simple":
-        if cuda_available:
+        if cuda_available or env_name == "holonomic_6D":
             # Use CUDA version
             cuda_path = BASE_DIR / "src" / "Environments" / "src" / f"{env_name}.cu"
             kernel = load(

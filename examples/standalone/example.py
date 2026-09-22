@@ -65,7 +65,7 @@ def main(
     default_expansion_limit = experiment_info["max_expansions"]
     hysteresis = experiment_info["hysteresis"]
     if bidirectional:
-        if node_type == "kinodynamic" or node_type == "kinematic":
+        if node_type in ("kinodynamic", "kinematic", "holonomic_6D"):
             expansion_limit = 1000  # Per-thread limit for bidirectional search
         else:
             expansion_limit = 5000  # Per-thread limit for bidirectional search
@@ -183,7 +183,7 @@ def main(
             zorder=10,
         )
 
-        if node_type == "kinodynamic" or node_type == "kinematic":
+        if node_type in ("kinodynamic", "kinematic", "holonomic_6D"):
             # Plot car orientations along the path
             plot_car(
                 plt,
