@@ -1,9 +1,97 @@
-import torch
-from torch.utils.cpp_extension import load
 import pathlib
 import os
-from typing import Any, Dict
+import shutil
+import subprocess
 import sys
+from typing import Any, Dict, Optional, Set
+
+import torch
+from torch.utils.cpp_extension import load
+
+# True after CXX has been checked / pointed at a C++20-capable compiler for Torch.
+_CXX_TORCH_READY = False
+
+# Torch headers require ``__cplusplus >= 202002L`` (see torch/all.h). GCC 10 accepts
+# ``-std=c++20`` but still sets ``__cplusplus`` to 201709L on Ubuntu 20.04 — that fails
+# Torch's check. GCC 11+ or Clang 10+ set 202002L correctly.
+_CXX20_PROBE = b"""\
+#if !defined(_MSC_VER) && __cplusplus < 202002L
+#error __cplusplus < 202002L (Torch needs a compiler that defines C++20 properly)
+#endif
+#include <compare>
+int main(){return 0;}
+"""
+
+
+def _compiler_supports_torch_cpp20(cxx: str) -> bool:
+    """Return True if ``cxx -std=c++20`` defines ``__cplusplus >= 202002L`` for Torch."""
+    if not cxx or shutil.which(cxx.split()[0]) is None:
+        return False
+    probe = subprocess.run(
+        [cxx, "-std=c++20", "-x", "c++", "-", "-fsyntax-only"],
+        input=_CXX20_PROBE,
+        capture_output=True,
+        check=False,
+    )
+    return probe.returncode == 0
+
+
+def _find_torch_cpp20_compiler() -> Optional[str]:
+    """Prefer an explicit CXX, then compilers that actually set ``__cplusplus`` to C++20."""
+    candidates = []
+    if os.environ.get("CXX"):
+        candidates.append(os.environ["CXX"])
+    # GCC 11+ first (GCC 10 fails Torch's __cplusplus check on Ubuntu 20.04).
+    for major in range(14, 10, -1):
+        candidates.append("g++-%d" % major)
+    # Clang 10+ reports 202002L with -std=c++20 (usable when only g++-10 is installed).
+    for major in range(14, 9, -1):
+        candidates.append("clang++-%d" % major)
+    candidates.extend(["clang++", "g++-10", "g++"])
+    seen = set()  # type: Set[str]
+    for cxx in candidates:
+        if cxx in seen:
+            continue
+        seen.add(cxx)
+        if _compiler_supports_torch_cpp20(cxx):
+            return cxx
+    return None
+
+
+def _ensure_cxx_accepts_torch_std_flag() -> None:
+    """Point ``CXX`` at a compiler Torch's headers accept (``__cplusplus >= 202002L``).
+
+    ``g++-10 -std=c++20`` is not enough on Ubuntu 20.04: ``__cplusplus`` stays 201709L.
+    Use GCC 11+ or Clang 10+.
+    """
+    global _CXX_TORCH_READY
+    if _CXX_TORCH_READY or sys.platform == "win32":
+        return
+    cxx = _find_torch_cpp20_compiler()
+    if cxx is None:
+        raise RuntimeError(
+            "IGHA* Torch extensions need a compiler with __cplusplus >= 202002L "
+            "(GCC 11+ or Clang 10+). Note: g++-10 accepts -std=c++20 but still reports "
+            "201709L on Ubuntu 20.04, which PyTorch rejects. Install one, then re-run:\n"
+            "  sudo apt-get install -y g++-11   # or: sudo apt-get install -y clang\n"
+            "  export CXX=g++-11               # or: export CXX=clang++\n"
+            "  ./smoke.sh"
+        )
+    os.environ["CXX"] = cxx
+    # Keep CC in sync so ninja/ccache don't mix toolchains.
+    if cxx.startswith("g++-"):
+        gcc = "gcc-" + cxx[len("g++-") :]
+        if shutil.which(gcc):
+            os.environ.setdefault("CC", gcc)
+    elif cxx.startswith("clang++-"):
+        clang = "clang-" + cxx[len("clang++-") :]
+        if shutil.which(clang):
+            os.environ.setdefault("CC", clang)
+    elif cxx == "g++":
+        os.environ.setdefault("CC", "gcc")
+    elif cxx == "clang++":
+        os.environ.setdefault("CC", "clang")
+    _CXX_TORCH_READY = True
 
 
 def _find_source_dir() -> pathlib.Path:
@@ -55,6 +143,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
     Returns:
         The created planner instance
     """
+    _ensure_cxx_accepts_torch_std_flag()
     node_info = configs["experiment_info_default"]["node_info"]
     env_name = node_info["node_type"]
     # esdf_bev is flattened to a 2D BEV in Python; the Environment only knows
@@ -90,8 +179,9 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
         state_dim = int(info["state_dim"])
         control_dim = int(info["control_dim"])
         hash_dims = int(info.get("hash_dims", state_dim))
+        # Do not pass -std=c++17: Torch's cpp_extension already adds -std=c++20, and a later
+        # -std= flag wins on GCC, which demotes the build back to C++17 and breaks Torch headers.
         extra_cflags = [
-            "-std=c++17",
             "-O3",
             # Silence benign pybind visibility warnings from py::function members.
             "-Wno-attributes",
@@ -136,7 +226,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
                 name="ighastar",
                 sources=[str(cpp_path), str(cuda_path)],
                 extra_include_paths=extra_includes,
-                extra_cflags=["-std=c++17", "-O3", env_macro],
+                extra_cflags=["-O3", env_macro],
                 extra_cuda_cflags=["-O3"],
                 verbose=True,
             )
@@ -149,7 +239,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
                 name="ighastar",
                 sources=[str(cpp_path), str(cpu_cpp_path)],
                 extra_include_paths=extra_includes,
-                extra_cflags=["-std=c++17", "-O3", env_macro],
+                extra_cflags=["-O3", env_macro],
                 verbose=True,
             )
     else:
@@ -157,7 +247,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             name="ighastar",
             sources=[str(cpp_path)],
             extra_include_paths=extra_includes,
-            extra_cflags=["-std=c++17", "-O3", env_macro],
+            extra_cflags=["-O3", env_macro],
             verbose=True,
         )
 
