@@ -1,5 +1,12 @@
 # Creating a Custom Environment for IGHAStar
 
+Two paths exist:
+
+| Path | Use when | Doc |
+|---|---|---|
+| **Generic (Python callbacks)** | You own dynamics, cost, validity, heuristic, and goal test in Python | [GENERIC.md](GENERIC.md) |
+| **C++ Environment** | You implement `Succ` and related methods in C++/CUDA | This file |
+
 ## Folder Structure
 
 ```

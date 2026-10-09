@@ -203,7 +203,8 @@ python3 example.py --config Configs/kinodynamic_example.yml --test-case case1 --
 You can also replay a saved path later with `viser_replay.py`. Full configuration notes and side-by-side elevation vs ESDF comparison are in [examples/standalone/README.md](examples/standalone/README.md#esdf-terrain-queries-and-viser-demo).
 
 For detailed configuration and usage instructions, see [examples/standalone/README.md](examples/standalone/README.md).
-For information on how to create your own Environment, see [ighastar/Environments/README.md](ighastar/src/Environments/README.md)
+For a custom environment in Python (dynamics, cost, validity, heuristic, goal test as callbacks), see [ighastar/Environments/GENERIC.md](ighastar/src/Environments/GENERIC.md).
+For a custom C++ Environment (`Succ` and related methods), see [ighastar/Environments/README.md](ighastar/src/Environments/README.md).
 
 For the ROS and BeamNG examples, see [examples/ROS/README.md](examples/ROS/README.md) and [examples/BeamNG/README.md](examples/BeamNG/README.md). The BeamNG README contains detailed documentation on [bidirectional search parameters](examples/BeamNG/README.md#bidirectional-search-parameters).
 

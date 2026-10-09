@@ -15,6 +15,20 @@ Configuration files are located in `examples/standalone/Configs/` and include:
 - `kinodynamic_example.yml` - Kinodynamic planning configuration  
 - `simple_example.yml` - Simple planning configuration
 - `ros_kinodynamic_example.yml` - ROS integration configuration
+- `generic_integrator.yml` - Generic environment (Python callbacks)
+
+## Generic environment (Python callbacks)
+
+Use `node_type: "generic"` when you supply dynamics, cost, validity, heuristic, and goal test in Python. You do not write a C++ environment.
+
+Full API, config keys, batching rules, and path format: [GENERIC.md](../../ighastar/src/Environments/GENERIC.md).
+
+Minimal demo:
+
+```bash
+cd examples/standalone
+python3 generic_integrator.py
+```
 
 ## ESDF Terrain Queries and Viser Demo
 
