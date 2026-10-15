@@ -40,7 +40,7 @@ def _load_ext() -> Any:
             str(src / "esdf_to_bev.cu"),
         ],
         extra_include_paths=[str(src)],
-        extra_cflags=["-std=c++17", "-O3"],
+        extra_cflags=["-std=c++20", "-O3"],
         extra_cuda_cflags=["-O3"],
         verbose=False,
     )

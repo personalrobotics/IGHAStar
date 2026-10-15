@@ -91,7 +91,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
         control_dim = int(info["control_dim"])
         hash_dims = int(info.get("hash_dims", state_dim))
         extra_cflags = [
-            "-std=c++17",
+            "-std=c++20",
             "-O3",
             # Silence benign pybind visibility warnings from py::function members.
             "-Wno-attributes",
@@ -126,7 +126,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
         hash_dims = int(info.get("hash_dims", state_dim))
         compiled = compile_generic_torch_callbacks(configs)
         extra_cflags = [
-            "-std=c++17",
+            "-std=c++20",
             "-O3",
             "-Wno-attributes",
             "-DUSE_GENERIC_TORCH_ENV",
@@ -174,7 +174,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
                 name="ighastar",
                 sources=[str(cpp_path), str(cuda_path)],
                 extra_include_paths=extra_includes,
-                extra_cflags=["-std=c++17", "-O3", env_macro],
+                extra_cflags=["-std=c++20", "-O3", env_macro],
                 extra_cuda_cflags=["-O3"],
                 verbose=True,
             )
@@ -187,7 +187,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
                 name="ighastar",
                 sources=[str(cpp_path), str(cpu_cpp_path)],
                 extra_include_paths=extra_includes,
-                extra_cflags=["-std=c++17", "-O3", env_macro],
+                extra_cflags=["-std=c++20", "-O3", env_macro],
                 verbose=True,
             )
     else:
@@ -195,7 +195,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             name="ighastar",
             sources=[str(cpp_path)],
             extra_include_paths=extra_includes,
-            extra_cflags=["-std=c++17", "-O3", env_macro],
+            extra_cflags=["-std=c++20", "-O3", env_macro],
             verbose=True,
         )
 

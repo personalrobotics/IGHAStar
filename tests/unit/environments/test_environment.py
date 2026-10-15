@@ -216,7 +216,7 @@ class EnvironmentTester:
             ),
             sources=sources,
             extra_include_paths=extra_includes,
-            extra_cflags=["-std=c++17", "-O3", env_macro],
+            extra_cflags=["-std=c++20", "-O3", env_macro],
             extra_cuda_cflags=extra_cuda_cflags,
             verbose=True,
         )
