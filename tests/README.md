@@ -61,6 +61,29 @@ python3 tests/unit/environments/test_environment.py --env simple
 
 ```
 
+## Generic environments (`generic` and `generic_torch`)
+
+The callback-driven environments have their own pytest suites. Both suites use the problem definitions in `tests/unit/generic_problems.py`, which is the 2D integrator from `examples/standalone/generic_integrator.py` plus a few variants.
+
+| File | What it covers |
+|---|---|
+| `unit/environments/test_generic_environment.py` + `test_generic.cpp` | Environment-level checks, mirroring `test.cpp`: validity (single and batched), successors (pruning, batched vs single), goal reaching, heuristic, multi-step rollouts. Every check runs against both `generic` and `generic_torch`. Parity tests compare the two modes on identical inputs, including a seeded random control sampler. |
+| `unit/planner/test_generic_torch_planner.py` | Full IGHA\* / BiIGHA\* searches. Covers parity with `generic` (identical expansion count, path, controls and cost), proof that the search makes no Python calls (counting/raising callbacks), GIL release during search, rollouts, random samplers, fixed control tensors, the compile cache, export error messages, and CUDA (skipped without a GPU). |
+
+`tests/conftest.py` puts this checkout first on `sys.path`, points `IGHASTAR_SRC_DIR` at this checkout's sources, and adds the interpreter's `bin/` to `PATH` so `ninja` is found.
+
+```bash
+# From the repository root (requires pytest)
+python3 -m pytest tests/unit/environments/test_generic_environment.py \
+                  tests/unit/planner/test_generic_torch_planner.py -v
+
+# Or one suite at a time
+python3 -m pytest tests/unit/environments/test_generic_environment.py -v
+python3 -m pytest tests/unit/planner/test_generic_torch_planner.py -v
+```
+
+Runtime: about 7 s when everything is cached. A cold run (empty `~/.cache/torch_extensions` and `~/.cache/ighastar/generic_torch`) compiles about 11 AOTInductor packages (4 of them for CUDA) and 4 C++ extensions, which takes about 2 minutes on a 16-core machine. Set `IGHASTAR_AOTI_CACHE=/some/dir` to keep compiled test packages separate from your own.
+
 
 ## Example Output
 
