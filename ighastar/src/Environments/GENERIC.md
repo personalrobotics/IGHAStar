@@ -144,14 +144,80 @@ For a multi-step edge with per-step rewards, return `[B, T, n]` from `dynamics_f
 
 Pass `bidirectional=True` to `create_planner`. BiIGHA\* uses the same six callbacks. Near-meet distance for generic is Euclidean on the full state. Tune `tolerance` and `resolution` if meet detection is too strict or too loose.
 
+## generic_torch: compiled torch callbacks
+
+Set `node_info.node_type: "generic_torch"` to keep the same six callbacks but compile them. `create_planner` then:
+
+1. Exports each callback with `torch.export`, with a dynamic batch dimension.
+2. Compiles the exported graphs ahead of time with AOTInductor into `.pt2` packages.
+3. Builds the planner with `-DUSE_GENERIC_TORCH_ENV` (`generic_torch.h`), which loads the packages with `torch::inductor::AOTIModelPackageLoader` and runs them from C++.
+
+The search loop never calls Python, and `search()` releases the GIL while it runs. Dynamics, cost, validity and heuristic are fused into one compiled call per batched expansion.
+
+```python
+configs["experiment_info_default"]["node_info"]["node_type"] = "generic_torch"
+configs["experiment_info_default"]["node_info"]["device"] = "cpu"   # or "cuda"
+configs["sample_controls_fn"] = sample_controls   # same six keys as generic
+...
+planner = create_planner(configs)                 # export + compile (cached) + build
+ok = planner.search(start, goal, world, max_expansions, hysteresis, True)
+```
+
+### What the callbacks must satisfy
+
+The callbacks must be `torch.export`-able:
+
+- Use pure torch ops on the input tensors. Do not use `.item()`, `bool(tensor)`, `.tolist()` or NumPy.
+- Do not branch in Python on tensor values. Use `torch.where` or masks instead.
+- `goal_test_fn` must return a tensor, for example `torch.norm(s - goal) < r`. A tensor-returning `goal_test_fn` also works in `generic` mode, so the same functions can serve both modes.
+- Do not specialize on the batch size `B`. The batch dimension is exported as dynamic.
+- Python state that the callbacks read (globals, closures, counters) is frozen into the graph at export time. If you change it, build a new planner. Changing a captured tensor changes the cache key, so the new planner recompiles.
+- For CUDA, make the callbacks device-agnostic by moving captured constants with `.to(states.device)`.
+
+If export fails, `create_planner` raises a `RuntimeError` that names the callback.
+
+Generic-mode callbacks sometimes share results through Python-side caches. For example, `dynamics_fn` stores per-step collision counts for `cost_fn` to read. That pattern cannot be compiled. Instead, pass the optional `expand_fn(states, controls) -> (next_states, cost, valid, heuristic)`, which replaces `dynamics_fn` and `cost_fn` for successor generation. The rollout and the cost then live in one compiled graph. `validity_fn` and `heuristic_fn` are still required for the start and goal checks. `expand_fn` is available only in `generic_torch`.
+
+### Parity with generic
+
+Inductor may fuse or reorder float operations, for example inside a norm reduction. The compiled callbacks can therefore differ from eager torch in the last bit. In the integrator example and the tests, results are bitwise identical: same expansions, path and cost. In a 30-obstacle variant, the compiled run expanded 456 nodes against 460 for `generic`, with the same solution cost. Treat `generic_torch` as equivalent up to float rounding, not bitwise identical.
+
+### Controls and randomness
+
+| `sample_controls_fn` | Behavior |
+|---|---|
+| A `Tensor[K, n_cont]` | Used as the fixed control set |
+| A function with no random ops | Evaluated once at build time and used as a fixed set |
+| A function with random ops (`torch.rand`, ...) | Compiled and re-run on every expansion |
+
+Graphs that contain random ops are compiled with Inductor's `fallback_random=True`. Random ops then draw from the global ATen generator, so `torch.manual_seed` controls them and they produce the same numbers as the eager callback in `generic` mode. Random ops inside dynamics or cost follow the same rule.
+
+### Caching and compile time
+
+Packages are cached in `~/.cache/ighastar/generic_torch`. Set `IGHASTAR_AOTI_CACHE` to use another directory. The cache key hashes the exported graph, every captured tensor value, the device and the torch version. Editing comments or moving code does not trigger a recompile. Changing what is computed does.
+
+- First build: about 4-10 s per package on CPU, plus about 20 s for the C++ extension. The extension is cached in `~/.cache/torch_extensions` as `ighastar_generic_torch_{state_dim}_{control_dim}_{hash_dims}`.
+- Later runs: about 1 s to re-export and hash the callbacks.
+
+### Device
+
+`node_info.device` defaults to `"cpu"`. With `"cuda"`, the packages run on the GPU, and each call copies its batch to the device and back. That copy and the kernel-launch latency make CUDA slower than CPU for small batches like the integrator. CUDA helps only when individual callbacks are expensive.
+
+### Bidirectional search
+
+`bidirectional=True` works because both search threads call compiled code with no Python. The goal-test caveat still applies. Both directions share `goal_test_fn`, so a backward search that starts inside the goal region terminates at once. For BiIGHA\*, use a goal test that never fires and let near-meet connect the two trees.
+
 ## Working examples
 
 | File | What it shows |
 |---|---|
 | `examples/standalone/generic_integrator.py` | Minimal 2D integrator |
+| `examples/standalone/generic_torch_integrator.py` | Same problem in `generic_torch` mode, timed against `generic` |
 | `examples/standalone/Configs/generic_integrator.yml` | Generic YAML keys |
 | `examples/standalone/generic_ur5e_mjx.py` | Skeleton for a MuJoCo MJX arm |
 | `ighastar/src/Environments/include/generic.h` | Callback contract in the C++ header |
+| `ighastar/src/Environments/include/generic_torch.h` | Compiled-callback environment |
+| `ighastar/scripts/generic_torch.py` | Export, compile and cache logic |
 
 ## Related
 

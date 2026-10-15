@@ -202,6 +202,25 @@ python3 example.py --config Configs/kinodynamic_example.yml --test-case case1 --
 
 You can also replay a saved path later with `viser_replay.py`. Full configuration notes and side-by-side elevation vs ESDF comparison are in [examples/standalone/README.md](examples/standalone/README.md#esdf-terrain-queries-and-viser-demo).
 
+#### Generic environments: Python callbacks or compiled torch callbacks
+
+Two environment types let you define the problem (dynamics, cost, validity, heuristic, goal test, control sampler) as batched torch functions instead of writing C++:
+
+| `node_type` | Callbacks run as | Use when |
+|---|---|---|
+| `generic` | Python, called from C++ on every expansion | Callbacks need arbitrary Python (JAX, NumPy, MuJoCo, ...) |
+| `generic_torch` | Exported with `torch.export`, compiled ahead of time with AOTInductor, run from C++ with no Python and no GIL | Callbacks are pure torch ops; you want the search loop free of Python overhead |
+
+`generic_torch` takes the same six callables with the same signatures. They must be exportable: no `.item()` or Python branching on tensor values, and `goal_test` returns a tensor rather than a Python bool. Compiled packages are cached under `~/.cache/ighastar/generic_torch`, so only the first run pays the compile time (about 20-40 s on CPU).
+
+```bash
+cd examples/standalone
+python3 generic_integrator.py          # generic (Python callbacks)
+python3 generic_torch_integrator.py    # generic_torch; also runs generic and prints both timings
+```
+
+On the integrator example, `generic_torch` gives the same expansions, path and cost as `generic` and searches about 9x faster on CPU. See [GENERIC.md](ighastar/src/Environments/GENERIC.md#generic_torch-compiled-torch-callbacks) for the constraints, randomness, CUDA and caching.
+
 For detailed configuration and usage instructions, see [examples/standalone/README.md](examples/standalone/README.md).
 For a custom environment in Python (dynamics, cost, validity, heuristic, goal test as callbacks), see [ighastar/Environments/GENERIC.md](ighastar/src/Environments/GENERIC.md).
 For a custom C++ Environment (`Succ` and related methods), see [ighastar/Environments/README.md](ighastar/src/Environments/README.md).
@@ -224,7 +243,8 @@ IGHAStar/
 │   │       ├── src/            # CUDA (*.cu) and CPU (*.cpp) implementations
 │   │       └── README.md       # Environment documentation
 │   └── scripts/                # Utility scripts
-│       └── common_utils.py     # Common utilities (create_planner, etc.)
+│       ├── common_utils.py     # Common utilities (create_planner, etc.)
+│       └── generic_torch.py    # torch.export + AOTInductor compile for generic_torch
 ├── examples/                   # Example scripts and configurations
 │   ├── standalone/             # Standalone examples (no external dependencies)
 │   │   ├── example.py          # Main example script
@@ -252,7 +272,8 @@ IGHAStar/
 ├── tests/                      # Test suite
 │   ├── unit/                   # Unit tests
 │   │   ├── core/               # Core functionality tests
-│   │   └── environments/       # Environment tests
+│   │   ├── environments/       # Environment tests (incl. generic / generic_torch)
+│   │   └── planner/            # generic_torch planner tests (parity, no-Python)
 │   └── README.md               # Testing documentation
 ├── Content/                    # Figures and media files
 │   ├── standalone/             # Standalone example images

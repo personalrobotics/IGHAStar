@@ -28,6 +28,8 @@
 #include <kinodynamic_cpu.h>
 #elif defined(USE_GENERIC_ENV)
 #include <generic.h>
+#elif defined(USE_GENERIC_TORCH_ENV)
+#include <generic_torch.h>
 #else
 #error "No environment macro defined"
 #endif
@@ -1823,11 +1825,26 @@ public:
 // PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 //     m.def("ighastar_search", &ighastar_search, "IGHA*");
 // }
+
+// The compiled generic_torch environment never touches Python during search,
+// so it releases the GIL for the whole search: other Python threads keep
+// running, and an accidental Python call from the search would fail loudly
+// instead of silently reintroducing callback overhead. The other environments
+// keep the historical behavior (generic must hold the GIL for its callbacks).
+#if defined(USE_GENERIC_TORCH_ENV)
+#define IGHASTAR_SEARCH_GUARD , py::call_guard<py::gil_scoped_release>()
+#else
+#define IGHASTAR_SEARCH_GUARD
+#endif
+
+// Classes are module_local so several planner extensions (e.g. "generic" and
+// "generic_torch", or generic builds with different dims) can be imported into
+// the same process without pybind11 "type already registered" errors.
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  py::class_<IGHAStar>(m, "IGHAStar")
+  py::class_<IGHAStar>(m, "IGHAStar", py::module_local())
       .def(py::init<const py::dict &, bool, int>(), py::arg("config"),
            py::arg("debug") = false, py::arg("time_direction") = 1)
-      .def("search", &IGHAStar::search_adapter)
+      .def("search", &IGHAStar::search_adapter IGHASTAR_SEARCH_GUARD)
       .def("get_path_list", &IGHAStar::get_path_list)
       .def("get_best_path", &IGHAStar::get_best_path)
       .def("get_best_path_with_controls", &IGHAStar::get_best_path_with_controls)
@@ -1835,10 +1852,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("get_preemptive_expansions",
            &IGHAStar::get_preemptive_expansions);
 
-  py::class_<BiIGHAStar>(m, "BiIGHAStar")
+  py::class_<BiIGHAStar>(m, "BiIGHAStar", py::module_local())
       .def(py::init<const py::dict &, bool>(), py::arg("config"),
            py::arg("debug") = false)
-      .def("search", &BiIGHAStar::search_adapter)
+      .def("search", &BiIGHAStar::search_adapter IGHASTAR_SEARCH_GUARD)
       .def("get_path_list", &BiIGHAStar::get_path_list)
       .def("get_best_path", &BiIGHAStar::get_best_path)
       .def("get_best_path_with_controls",

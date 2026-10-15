@@ -15,7 +15,7 @@ Configuration files are located in `examples/standalone/Configs/` and include:
 - `kinodynamic_example.yml` - Kinodynamic planning configuration  
 - `simple_example.yml` - Simple planning configuration
 - `ros_kinodynamic_example.yml` - ROS integration configuration
-- `generic_integrator.yml` - Generic environment (Python callbacks)
+- `generic_integrator.yml` - Generic environment (Python callbacks; `generic_torch_integrator.py` reuses it with `node_type: "generic_torch"`)
 
 ## Generic environment (Python callbacks)
 
@@ -28,6 +28,16 @@ Minimal demo:
 ```bash
 cd examples/standalone
 python3 generic_integrator.py
+```
+
+### Compiled torch callbacks (`generic_torch`)
+
+`node_type: "generic_torch"` takes the same callbacks, written as pure torch functions. `create_planner` exports them with `torch.export`, compiles them with AOTInductor, and caches the result on disk. The C++ search then runs the compiled code with no Python calls. See [GENERIC.md](../../ighastar/src/Environments/GENERIC.md#generic_torch-compiled-torch-callbacks).
+
+```bash
+cd examples/standalone
+python3 generic_torch_integrator.py                 # CPU; also times generic mode
+python3 generic_torch_integrator.py --device cuda   # compile for and run on CUDA
 ```
 
 ## ESDF Terrain Queries and Viser Demo
