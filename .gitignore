@@ -234,6 +234,9 @@ test_*.cpp
 # Exception: Allow our test framework files
 !tests/unit/environments/test_environment.py
 !tests/unit/environments/test.cpp
+!tests/unit/environments/test_generic_environment.py
+!tests/unit/environments/test_generic.cpp
+!tests/unit/planner/test_generic_torch_planner.py
 
 # Large data files
 *.npz
