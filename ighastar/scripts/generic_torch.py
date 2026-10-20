@@ -55,6 +55,7 @@ import io
 import os
 import pathlib
 import time
+import uuid
 from typing import Any, Callable, Dict, Optional
 
 import torch
@@ -106,7 +107,9 @@ class _Expand(torch.nn.Module):
 
     def forward(self, states, controls):
         nxt = self.dynamics(states, controls).to(torch.float32)
-        final = nxt[:, -1] if nxt.dim() == 3 else nxt
+        # Contiguous, like generic.h's final state: `nxt[:, -1]` of a [B, T, n]
+        # rollout is a strided view, which e.g. `.view(-1)` in a callback rejects.
+        final = nxt[:, -1].contiguous() if nxt.dim() == 3 else nxt
         cost = self.cost(states, controls, final).to(torch.float32).reshape(-1)
         valid = self.validity(final).to(torch.float32).reshape(-1)
         h = self.heuristic(final).to(torch.float32).reshape(-1)
@@ -252,11 +255,17 @@ def _compile(
         return str(path)
     cache_dir.mkdir(parents=True, exist_ok=True)
     t0 = time.perf_counter()
-    tmp = cache_dir / f".{name}-{key}.{os.getpid()}.tmp.pt2"
-    torch._inductor.aoti_compile_and_package(
-        ep, package_path=str(tmp), inductor_configs=inductor_configs
-    )
-    os.replace(tmp, path)  # atomic: concurrent builders never see a partial file
+    # Unique per builder (process *and* thread): concurrent builds of the same
+    # package each write their own temp file, then atomically replace `path`
+    # with identical contents, so no builder overwrites or loses another's.
+    tmp = cache_dir / f".{name}-{key}.{os.getpid()}.{uuid.uuid4().hex}.tmp.pt2"
+    try:
+        torch._inductor.aoti_compile_and_package(
+            ep, package_path=str(tmp), inductor_configs=inductor_configs
+        )
+        os.replace(tmp, path)  # atomic: concurrent builders never see a partial file
+    finally:
+        tmp.unlink(missing_ok=True)  # Only left behind if the compile failed.
     dt = time.perf_counter() - t0
     stats["compiled"].append(name)
     stats["compile_s"][name] = dt
@@ -311,18 +320,24 @@ def compile_generic_torch_callbacks(
     if isinstance(sampler, torch.Tensor):
         fixed_controls = sampler.detach().to("cpu", torch.float32).contiguous()
     else:
-        with torch.device(dev):
-            ep_sc = _export("sample_controls", _SampleControls(sampler), (), None)
-        if _has_random_ops(ep_sc):
-            packages["sample_controls"] = _compile(
-                "sample_controls", ep_sc, dev, cache, inductor_configs, verbose, stats
-            )
-            # Probe K from the (eager) exported program; same shape every call.
-            K = int(ep_sc.module()().shape[0])
-        else:
-            # Deterministic: evaluate once (eager aten, bitwise identical to
-            # what generic mode sees each call) and pass as a constant.
-            fixed_controls = ep_sc.module()().detach().to("cpu", torch.float32)
+        # Exporting and probing the sampler runs it, which would advance the
+        # global RNG (on cache hits too) and shift a seeded search's first
+        # control samples relative to `generic` mode, whose construction never
+        # samples. Fork the generators so construction leaves them untouched.
+        rng_devices = [dev.index] if dev.type == "cuda" else []
+        with torch.random.fork_rng(devices=rng_devices):
+            with torch.device(dev):
+                ep_sc = _export("sample_controls", _SampleControls(sampler), (), None)
+            if _has_random_ops(ep_sc):
+                packages["sample_controls"] = _compile(
+                    "sample_controls", ep_sc, dev, cache, inductor_configs, verbose, stats
+                )
+                # Probe K from the (eager) exported program; same shape every call.
+                K = int(ep_sc.module()().shape[0])
+            else:
+                # Deterministic: evaluate once (eager aten, bitwise identical to
+                # what generic mode sees each call) and pass as a constant.
+                fixed_controls = ep_sc.module()().detach().to("cpu", torch.float32)
     if fixed_controls is not None:
         fixed_controls = fixed_controls.contiguous()
         if fixed_controls.dim() != 2 or fixed_controls.shape[1] != c:
