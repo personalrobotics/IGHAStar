@@ -28,6 +28,8 @@
 #include <kinodynamic_cpu.h>
 #elif defined(USE_GENERIC_ENV)
 #include <generic.h>
+#elif defined(USE_PUSHT_ENV)
+#include <pusht.h>
 #else
 #error "No environment macro defined"
 #endif

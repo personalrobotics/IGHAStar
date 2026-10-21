@@ -113,6 +113,44 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             return kernel.BiIGHAStar(configs, False)
         return kernel.IGHAStar(configs, False)
 
+    # PushT: Chipmunk CPU env (header + vendored Chipmunk sources). No CUDA.
+    if env_name == "pusht":
+        chipmunk_root = (
+            pathlib.Path(os.environ["PUSHT_CHIPMUNK_DIR"])
+            if os.environ.get("PUSHT_CHIPMUNK_DIR")
+            else BASE_DIR.parent.parent / "pusht_ext" / "Chipmunk2D"
+        )
+        if not (chipmunk_root / "include" / "chipmunk" / "chipmunk.h").exists():
+            raise FileNotFoundError(
+                f"Chipmunk not found at {chipmunk_root}. "
+                "Clone Chipmunk 7 into pusht_ext/Chipmunk2D or set PUSHT_CHIPMUNK_DIR."
+            )
+        chipmunk_sources = sorted(
+            p
+            for p in (chipmunk_root / "src").glob("*.c")
+            if p.name != "cpHastySpace.c"
+        )
+        kernel = load(
+            name="ighastar_pusht_v2",
+            sources=[str(cpp_path), *[str(p) for p in chipmunk_sources]],
+            extra_include_paths=extra_includes + [str(chipmunk_root / "include")],
+            # Chipmunk .c files share cflags with the .cpp (torch also adds -std=c++17).
+            extra_cflags=[
+                "-O3",
+                "-fopenmp",
+                "-DNDEBUG",
+                "-DCP_USE_DOUBLES=1",
+                "-DUSE_PUSHT_ENV",
+            ],
+            extra_ldflags=["-fopenmp", "-lm"],
+            verbose=True,
+        )
+        if bidirectional:
+            planner = kernel.BiIGHAStar(configs, False)
+        else:
+            planner = kernel.IGHAStar(configs, False)
+        return planner
+
     if not cuda_available:
         print("CUDA not available, using CPU versions")
         env_macro = {

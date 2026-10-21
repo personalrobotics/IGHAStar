@@ -334,3 +334,10 @@ Dockerfile.bak
 .env.development
 .env.test
 .env.production
+# PushT sweep / plan artifacts (regenerable)
+Content/standalone/pusht_*.csv
+Content/standalone/pusht_*.log
+Content/standalone/pusht_*.mp4
+Content/standalone/pusht_*_traj*/
+Content/standalone/pusht_problem_videos*/
+Content/standalone/pusht_dino_problems.npz
