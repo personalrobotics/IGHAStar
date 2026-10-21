@@ -7,11 +7,13 @@
 #include <boost/functional/hash.hpp>
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <pybind11/stl.h>
 #include <torch/extension.h>
 #include <vector>
 
 #include <pusht_physics.h>
+#include <pusht_qs.h>
 
 using namespace std;
 
@@ -104,6 +106,8 @@ class Environment {
   float edge_cost;
   float max_agent_vel; // px/s; clamps PD; heuristic = block_dist / this
   float max_penetration_px; // invalidate Succ if pen deepens by more than this
+  bool use_quasistatic;     // Mason/Lynch QS (pusht_qs) vs Chipmunk
+  float qs_support_radius;  // ellipsoidal LS ℓ = (2/3) R
 
 public:
   int max_level;
@@ -191,6 +195,16 @@ public:
     max_penetration_px = node_info.contains("max_penetration_px")
                              ? node_info["max_penetration_px"].cast<float>()
                              : 1.0f;
+    use_quasistatic = false;
+    if (node_info.contains("dynamics")) {
+      const std::string dyn = node_info["dynamics"].cast<std::string>();
+      use_quasistatic = (dyn == "quasistatic" || dyn == "qs" || dyn == "mason");
+    } else if (node_info.contains("use_quasistatic")) {
+      use_quasistatic = node_info["use_quasistatic"].cast<bool>();
+    }
+    qs_support_radius = node_info.contains("qs_support_radius")
+                            ? node_info["qs_support_radius"].cast<float>()
+                            : pusht_qs::kDefaultSupportRadius;
     n_succ = n_directions * int(action_radii.size()) + 1;
   }
 
@@ -295,9 +309,16 @@ public:
       float out[n_dims];
       float pen_inc = 0.f;
       float *inter = &intermediates[i * timesteps * n_dims];
-      pusht_physics::step_from_snapshot(
-          node->pose, actions[i * n_cont], actions[i * n_cont + 1], out,
-          n_substeps, inter, max_agent_vel, &pen_inc);
+      if (use_quasistatic) {
+        pusht_qs::step_from_snapshot(
+            node->pose, actions[i * n_cont], actions[i * n_cont + 1], out,
+            n_substeps, inter, max_agent_vel, &pen_inc, qs_support_radius,
+            workspace_lo, workspace_hi);
+      } else {
+        pusht_physics::step_from_snapshot(
+            node->pose, actions[i * n_cont], actions[i * n_cont + 1], out,
+            n_substeps, inter, max_agent_vel, &pen_inc);
+      }
       memcpy(&next_states[i * n_dims], out, n_dims * sizeof(float));
       // Reject edges that deepen contact penetration by > max_penetration_px.
       valid[i] = (in_workspace(out) && pen_inc <= max_penetration_px) ? 1 : 0;

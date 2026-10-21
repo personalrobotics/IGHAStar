@@ -30,6 +30,8 @@
 #include <generic.h>
 #elif defined(USE_PUSHT_ENV)
 #include <pusht.h>
+#elif defined(USE_PUSHT_QS_CUDA_ENV)
+#include <pusht_qs_cuda.h>
 #else
 #error "No environment macro defined"
 #endif

@@ -26,3 +26,7 @@ experiment_info_default:
     # Reject Succ edges that deepen contact penetration by more than this (px).
     # (Absolute overlap is often >1px already from Chipmunk soft contacts.)
     max_penetration_px: 1.0
+    # Dynamics: "chipmunk" (default, gym-pusht) or "quasistatic" (Mason/Lynch LS)
+    dynamics: chipmunk
+    # Ellipsoidal limit-surface support radius (px); only used if quasistatic
+    qs_support_radius: 60.0

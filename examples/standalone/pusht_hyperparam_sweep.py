@@ -36,16 +36,19 @@ CONTENT = os.path.join(BASE_DIR.parent, "Content", "standalone")
 DINO_SEED = 99
 DINO_N_EVALS = 50
 
-# Speed OAT around best cell (res=40, radii=200, vmax=500, ndir=8, nsub=10, hyst=500).
-# Full factorial of these axes is huge; sweep one axis at a time from baseline.
+# QS OAT around best Chipmunk-ish cell; dynamics/expansions set below.
+# Full factorial is huge — one axis at a time from baseline.
 BASELINE = {
     "res_xy": 40.0,
     "radii": (200.0,),
     "vmax": 500.0,
-    "n_directions": 8,
+    "n_directions": 16,
     "n_substeps": 10,
     "hysteresis": 500,
+    "qs_support_radius": 60.0,
 }
+DYNAMICS = "quasistatic"
+MAX_EXPANSIONS_SWEEP = 50000
 
 
 def build_oat_grid() -> List[Dict[str, Any]]:
@@ -63,6 +66,7 @@ def build_oat_grid() -> List[Dict[str, Any]]:
             c["n_directions"],
             c["n_substeps"],
             c["hysteresis"],
+            c["qs_support_radius"],
         )
         if key in seen:
             return
@@ -74,12 +78,14 @@ def build_oat_grid() -> List[Dict[str, Any]]:
         add(res_xy=res)
     for r in (150.0, 200.0, 250.0, 300.0):
         add(radii=(r,))
-    for nd in (4, 6, 8, 12):
+    for nd in (4, 8, 12, 16, 24):
         add(n_directions=nd)
     for ns in (5, 10, 20):
         add(n_substeps=ns)
     for h in (100, 500, 1000, 2000):
         add(hysteresis=h)
+    for R in (40.0, 60.0, 80.0, 100.0):
+        add(qs_support_radius=R)
     return out
 
 
@@ -196,11 +202,16 @@ def apply_sweep_config(base: Dict[str, Any], cell: Dict[str, Any]) -> Dict[str, 
         res[i] = float(cell["res_xy"])
     info["resolution"] = res
     info["hysteresis"] = int(cell["hysteresis"])
+    info["max_expansions"] = int(cell.get("max_expansions", MAX_EXPANSIONS_SWEEP))
     ni = info["node_info"]
     ni["action_radii"] = [float(r) for r in cell["radii"]]
     ni["max_agent_vel"] = float(cell["vmax"])
     ni["n_directions"] = int(cell["n_directions"])
     ni["n_substeps"] = int(cell["n_substeps"])
+    ni["dynamics"] = cell.get("dynamics", DYNAMICS)
+    ni["qs_support_radius"] = float(
+        cell.get("qs_support_radius", BASELINE["qs_support_radius"])
+    )
     return cfg
 
 
@@ -208,7 +219,8 @@ def cell_tag(cell: Dict[str, Any]) -> str:
     return (
         f"res={cell['res_xy']:g} radii={radii_tag(cell['radii'])} "
         f"vmax={cell['vmax']:g} ndir={cell['n_directions']} "
-        f"nsub={cell['n_substeps']} hyst={cell['hysteresis']}"
+        f"nsub={cell['n_substeps']} hyst={cell['hysteresis']} "
+        f"R={cell.get('qs_support_radius', BASELINE['qs_support_radius']):g}"
     )
 
 
@@ -278,12 +290,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--out",
-        default=os.path.join(CONTENT, "pusht_sweep_speed_oat_results.csv"),
+        default=os.path.join(CONTENT, "pusht_sweep_qs_oat_50k_results.csv"),
         help="metrics CSV",
     )
     parser.add_argument(
         "--traj-dir",
-        default=os.path.join(CONTENT, "pusht_sweep_speed_oat_traj"),
+        default=os.path.join(CONTENT, "pusht_sweep_qs_oat_50k_traj"),
         help="dir for success trajectories *.npy",
     )
     parser.add_argument(
@@ -331,8 +343,7 @@ def main() -> None:
 
     with open(args.base_yaml) as f:
         base_cfg = yaml.safe_load(f)
-    info0 = base_cfg["experiment_info_default"]
-    max_expansions = int(info0["max_expansions"])
+    max_expansions = int(MAX_EXPANSIONS_SWEEP)
 
     problems = load_or_make_problems(args.problems, args.regen_problems, args.n_problems)
     n_prob = len(problems["seeds"])
@@ -344,7 +355,7 @@ def main() -> None:
         f"{len(grid)}/{len(grid_all)} configs × {n_prob} problems = "
         f"{len(grid) * n_prob} searches"
     )
-    print(f"  OAT axes from baseline {cell_tag(BASELINE)}")
+    print(f"  dynamics={DYNAMICS}  OAT from {cell_tag(BASELINE)}")
     print(
         f"  max_expansions={max_expansions}  "
         f"OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS')}  "
@@ -365,6 +376,8 @@ def main() -> None:
         "n_directions",
         "n_substeps",
         "hysteresis",
+        "qs_support_radius",
+        "dynamics",
         "problem_idx",
         "dino_seed",
         "traj_path",
@@ -372,6 +385,7 @@ def main() -> None:
         "wall_s",
         "expansions",
         "avg_succ_us",
+        "exp_per_s",
         "cost",
         "path_len",
         "first_sol_exp",
@@ -413,6 +427,9 @@ def main() -> None:
                     int(cell["hysteresis"]),
                 )
                 n_ok += metrics["success"]
+                wall = float(metrics["wall_s"])
+                exp = max(int(metrics["expansions"]), 1)
+                metrics["exp_per_s"] = exp / wall if wall > 0 else float("nan")
                 traj_rel = ""
                 if path_sg is not None and not args.no_traj:
                     traj_path = os.path.join(traj_subdir, f"p{pi:03d}.npy")
@@ -426,6 +443,10 @@ def main() -> None:
                     "n_directions": cell["n_directions"],
                     "n_substeps": cell["n_substeps"],
                     "hysteresis": cell["hysteresis"],
+                    "qs_support_radius": cell.get(
+                        "qs_support_radius", BASELINE["qs_support_radius"]
+                    ),
+                    "dynamics": DYNAMICS,
                     "problem_idx": pi,
                     "dino_seed": int(problems["seeds"][pi]),
                     "traj_path": traj_rel,
@@ -463,24 +484,27 @@ def main() -> None:
                 r["n_directions"],
                 r["n_substeps"],
                 r["hysteresis"],
+                r["qs_support_radius"],
             )
         ].append(r)
     print(
-        f"{'res':>5} {'radii':>9} {'vmax':>6} {'nd':>3} {'ns':>3} {'hyst':>5}  "
-        f"{'succ':>8}  {'med_cost':>8}  {'med_1st':>8}  {'mean_wall':>9}  {'mean_succ_us':>12}"
+        f"{'res':>5} {'radii':>9} {'nd':>3} {'ns':>3} {'hyst':>5} {'R':>5}  "
+        f"{'succ':>8}  {'med_1st':>8}  {'mean_wall':>9}  {'mean_succ_us':>12}  {'mean_exp/s':>10}"
     )
-    for key in sorted(buckets.keys(), key=lambda k: (k[0], k[1], k[2], k[3], k[4], k[5])):
+    for key in sorted(
+        buckets.keys(), key=lambda k: (k[0], k[1], k[2], k[3], k[4], k[5], k[6])
+    ):
         rs = buckets[key]
         ok = [r for r in rs if r["success"]]
-        med_cost = float(np.median([r["cost"] for r in ok])) if ok else float("nan")
         firsts = [r["first_sol_exp"] for r in ok if r["first_sol_exp"] >= 0]
         med_1st = float(np.median(firsts)) if firsts else float("nan")
         mean_wall = float(np.mean([r["wall_s"] for r in rs]))
         mean_succ = float(np.mean([r["avg_succ_us"] for r in rs]))
+        mean_eps = float(np.mean([r["exp_per_s"] for r in rs]))
         print(
-            f"{key[0]:5g} {key[1]:>9} {key[2]:6g} {key[3]:3d} {key[4]:3d} {key[5]:5d}  "
-            f"{len(ok):3d}/{len(rs):<3d}  {med_cost:8.3f}  {med_1st:8.0f}  "
-            f"{mean_wall:9.3f}  {mean_succ:12.1f}"
+            f"{key[0]:5g} {key[1]:>9} {key[3]:3d} {key[4]:3d} {key[5]:5d} {key[6]:5g}  "
+            f"{len(ok):3d}/{len(rs):<3d}  {med_1st:8.0f}  "
+            f"{mean_wall:9.3f}  {mean_succ:12.1f}  {mean_eps:10.0f}"
         )
 
 

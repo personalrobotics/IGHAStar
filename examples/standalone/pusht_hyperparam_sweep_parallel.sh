@@ -60,7 +60,7 @@ for i in "${!pids[@]}"; do
 done
 
 # Merge whatever shard CSVs this run produced (match --out stem from EXTRA_ARGS or default).
-OUT_STEM="${OUT_STEM:-pusht_sweep_speed_oat_results}"
+OUT_STEM="${OUT_STEM:-pusht_sweep_qs_oat_50k_results}"
 OUT="$CONTENT/${OUT_STEM}.csv"
 shopt -s nullglob
 mapfile -t shards < <(printf '%s\n' "$CONTENT"/${OUT_STEM}_shard*.csv | sort)
@@ -73,5 +73,5 @@ for f in "${shards[@]}"; do
   tail -n +2 "$f" >>"$OUT"
 done
 echo "merged ${#shards[@]} shards → $OUT  ($(wc -l <"$OUT") lines incl. header)"
-echo "per-shard traj dirs: ${CONTENT}/pusht_sweep_speed_oat_traj_shard*/"
+echo "per-shard traj dirs: ${CONTENT}/pusht_sweep_qs_oat_50k_traj_shard*/"
 exit "$ec"

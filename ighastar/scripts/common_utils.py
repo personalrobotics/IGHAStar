@@ -113,6 +113,31 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             return kernel.BiIGHAStar(configs, False)
         return kernel.IGHAStar(configs, False)
 
+    # PushT QS on CUDA (Mason/Lynch) — A/B vs CPU pusht + dynamics: quasistatic.
+    if env_name in ("pusht_qs_cuda", "pusht_qs"):
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "node_type pusht_qs_cuda requires CUDA; "
+                "use node_type: pusht with dynamics: quasistatic for CPU QS."
+            )
+        cuda_path = BASE_DIR / "src" / "Environments" / "src" / "pusht_qs.cu"
+        kernel = load(
+            name="ighastar_pusht_qs_cuda",
+            sources=[str(cpp_path), str(cuda_path)],
+            extra_include_paths=extra_includes,
+            extra_cflags=["-std=c++17", "-O3", "-DUSE_PUSHT_QS_CUDA_ENV"],
+            extra_cuda_cflags=[
+                "-O3",
+                "--use_fast_math",
+                "-std=c++17",
+                "-DUSE_PUSHT_QS_CUDA_ENV",
+            ],
+            verbose=True,
+        )
+        if bidirectional:
+            return kernel.BiIGHAStar(configs, False)
+        return kernel.IGHAStar(configs, False)
+
     # PushT: Chipmunk CPU env (header + vendored Chipmunk sources). No CUDA.
     if env_name == "pusht":
         chipmunk_root = (

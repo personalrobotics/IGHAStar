@@ -124,6 +124,7 @@ inline void zero_accums(cpBody *body) {
 }
 
 // Snapshot restore: angle THEN position (planner / get_obs values).
+// Remake the space each time so edges don't inherit stale contact caches.
 inline void load_snapshot(World &w, const float *s) {
   remake_world(w);
   zero_accums(w.agent);
