@@ -159,6 +159,9 @@ def cost_vs_expansions(
 
     out: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
     for name in names:
+        if not valid:
+            out[name] = (np.full(max_exp, np.nan), np.full(max_exp, np.nan))
+            continue
         mats = np.stack([curves[name][i] for i in valid], axis=0)  # [P, E]
         p = mats.shape[0]
         firsts = np.array([first_solution_exp(mats[i]) for i in range(p)])

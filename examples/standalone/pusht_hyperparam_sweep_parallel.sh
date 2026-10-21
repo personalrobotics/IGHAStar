@@ -10,7 +10,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-PYTHON="${PYTHON:-/home/stark/ighastar-venv/bin/python}"
+PYTHON="${PYTHON:-python3}"
 SWEEP=examples/standalone/pusht_hyperparam_sweep.py
 CONTENT=Content/standalone
 NUM_SHARDS="${NUM_SHARDS:-3}"

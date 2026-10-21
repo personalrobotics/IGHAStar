@@ -437,8 +437,10 @@ public:
         for (int d = 0; d < n_dims; d++) {
           s.pose[d] = node->intermediate_poses[intermediate_index + d];
         }
+        // Backward Node stores intermediates reversed; map k → chrono fraction.
         const float alpha =
-            static_cast<float>(k + 1) / static_cast<float>(timesteps);
+            static_cast<float>(td < 0.f ? timesteps - k : k + 1) /
+            static_cast<float>(timesteps);
         s.g = (g0 + alpha * (g1 - g0)) * td;
         extended_path.push_back(s);
       }

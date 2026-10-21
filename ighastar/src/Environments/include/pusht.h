@@ -237,8 +237,9 @@ public:
   float distance(float *pose, float *goal) { return block_distance(pose, goal); }
 
   float heuristic(float *pose, float *goal) {
-    // Time lower bound assuming agent never exceeds max_agent_vel (clamped in PD).
-    return block_distance(pose, goal) / max_agent_vel;
+    // Time lower bound when speed is capped; uncapped (vmax<=0) → no guidance.
+    return max_agent_vel > 0.f ? block_distance(pose, goal) / max_agent_vel
+                               : 0.f;
   }
 
   bool reached_goal_region(std::shared_ptr<Node> v,
@@ -409,16 +410,34 @@ public:
 
   torch::Tensor convert_node_list_to_controls_tensor(
       std::vector<std::shared_ptr<Node>> node_list) {
+    // Same layout as convert_node_list_to_path_tensor: skip root, one row per
+    // substep, emit order matches path (k = timesteps-j-1).
     if (node_list.empty()) {
       return torch::zeros({0, n_cont},
                           torch::TensorOptions().dtype(torch::kFloat32));
     }
-    int path_length = int(node_list.size());
+    int n = 0;
+    for (size_t i = 0; i < node_list.size(); i++) {
+      if (node_list[i]->parent != nullptr)
+        n += timesteps;
+    }
     auto controls_tensor = torch::zeros(
-        {path_length, n_cont}, torch::TensorOptions().dtype(torch::kFloat32));
-    for (int i = 0; i < path_length; i++) {
-      for (int d = 0; d < n_cont; d++) {
-        controls_tensor[i][d] = node_list[i]->control[d];
+        {n, n_cont}, torch::TensorOptions().dtype(torch::kFloat32));
+    int r = 0;
+    for (size_t i = 0; i < node_list.size(); i++) {
+      if (node_list[i]->parent == nullptr)
+        continue;
+      for (int j = 0; j < timesteps; j++) {
+        const int k = timesteps - j - 1;
+        for (int d = 0; d < n_cont; d++) {
+          if (node_list[i]->intermediate_controls != nullptr) {
+            controls_tensor[r][d] =
+                node_list[i]->intermediate_controls[k * n_cont + d];
+          } else {
+            controls_tensor[r][d] = node_list[i]->control[d];
+          }
+        }
+        r++;
       }
     }
     return controls_tensor;

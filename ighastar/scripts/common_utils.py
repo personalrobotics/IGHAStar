@@ -162,6 +162,12 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             return kernel.BiIGHAStar(configs, False)
         return kernel.IGHAStar(configs, False)
 
+    # PushT: no backward/predecessor dynamics yet (Succ always steps +dt).
+    if bidirectional and env_name in ("pusht", "pusht_qs_cuda", "pusht_qs"):
+        raise NotImplementedError(
+            "PushT backward dynamics are not implemented; use bidirectional=False."
+        )
+
     # PushT QS on CUDA (Mason/Lynch) — A/B vs CPU pusht + dynamics: quasistatic.
     if env_name in ("pusht_qs_cuda", "pusht_qs"):
         if not torch.cuda.is_available():
