@@ -41,8 +41,7 @@
 #include <chrono>
 #include <iomanip>
 #include <pybind11/stl.h>
-#include <unordered_map>
-#include <unordered_set>
+#include "utils/hash_map.h"
 
 using namespace std;
 
@@ -88,14 +87,14 @@ public:
   std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>,
                       NodePtrCompare>
       Q_v;
-  std::unordered_set<size_t> Q_v_hash; // set of hashes for quick lookup
-  std::unordered_set<std::shared_ptr<Node>> inactive_Q_v; // inactive_Qv vector
-  std::unordered_set<size_t>
+  igha::unordered_set<size_t> Q_v_hash; // set of hashes for quick lookup
+  igha::unordered_set<std::shared_ptr<Node>> inactive_Q_v; // inactive_Qv vector
+  igha::unordered_set<size_t>
       inactive_Q_v_hash; // set of hashes for quick lookup
-  std::unordered_set<std::shared_ptr<Node>> Seen;
-  std::unordered_set<size_t> Seen_hash;
-  std::vector<std::unordered_map<int, std::shared_ptr<Node>>> V;
-  std::vector<std::unordered_map<int, float>> G;
+  igha::unordered_set<std::shared_ptr<Node>> Seen;
+  igha::unordered_set<size_t> Seen_hash;
+  std::vector<igha::unordered_map<int, std::shared_ptr<Node>>> V;
+  std::vector<igha::unordered_map<int, float>> G;
 
   bool SUCCESS;
   int next_level, level, expansion_limit, expansion_counter, hysteresis;
@@ -237,10 +236,10 @@ public:
   void initialize(std::shared_ptr<Node> start_node) {
     Q_v.push(start_node);
     Q_v_hash.insert(start_node->hash);
-    std::unordered_map<int, std::shared_ptr<Node>> v;
+    igha::unordered_map<int, std::shared_ptr<Node>> v;
     v[start_node->index[level]] = start_node;
     V.push_back(v);
-    std::unordered_map<int, float> g;
+    igha::unordered_map<int, float> g;
     g[start_node->index[level]] = start_node->g;
     G.push_back(g);
   }
@@ -328,8 +327,8 @@ public:
 
   void combine_Q_v_and_prune() {
     // combine Q_v and inactive_Q_v
-    std::unordered_set<std::shared_ptr<Node>> new_inactive_Q_v;
-    std::unordered_set<size_t> new_inactive_Q_v_hash;
+    igha::unordered_set<std::shared_ptr<Node>> new_inactive_Q_v;
+    igha::unordered_set<size_t> new_inactive_Q_v_hash;
     // this step "empties" the Q_v, so everything is now only in the inactive
     // set.
     while (!Q_v.empty()) {
@@ -361,8 +360,8 @@ public:
 
     // // Extend G and V if new level hasn't been seen yet
     if (G.size() <= level) {
-      G.emplace_back(); // std::unordered_map<int, float>
-      V.emplace_back(); // std::unordered_map<int, std::shared_ptr<Node>>
+      G.emplace_back(); // igha::unordered_map<int, float>
+      V.emplace_back(); // igha::unordered_map<int, std::shared_ptr<Node>>
       // reserve 100000 for both:
       G[level].reserve(100000); // consider pre-reserving this memeory at the
                                 // beginning of the search.
@@ -374,7 +373,7 @@ public:
       local_g_update(node);
     }
     // find rank of all nodes in Q_v
-    std::unordered_map<int, std::vector<std::shared_ptr<Node>>> grid_cells;
+    igha::unordered_map<int, std::vector<std::shared_ptr<Node>>> grid_cells;
     for (std::shared_ptr<Node> node : inactive_Q_v) {
       grid_cells[node->index[level]].push_back(node);
       // project Q_v nodes to the new resolution
@@ -747,9 +746,9 @@ public:
   // Each LCR_table cell stores a list of (g-value, node) pairs for multiple
   // vertices
   std::mutex LCR_mutex;
-  std::unordered_map<int, std::vector<std::pair<float, std::shared_ptr<Node>>>>
+  igha::unordered_map<int, std::vector<std::pair<float, std::shared_ptr<Node>>>>
       forward_LCR_table;
-  std::unordered_map<int, std::vector<std::pair<float, std::shared_ptr<Node>>>>
+  igha::unordered_map<int, std::vector<std::pair<float, std::shared_ptr<Node>>>>
       backward_LCR_table;
 
   // Point perturbation configuration for near-meet validity checking

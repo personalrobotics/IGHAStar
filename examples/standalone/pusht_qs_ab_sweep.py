@@ -40,7 +40,13 @@ BEST = {
 }
 
 
-def apply_best(base: Dict[str, Any], backend: str) -> Dict[str, Any]:
+def apply_best(
+    base: Dict[str, Any],
+    backend: str,
+    *,
+    vmax: float | None = None,
+    radii: tuple | None = None,
+) -> Dict[str, Any]:
     cfg = copy.deepcopy(base)
     info = cfg["experiment_info_default"]
     res = list(info["resolution"])
@@ -50,8 +56,9 @@ def apply_best(base: Dict[str, Any], backend: str) -> Dict[str, Any]:
     info["hysteresis"] = int(BEST["hysteresis"])
     info["max_expansions"] = int(BEST["max_expansions"])
     ni = info["node_info"]
-    ni["action_radii"] = [float(r) for r in BEST["radii"]]
-    ni["max_agent_vel"] = float(BEST["vmax"])
+    r = BEST["radii"] if radii is None else tuple(float(x) for x in radii)
+    ni["action_radii"] = [float(x) for x in r]
+    ni["max_agent_vel"] = float(BEST["vmax"] if vmax is None else vmax)
     ni["n_directions"] = int(BEST["n_directions"])
     ni["n_substeps"] = int(BEST["n_substeps"])
     ni["qs_support_radius"] = float(BEST["qs_support_radius"])
@@ -99,14 +106,28 @@ def run_one(planner, start, goal, max_expansions, hysteresis):
     }
 
 
-def run_backend(backend: str, out_csv: str, n_problems: int) -> None:
+def run_backend(
+    backend: str,
+    out_csv: str,
+    n_problems: int,
+    *,
+    vmax: float | None = None,
+    radii: tuple | None = None,
+) -> None:
     yaml_name = "pusht.yml" if backend == "cpu" else "pusht_qs_cuda.yml"
     yaml_path = os.path.join(
         BASE_DIR.parent, "examples", "standalone", "Configs", yaml_name
     )
     with open(yaml_path) as f:
         base = yaml.safe_load(f)
-    cfg = apply_best(base, backend)
+    cfg = apply_best(base, backend, vmax=vmax, radii=radii)
+    ni = cfg["experiment_info_default"]["node_info"]
+    print(
+        f"[{backend}] cell ndir={BEST['n_directions']} "
+        f"vmax={float(ni['max_agent_vel']):g} "
+        f"radii={ni['action_radii']} max_exp={BEST['max_expansions']}",
+        flush=True,
+    )
     problems = dict(np.load(os.path.join(CONTENT, "pusht_dino_problems.npz")))
     n = min(n_problems, len(problems["seeds"]))
 
@@ -223,6 +244,14 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--backend", choices=("cpu", "cuda", "both", "compare"))
     p.add_argument("--n-problems", type=int, default=50)
+    p.add_argument("--vmax", type=float, default=None, help="override BEST vmax")
+    p.add_argument(
+        "--radii",
+        type=float,
+        nargs="+",
+        default=None,
+        help="override BEST action_radii (e.g. --radii 50)",
+    )
     p.add_argument(
         "--cpu-out",
         default=os.path.join(CONTENT, "pusht_qs_ab_cpu_ndir24.csv"),
@@ -232,6 +261,7 @@ def main() -> None:
         default=os.path.join(CONTENT, "pusht_qs_ab_cuda_ndir24.csv"),
     )
     args = p.parse_args()
+    radii = tuple(args.radii) if args.radii is not None else None
 
     if args.backend == "compare":
         compare(args.cpu_out, args.cuda_out)
@@ -241,25 +271,30 @@ def main() -> None:
         # Separate processes — pybind IGHAStar name clash if both load in-process.
         script = os.path.abspath(__file__)
         for b, out in (("cpu", args.cpu_out), ("cuda", args.cuda_out)):
-            subprocess.check_call(
-                [
-                    sys.executable,
-                    script,
-                    "--backend",
-                    b,
-                    "--n-problems",
-                    str(args.n_problems),
-                    "--cpu-out",
-                    args.cpu_out,
-                    "--cuda-out",
-                    args.cuda_out,
-                ]
-            )
+            cmd = [
+                sys.executable,
+                script,
+                "--backend",
+                b,
+                "--n-problems",
+                str(args.n_problems),
+                "--cpu-out",
+                args.cpu_out,
+                "--cuda-out",
+                args.cuda_out,
+            ]
+            if args.vmax is not None:
+                cmd += ["--vmax", str(args.vmax)]
+            if radii is not None:
+                cmd += ["--radii", *[str(r) for r in radii]]
+            subprocess.check_call(cmd)
         compare(args.cpu_out, args.cuda_out)
         return
 
     out = args.cpu_out if args.backend == "cpu" else args.cuda_out
-    run_backend(args.backend, out, args.n_problems)
+    run_backend(
+        args.backend, out, args.n_problems, vmax=args.vmax, radii=radii
+    )
 
 
 if __name__ == "__main__":

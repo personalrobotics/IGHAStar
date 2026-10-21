@@ -376,14 +376,22 @@ public:
           node_list[i]->intermediate_poses == nullptr) {
         continue;
       }
+      // g increases linearly over the edge (parent.g → node.g), one dt per
+      // substep — not flat at the edge endpoint cost.
+      const float g0 = node_list[i]->parent->g;
+      const float g1 = node_list[i]->g;
+      const float td = static_cast<float>(node_list[i]->time_direction);
       for (int j = 0; j < timesteps; j++) {
         // Stored chronological; emit reverse so goal-first path stays consistent
-        int src = (timesteps - j - 1) * n_dims;
+        const int k = timesteps - j - 1; // chronological substep index
+        const int src = k * n_dims;
         PathState state;
         for (int d = 0; d < n_dims; d++) {
           state.pose[d] = node_list[i]->intermediate_poses[src + d];
         }
-        state.g = node_list[i]->g * node_list[i]->time_direction;
+        const float alpha =
+            static_cast<float>(k + 1) / static_cast<float>(timesteps);
+        state.g = (g0 + alpha * (g1 - g0)) * td;
         extended.push_back(state);
       }
     }

@@ -87,9 +87,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--out-dir",
-        default=os.path.join(CONTENT, "pusht_problem_videos"),
+        default=os.path.join(CONTENT, "pusht_qs_best_videos"),
     )
-    parser.add_argument("--max-expansions", type=int, default=40000)
+    parser.add_argument("--max-expansions", type=int, default=50000)
+    parser.add_argument(
+        "--n-directions",
+        type=int,
+        default=24,
+        help="Succ ring directions (best QS OAT cell uses 24)",
+    )
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--omp-threads", type=int, default=8)
     parser.add_argument("--hold-frames", type=int, default=15, help="fail clip hold per pose")
@@ -99,9 +105,12 @@ def main() -> None:
 
     with open(args.base_yaml) as f:
         base = yaml.safe_load(f)
-    hyst = int(base["experiment_info_default"]["hysteresis"])
-    cfg = _sweep.apply_sweep_config(base, dict(_sweep.BASELINE))
-    cfg["experiment_info_default"]["max_expansions"] = int(args.max_expansions)
+    cell = dict(_sweep.BASELINE)
+    cell["n_directions"] = int(args.n_directions)
+    cell["max_expansions"] = int(args.max_expansions)
+    cfg = _sweep.apply_sweep_config(base, cell)
+    hyst = int(cfg["experiment_info_default"]["hysteresis"])
+    # Render teleports gym-pusht to planner states (not action replay / true dyn).
 
     problems = _sweep.load_or_make_problems(args.problems, regen=False, n_problems=50)
     n = len(problems["seeds"])

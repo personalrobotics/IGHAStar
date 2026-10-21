@@ -29,3 +29,13 @@ viz = [
 [tool.setuptools.packages.find]
 include = ["ighastar*"]
 exclude = ["Content*", "examples*", "scripts*"]
+
+# Ship C++ headers / CUDA sources / vendored robin_hood for JIT extension builds.
+[tool.setuptools.package-data]
+ighastar = [
+    "src/**/*.h",
+    "src/**/*.hpp",
+    "src/**/*.cpp",
+    "src/**/*.cu",
+    "third_party/robin_hood/*",
+]
