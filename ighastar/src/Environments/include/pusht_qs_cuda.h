@@ -338,15 +338,9 @@ public:
     actions.clear();
     actions.reserve(n_succ * n_cont);
     for (float r : action_radii) {
-      for (int i = 0; i < n_directions; i++) {
-        float th = i * (2.0f * float(M_PI) / n_directions);
-        float tx = pose[0] + r * std::cos(th);
-        float ty = pose[1] + r * std::sin(th);
-        tx = std::min(std::max(tx, workspace_lo), workspace_hi);
-        ty = std::min(std::max(ty, workspace_lo), workspace_hi);
-        actions.push_back(tx);
-        actions.push_back(ty);
-      }
+      pusht_qs::append_qs_ring_targets(pose, r, n_directions, workspace_lo,
+                                       workspace_hi, pusht_qs::kContactFrictionMu,
+                                       actions);
     }
     actions.push_back(pose[2]);
     actions.push_back(pose[3]);

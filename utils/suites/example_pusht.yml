@@ -1,4 +1,4 @@
-# Example suite: edit configs / pkl_dirs, then:
+# Fair A/B: Chipmunk vs QS, both ndir=24 + Coulomb cone Succ rings.
 #   python utils/cost_curves.py collect --suite utils/suites/example_pusht.yml
 #   python utils/cost_curves.py plot    --suite utils/suites/example_pusht.yml
 #
@@ -9,10 +9,10 @@ problems: Content/standalone/pusht_dino_problems.npz
 out_dir: Content/standalone/curve_plots
 
 curves:
-  - name: chipmunk_ndir16
-    label: Chipmunk ndir=16
-    config: examples/standalone/Configs/pusht.yml
-    pkl_dir: Content/standalone/curves/chipmunk_ndir16
+  - name: chipmunk_ndir24
+    label: Chipmunk ndir=24
+    config: examples/standalone/Configs/pusht_ndir24.yml
+    pkl_dir: Content/standalone/curves/chipmunk_ndir24
   - name: qs_ndir24
     label: QS ndir=24
     config: examples/standalone/Configs/pusht_qs.yml

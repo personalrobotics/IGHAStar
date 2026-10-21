@@ -16,6 +16,11 @@ constexpr cpFloat kV = 20.0;
 constexpr cpFloat kAgentRadius = 15.0;
 constexpr cpFloat kTeeScale = 30.0;
 constexpr cpFloat kTeeLength = 4.0;
+// gym-pusht / Chipmunk: every shape uses this; contact μ = fa * fb.
+constexpr cpFloat kShapeFriction = 1.0;
+inline float contact_friction_mu() {
+  return static_cast<float>(kShapeFriction * kShapeFriction);
+}
 constexpr int kStateDim = 10; // ax ay bx by ang avx avy bvx bvy bw
 constexpr int kDefaultSubsteps = 10;
 
@@ -45,7 +50,7 @@ inline void install_pen_handler(World &w) {
 
 inline void add_segment(cpSpace *space, cpVect a, cpVect b, cpFloat radius) {
   cpShape *shape = cpSegmentShapeNew(cpSpaceGetStaticBody(space), a, b, radius);
-  cpShapeSetFriction(shape, 1.0);
+  cpShapeSetFriction(shape, kShapeFriction);
   cpSpaceAddShape(space, shape);
 }
 
@@ -63,7 +68,7 @@ inline World make_world() {
   w.agent = cpBodyNewKinematic();
   cpSpaceAddBody(w.space, w.agent);
   cpShape *agent_shape = cpCircleShapeNew(w.agent, kAgentRadius, cpvzero);
-  cpShapeSetFriction(agent_shape, 1.0);
+  cpShapeSetFriction(agent_shape, kShapeFriction);
   cpSpaceAddShape(w.space, agent_shape);
 
   const cpFloat s = kTeeScale;
@@ -81,8 +86,8 @@ inline World make_world() {
 
   cpShape *sh1 = cpPolyShapeNew(w.block, 4, v1, cpTransformIdentity, 0.0);
   cpShape *sh2 = cpPolyShapeNew(w.block, 4, v2, cpTransformIdentity, 0.0);
-  cpShapeSetFriction(sh1, 1.0);
-  cpShapeSetFriction(sh2, 1.0);
+  cpShapeSetFriction(sh1, kShapeFriction);
+  cpShapeSetFriction(sh2, kShapeFriction);
   cpSpaceAddShape(w.space, sh1);
   cpSpaceAddShape(w.space, sh2);
 

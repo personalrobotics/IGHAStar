@@ -268,9 +268,19 @@ def collect_curve(curve: Dict[str, Any], suite: Dict[str, Any], overwrite: bool)
 
 
 def cmd_collect(args: argparse.Namespace) -> None:
+    # One process per curve: each JIT backend registers IGHAStar globally.
+    import multiprocessing
+
     suite = load_suite(args.suite)
+    ctx = multiprocessing.get_context("spawn")
     for curve in suite["curves"]:
-        collect_curve(curve, suite, overwrite=args.overwrite)
+        proc = ctx.Process(
+            target=collect_curve, args=(curve, suite, args.overwrite)
+        )
+        proc.start()
+        proc.join()
+        if proc.exitcode != 0:
+            raise SystemExit(proc.exitcode or 1)
 
 
 # ---------------------------------------------------------------------------

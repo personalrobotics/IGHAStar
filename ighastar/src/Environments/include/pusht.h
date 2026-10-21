@@ -284,18 +284,15 @@ public:
     neighbors.reserve(n_succ);
 
     // Agent-relative rings at action_radii + aim at block center.
+    // On contact: half angles in Coulomb cone, half in leave hemisphere
+    // (same sampling for Chipmunk and QS).
     std::vector<float> actions;
     actions.reserve(n_succ * n_cont);
     for (float r : action_radii) {
-      for (int i = 0; i < n_directions; i++) {
-        float th = i * (2.0f * float(M_PI) / n_directions);
-        float tx = node->pose[0] + r * std::cos(th);
-        float ty = node->pose[1] + r * std::sin(th);
-        tx = std::min(std::max(tx, workspace_lo), workspace_hi);
-        ty = std::min(std::max(ty, workspace_lo), workspace_hi);
-        actions.push_back(tx);
-        actions.push_back(ty);
-      }
+      pusht_qs::append_qs_ring_targets(node->pose, r, n_directions,
+                                       workspace_lo, workspace_hi,
+                                       pusht_physics::contact_friction_mu(),
+                                       actions);
     }
     actions.push_back(node->pose[2]);
     actions.push_back(node->pose[3]);
@@ -314,7 +311,7 @@ public:
         pusht_qs::step_from_snapshot(
             node->pose, actions[i * n_cont], actions[i * n_cont + 1], out,
             n_substeps, inter, max_agent_vel, &pen_inc, qs_support_radius,
-            workspace_lo, workspace_hi);
+            workspace_lo, workspace_hi, pusht_physics::contact_friction_mu());
       } else {
         pusht_physics::step_from_snapshot(
             node->pose, actions[i * n_cont], actions[i * n_cont + 1], out,

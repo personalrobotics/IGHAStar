@@ -1,18 +1,25 @@
 // Mason / Lynch quasi-static PushT (ellipsoidal limit surface).
 // Same state/action layout as pusht_physics.h, but no Chipmunk — pure geometry + LS.
 //
-// Model (frictionless point contact + ellipsoidal support LS):
-//   wrench ĝ = [n; r × n] for unit push along contact normal n (outward from T)
+// Model (Coulomb frictional point contact + ellipsoidal support limit surface):
+//   LS = limit surface of support friction under the T (not pusher friction).
 //   H = diag(1, 1, 1/ℓ²),  ℓ = τ_max/f_max ≈ (2/3) R_support  (Howe/Cutkosky)
-//   associated flow: ξ = λ H ĝ
-//   maintain contact: ĝ·ξ = v_in  ⇒  λ = max(0, v_in) / (ĝ·Hĝ)
-//   where v_in = max(0, -n·v_agent) is the push-in speed of the kinematic agent.
+//   Contact force on T lies in the friction cone about inward normal −n
+//   (μ = Chipmunk agent–tee fa·fb): fdir = normalize(−n + clamp(vt/vn,±μ) t).
+//   Unit wrench ĝ = [fdir; r × fdir]; associated flow ξ = λ H ĝ
+//   maintain contact: ĝ·ξ = v_in  ⇒  λ = max(0, fdir·v_agent) / (ĝ·Hĝ)
+//
+// Succ action rings (host): when contacting, half of n_directions lie in the
+// Coulomb friction cone about the inward normal (μ from Chipmunk shape pair),
+// half in the outward 180° hemisphere (leave the surface). Agent PD targets
+// are world-frame offsets along those angles.
 //
 // Not gym-pusht parity — use for A/B vs Chipmunk Succ.
 #pragma once
 
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 #ifndef PUSHT_QS_HD
 #ifdef __CUDACC__
@@ -36,6 +43,8 @@ constexpr float kPi = 3.14159265358979323846f;
 
 // Equivalent circular support radius for ellipsoidal LS (px). Default ~ tee half-span.
 constexpr float kDefaultSupportRadius = 60.f;
+// Coulomb μ for agent–tee = Chipmunk fa*fb with fa=fb=kShapeFriction(=1).
+constexpr float kContactFrictionMu = 1.f;
 
 // Device-safe float math (std:: variants are host-only under nvcc).
 PUSHT_QS_HD float qs_sqrt(float x) { return sqrtf(x); }
@@ -200,10 +209,12 @@ PUSHT_QS_HD void to_array(const State &st, float *s) {
   s[9] = st.omega;
 }
 
-// One QS substep: PD agent + ellipsoidal LS push on T if contacting.
+// One QS substep: PD agent + ellipsoidal support-LS push on T if contacting.
+// contact_mu: Coulomb μ at pusher–T (Chipmunk fa*fb). Support LS uses support_radius.
 PUSHT_QS_HD float control_step(State &st, float ax, float ay, float max_agent_vel,
                           float support_radius, float workspace_lo,
-                          float workspace_hi) {
+                          float workspace_hi,
+                          float contact_mu = kContactFrictionMu) {
   // Kinematic PD (same gains as Chipmunk path).
   Vec2 acc{kP * (ax - st.agent.x) + kV * (0.f - st.agent_vel.x),
            kP * (ay - st.agent.y) + kV * (0.f - st.agent_vel.y)};
@@ -221,31 +232,41 @@ PUSHT_QS_HD float control_step(State &st, float ax, float ay, float max_agent_ve
     return 0.f;
   }
 
-  // Lever arm from CoG to contact; unit wrench for force along +n (outward).
-  // Push force on T is -n (into the body), so ĝ uses -n.
-  Vec2 fdir{-n.x, -n.y}; // force on T
+  // n = outward from T. t = left-handed tangent. Unilateral: need vn > 0 into T.
+  const Vec2 t{-n.y, n.x};
+  const float vn = -dot(st.agent_vel, n); // agent speed into the T
+  const float vt = dot(st.agent_vel, t);  // agent speed along the edge
+  if (vn <= 1e-8f) {
+    st.block_vel = {0.f, 0.f};
+    st.omega = 0.f;
+    return pen;
+  }
+
+  // Coulomb: force on T in cone about −n. ratio = vt/vn clamped to ±μ
+  // (stick-like if |vt/vn|≤μ, else sliding on the cone boundary).
+  const float mu = qs_max(contact_mu, 0.f);
+  float ratio = vt / vn;
+  if (ratio > mu)
+    ratio = mu;
+  else if (ratio < -mu)
+    ratio = -mu;
+  Vec2 fdir = normalized(Vec2{-n.x + ratio * t.x, -n.y + ratio * t.y});
+
   Vec2 r = contact - cog;
   const float tau_hat = cross(r, fdir); // r × f
-  // ĝ = (fx, fy, τ) for unit force
   const float ell = (2.f / 3.f) * qs_max(support_radius, 1.f); // τmax/fmax
   const float ell2 = ell * ell;
-  // Hĝ = (fx, fy, τ/ℓ²);  ĝ·Hĝ = fx²+fy²+τ²/ℓ²
+  // ĝ·Hĝ = fx²+fy²+τ²/ℓ²  (H = diag(1,1,1/ℓ²))
   const float gHg =
       fdir.x * fdir.x + fdir.y * fdir.y + (tau_hat * tau_hat) / ell2;
 
-  // Push-in speed of agent along force direction on T (= into the body).
   const float v_in = qs_max(0.f, dot(st.agent_vel, fdir));
   const float lambda = (gHg > 1e-12f) ? (v_in / gHg) : 0.f;
 
   // Twist ξ = λ H ĝ
-  const float vx = lambda * fdir.x;
-  const float vy = lambda * fdir.y;
-  const float omega = lambda * tau_hat / ell2;
-
-  st.block_vel = {vx, vy};
-  st.omega = omega;
-  // Integrate body origin: CoG moves with (vx,vy); origin = CoG - R cog_local
-  // ⇒ d(origin)/dt = v_cog - ω × R cog_local. Equivalent: rotate about CoG.
+  st.block_vel = {lambda * fdir.x, lambda * fdir.y};
+  st.omega = lambda * tau_hat / ell2;
+  // Integrate about CoG: origin = CoG − R cog_local.
   Vec2 cog_l;
   tee_cog_local(cog_l);
   const float c = qs_cos(st.ang), s = qs_sin(st.ang);
@@ -255,6 +276,9 @@ PUSHT_QS_HD float control_step(State &st, float ax, float ay, float max_agent_ve
   const float c2 = qs_cos(st.ang), s2 = qs_sin(st.ang);
   st.block = cog_w - rot(cog_l, c2, s2);
   clamp_workspace(st.block, workspace_lo, workspace_hi);
+  // Residual overlap after both bodies move (not agent-only mid-step pen).
+  pen = 0.f;
+  deepest_contact(st.agent, st.block, st.ang, pen, n, contact, cog);
   return pen;
 }
 
@@ -266,7 +290,8 @@ PUSHT_QS_HD void step_from_snapshot(const float *state_in, float ax, float ay,
                                float *out_pen_increase = nullptr,
                                float support_radius = kDefaultSupportRadius,
                                float workspace_lo = 0.f,
-                               float workspace_hi = 512.f) {
+                               float workspace_hi = 512.f,
+                               float contact_mu = kContactFrictionMu) {
   State st = from_array(state_in);
   // Baseline geometric overlap (no dynamics).
   float pen0 = 0.f;
@@ -277,7 +302,7 @@ PUSHT_QS_HD void step_from_snapshot(const float *state_in, float ax, float ay,
   float max_pen = pen0;
   for (int i = 0; i < n_substeps; ++i) {
     float pen = control_step(st, ax, ay, max_agent_vel, support_radius,
-                             workspace_lo, workspace_hi);
+                             workspace_lo, workspace_hi, contact_mu);
     max_pen = qs_max(max_pen, pen);
     if (intermediates)
       to_array(st, intermediates + i * kStateDim);
@@ -286,6 +311,66 @@ PUSHT_QS_HD void step_from_snapshot(const float *state_in, float ax, float ay,
   if (out_pen_increase) {
     float inc = max_pen - pen0;
     *out_pen_increase = inc > 0.f ? inc : 0.f;
+  }
+}
+
+// --- Host Succ action sampling (CPU env + CUDA fill_actions) -----------------
+
+// Evenly spaced samples in [lo, hi], inclusive endpoints when n > 1.
+inline float sample_interval(int i, int n, float lo, float hi) {
+  if (n <= 1)
+    return 0.5f * (lo + hi);
+  return lo + (hi - lo) * (static_cast<float>(i) / static_cast<float>(n - 1));
+}
+
+inline void append_clamped_target(float ax, float ay, float r, float th,
+                                  float ws_lo, float ws_hi,
+                                  std::vector<float> &actions) {
+  float tx = ax + r * qs_cos(th);
+  float ty = ay + r * qs_sin(th);
+  tx = qs_min(qs_max(tx, ws_lo), ws_hi);
+  ty = qs_min(qs_max(ty, ws_lo), ws_hi);
+  actions.push_back(tx);
+  actions.push_back(ty);
+}
+
+// One agent-relative ring. μ = Chipmunk contact friction (fa*fb). If the agent
+// overlaps the T, n_dir/2 angles fill the inward friction cone and the rest
+// fill the outward leave-hemisphere; otherwise uniform on [0, 2π).
+inline void append_qs_ring_targets(const float *pose, float r, int n_dir,
+                                   float ws_lo, float ws_hi, float mu,
+                                   std::vector<float> &actions) {
+  const float ax = pose[0], ay = pose[1];
+  float pen = 0.f;
+  Vec2 n, contact, cog;
+  const bool hit =
+      deepest_contact({ax, ay}, {pose[2], pose[3]}, pose[4], pen, n, contact,
+                      cog);
+  if (!hit || n_dir <= 0) {
+    for (int i = 0; i < n_dir; i++) {
+      const float th =
+          static_cast<float>(i) * (2.f * kPi / static_cast<float>(n_dir));
+      append_clamped_target(ax, ay, r, th, ws_lo, ws_hi, actions);
+    }
+    return;
+  }
+
+  // n = outward from T (toward agent). Push into T along -n; leave along +n.
+  const float ang_push = atan2f(-n.y, -n.x);
+  const float ang_leave = atan2f(n.y, n.x);
+  const float half_cone = atanf(qs_max(mu, 0.f)); // Coulomb limiting angle
+  const int n_push = n_dir / 2;
+  const int n_leave = n_dir - n_push;
+
+  for (int i = 0; i < n_push; i++) {
+    const float th =
+        sample_interval(i, n_push, ang_push - half_cone, ang_push + half_cone);
+    append_clamped_target(ax, ay, r, th, ws_lo, ws_hi, actions);
+  }
+  for (int i = 0; i < n_leave; i++) {
+    const float th = sample_interval(i, n_leave, ang_leave - 0.5f * kPi,
+                                     ang_leave + 0.5f * kPi);
+    append_clamped_target(ax, ay, r, th, ws_lo, ws_hi, actions);
   }
 }
 
