@@ -13,7 +13,6 @@ requires-python = ">=3.8"
 dependencies = [
     "numpy",
     "torch",
-    "matplotlib",
     "opencv-python",
     "pyyaml"
 ]
@@ -21,9 +20,15 @@ dependencies = [
 [project.optional-dependencies]
 # Synthetic ESDF generation and the Viser debugging views.
 viz = [
+    "matplotlib",
     "scipy",
     "viser",
     "trimesh"
+]
+# Success/cost-vs-expansion analysis (utils/cost_curves.py).
+analysis = [
+    "matplotlib",
+    "scipy"
 ]
 
 [tool.setuptools.packages.find]

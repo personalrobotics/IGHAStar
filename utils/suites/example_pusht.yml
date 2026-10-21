@@ -1,0 +1,19 @@
+# Example suite: edit configs / pkl_dirs, then:
+#   python utils/cost_curves.py collect --suite utils/suites/example_pusht.yml
+#   python utils/cost_curves.py plot    --suite utils/suites/example_pusht.yml
+#
+# Paths are relative to the ighastar repo root unless absolute.
+# max_expansions overrides experiment_info_default.max_expansions in each config.
+max_expansions: 25000
+problems: Content/standalone/pusht_dino_problems.npz
+out_dir: Content/standalone/curve_plots
+
+curves:
+  - name: chipmunk_ndir16
+    label: Chipmunk ndir=16
+    config: examples/standalone/Configs/pusht.yml
+    pkl_dir: Content/standalone/curves/chipmunk_ndir16
+  - name: qs_ndir24
+    label: QS ndir=24
+    config: examples/standalone/Configs/pusht_qs.yml
+    pkl_dir: Content/standalone/curves/qs_ndir24
