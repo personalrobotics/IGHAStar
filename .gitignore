@@ -236,6 +236,7 @@ test_*.cpp
 !tests/unit/environments/test.cpp
 !tests/unit/environments/test_generic_environment.py
 !tests/unit/environments/test_generic.cpp
+!tests/unit/environments/test_external_env.py
 !tests/unit/planner/test_generic_torch_planner.py
 
 # Large data files

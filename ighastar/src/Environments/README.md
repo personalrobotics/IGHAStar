@@ -1,12 +1,13 @@
 # Creating a Custom Environment for IGHAStar
 
-Three paths exist:
+Four paths exist:
 
 | Path | Use when | Doc |
 |---|---|---|
 | **Generic (Python callbacks)** | You own dynamics, cost, validity, heuristic, and goal test in Python | [GENERIC.md](GENERIC.md) |
 | **generic_torch (compiled torch callbacks)** | The same callbacks as pure torch functions, compiled with AOTInductor so the search runs without Python | [GENERIC.md](GENERIC.md#generic_torch-compiled-torch-callbacks) |
 | **C++ Environment** | You implement `Succ` and related methods in C++/CUDA | This file |
+| **External C++ Environment** | The same, but the environment lives in your own project rather than this repo | [Below](#external-environments-use_external_env) |
 
 ## Folder Structure
 
@@ -192,6 +193,79 @@ struct NodePtrCompare {
 ## Example
 
 See the files in `include/` (e.g., `kinematic.h`, `kinodynamic.h`, `simple.h`) for concrete examples of how to implement these interfaces.
+
+## External environments (`USE_EXTERNAL_ENV`)
+
+`ighastar.cpp` picks its environment at compile time, with one preprocessor macro per built-in header:
+
+| Macro | Header |
+|---|---|
+| `USE_SIMPLE_ENV` | `simple.h` |
+| `USE_KINEMATIC_ENV` / `USE_KINEMATIC_CPU_ENV` | `kinematic.h` / `kinematic_cpu.h` |
+| `USE_KINODYNAMIC_ENV` / `USE_KINODYNAMIC_CPU_ENV` | `kinodynamic.h` / `kinodynamic_cpu.h` |
+| `USE_GENERIC_ENV` | `generic.h` |
+| `USE_GENERIC_TORCH_ENV` | `generic_torch.h` |
+| `USE_PUSHT_ENV` | `pusht.h` |
+| `USE_PUSHT_QS_CUDA_ENV` | `pusht_qs_cuda.h` |
+| `USE_EXTERNAL_ENV` | the header named by `EXTERNAL_ENV_HEADER` |
+
+`USE_EXTERNAL_ENV` lets a project outside this repo supply its own environment without editing or copying
+`ighastar.cpp`. These are compiler flags (`-D...`), not environment variables:
+
+| Macro | Required | Meaning |
+|---|---|---|
+| `USE_EXTERNAL_ENV` | yes | Use an external environment header instead of a built-in one. |
+| `EXTERNAL_ENV_HEADER` | yes, with `USE_EXTERNAL_ENV` | The header to include, as a quoted string, e.g. `"my_env.h"`. It is found on the include path, so add its directory with `-I`. Leaving it out is a compile error. |
+| `EXTERNAL_ENV_RELEASES_GIL` | no | Release Python's GIL for the whole `search` call, as `generic_torch` does, so other Python threads keep running. Only define it if the environment never calls into Python during a search (no `py::function` callbacks, no Python objects touched after construction). |
+
+The header must provide the same things a built-in one does: an `Environment` class with the interface above, a
+`Node` struct and `NodePtrCompare`. The simplest way is to build on `generic_common.h`, as `generic.h` and
+`generic_torch.h` do: derive `Environment` from `GenericEnvironmentBase` (config parsing, `create_Node`, path
+conversion) and implement the callbacks (`Succ_batched`, `Succ`, `heuristic`, `reached_goal_region`,
+`check_validity`, `check_validity_batched`, `set_world`) yourself. `generic_common.h` takes its dimensions from
+`N_DIMS`, `N_CONT` and `HASH_DIMS`, so define those too. The constructor receives the whole config dict passed to
+`IGHAStar(config, debug)`, so the environment can read its own settings from any key you add.
+
+`create_planner` only builds the built-in environments, so build an external one yourself, e.g. with torch's
+extension loader:
+
+```python
+from pathlib import Path
+
+from ighastar.scripts.common_utils import BASE_DIR, CXX_STD_FLAG
+from torch.utils.cpp_extension import load
+
+src = Path(BASE_DIR) / "src"
+kernel = load(
+    name="my_planner",
+    sources=[str(src / "ighastar.cpp")],
+    extra_include_paths=[
+        "/path/to/my_project/include",  # where my_env.h lives
+        str(src / "Environments" / "include"),  # generic_common.h, if you build on it
+        str(src / "utils"),
+        str(src),
+    ],
+    extra_cflags=[
+        CXX_STD_FLAG,  # -std=c++20, or -std=c++2a on GCC 9
+        "-O3",
+        "-DUSE_EXTERNAL_ENV",
+        # The extra single quotes keep the double quotes through the shell that
+        # ninja runs the compiler in: the macro's value must be `"my_env.h"`.
+        "-DEXTERNAL_ENV_HEADER='\"my_env.h\"'",
+        "-DEXTERNAL_ENV_RELEASES_GIL",  # only if the search never calls Python
+        "-DN_DIMS=5",
+        "-DN_CONT=2",
+        "-DHASH_DIMS=5",
+    ],
+)
+planner = kernel.IGHAStar({"experiment_info_default": info, "my_env": my_settings}, False)
+```
+
+A compile smoke for this path lives in `tests/unit/environments/test_external_env.py`
+(stub header next to it).
+
+Give each distinct build its own `name`: torch caches extensions by name, and IGHA*'s classes are
+`py::module_local`, so several builds (external and built-in) can be loaded in one process.
 
 ---
 
