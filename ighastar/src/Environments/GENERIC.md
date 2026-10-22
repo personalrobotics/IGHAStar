@@ -152,7 +152,7 @@ Set `node_info.node_type: "generic_torch"` to keep the same six callbacks but co
 
 1. Exports each callback with `torch.export`, with a dynamic batch dimension.
 2. Compiles the exported graphs ahead of time with AOTInductor into `.pt2` packages.
-3. Builds the planner with `-DUSE_GENERIC_TORCH_ENV` (`generic_torch.h`), which loads the packages with `torch::inductor::AOTIModelPackageLoader` and runs them from C++.
+3. Builds the planner with `-DIGHASTAR_ENV_HEADER='"generic_torch.h"'` and `-DIGHASTAR_RELEASES_GIL`, which loads the packages with `torch::inductor::AOTIModelPackageLoader` and runs them from C++.
 
 The search loop never calls Python, and `search()` releases the GIL while it runs. Dynamics, cost, validity and heuristic are fused into one compiled call per batched expansion.
 

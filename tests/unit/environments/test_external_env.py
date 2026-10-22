@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke: USE_EXTERNAL_ENV builds ighastar.cpp against an out-of-tree header."""
+"""Smoke: IGHASTAR_ENV_HEADER builds ighastar.cpp against an out-of-tree header."""
 import pathlib
 import sys
 
@@ -12,6 +12,7 @@ sys.path.insert(0, str(HERE.parent.parent.parent))  # repo root
 from ighastar.scripts.common_utils import (  # noqa: E402
     BASE_DIR,
     CXX_STD_FLAG,
+    env_header_flag,
 )
 
 
@@ -32,9 +33,7 @@ def test_external_env_compiles_and_constructs():
             CXX_STD_FLAG,
             "-O3",
             "-Wno-attributes",
-            "-DUSE_EXTERNAL_ENV",
-            # Keep the quotes through ninja's shell: value must be `"stub_external_env.h"`.
-            "-DEXTERNAL_ENV_HEADER='\"stub_external_env.h\"'",
+            env_header_flag("stub_external_env.h"),
             "-DN_DIMS=2",
             "-DN_CONT=1",
             "-DHASH_DIMS=2",

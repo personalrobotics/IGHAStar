@@ -158,10 +158,11 @@ def main() -> None:
     ok, exp, path, t_torch = solve(planner, configs, args.repeats)
     print(f"[generic_torch/{args.device}] success={ok} expansions={exp} "
           f"search={t_torch * 1e3:.2f} ms")
-    if ok:
-        print(f"  path: {path.shape[0]} states, solution cost {path[0, -1]:.3f}")
-        for i in range(0, path.shape[0], max(1, path.shape[0] // 10)):
-            print(f"  state {i}: {np.round(path[i, :-1], 3)}  g={path[i, -1]:.3f}")
+    if not ok:
+        raise RuntimeError("generic_torch_integrator: search failed")
+    print(f"  path: {path.shape[0]} states, solution cost {path[0, -1]:.3f}")
+    for i in range(0, path.shape[0], max(1, path.shape[0] // 10)):
+        print(f"  state {i}: {np.round(path[i, :-1], 3)}  g={path[i, -1]:.3f}")
 
     if args.skip_generic:
         return
@@ -170,11 +171,15 @@ def main() -> None:
     gok, gexp, gpath, t_generic = solve(gplanner, gconfigs, args.repeats)
     print(f"[generic (py callbacks)] success={gok} expansions={gexp} "
           f"search={t_generic * 1e3:.2f} ms")
+    if not gok:
+        raise RuntimeError("generic_torch_integrator: generic baseline search failed")
     same = (
         ok == gok and exp == gexp
         and (path is None or (path.shape == gpath.shape and np.allclose(path, gpath, atol=1e-5)))
     )
     print(f"same result as generic: {same}")
+    if not same:
+        raise RuntimeError("generic_torch_integrator: result differs from generic")
     print(f"speedup generic_torch vs generic: {t_generic / t_torch:.1f}x "
           f"(best of {args.repeats} searches each)")
 

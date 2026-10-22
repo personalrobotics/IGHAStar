@@ -2,20 +2,16 @@
 // callbacks, "generic_torch" with AOTInductor-compiled callbacks). Mirrors
 // test.cpp, but exposes the Environment methods individually so the Python
 // side can compare both modes on identical inputs. Built by
-// test_generic_environment.py with -DUSE_GENERIC_ENV or
-// -DUSE_GENERIC_TORCH_ENV plus -DN_DIMS / -DN_CONT / -DHASH_DIMS.
+// test_generic_environment.py with -DIGHASTAR_ENV_HEADER plus -DN_DIMS / -DN_CONT / -DHASH_DIMS.
 #include <memory>
 #include <torch/extension.h>
 #include <tuple>
 #include <vector>
 
-#if defined(USE_GENERIC_ENV)
-#include <generic.h>
-#elif defined(USE_GENERIC_TORCH_ENV)
-#include <generic_torch.h>
-#else
-#error "test_generic.cpp needs USE_GENERIC_ENV or USE_GENERIC_TORCH_ENV"
+#ifndef IGHASTAR_ENV_HEADER
+#error "test_generic.cpp needs -DIGHASTAR_ENV_HEADER='\"generic.h\"' or generic_torch.h"
 #endif
+#include IGHASTAR_ENV_HEADER
 
 class GenericEnvironmentTester {
   std::unique_ptr<Environment> env;

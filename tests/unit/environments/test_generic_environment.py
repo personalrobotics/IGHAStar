@@ -9,8 +9,7 @@ heuristic) for the two callback-driven environments:
   compiled with AOTInductor, run from C++ without Python
 
 Every check runs against both, and the parity tests compare them on identical
-inputs. test_generic.cpp is compiled with ``-DUSE_GENERIC_ENV`` or
-``-DUSE_GENERIC_TORCH_ENV``.
+inputs. test_generic.cpp is compiled with ``-DIGHASTAR_ENV_HEADER`` naming ``generic.h`` / ``generic_torch.h``.
 
 Run:  python -m pytest tests/unit/environments/test_generic_environment.py -v
 """
@@ -27,11 +26,11 @@ sys.path.insert(0, str(HERE.parent))  # generic_problems
 sys.path.insert(0, str(HERE.parent.parent.parent))  # repo root
 
 import generic_problems as gp  # noqa: E402
-from ighastar.scripts.common_utils import BASE_DIR, CXX_STD_FLAG  # noqa: E402
+from ighastar.scripts.common_utils import BASE_DIR, CXX_STD_FLAG, env_header_flag  # noqa: E402
 from ighastar.scripts.generic_torch import compile_generic_torch_callbacks  # noqa: E402
 
 MODES = ["generic", "generic_torch"]
-MACROS = {"generic": "-DUSE_GENERIC_ENV", "generic_torch": "-DUSE_GENERIC_TORCH_ENV"}
+MACROS = {"generic": env_header_flag("generic.h"), "generic_torch": env_header_flag("generic_torch.h")}
 
 
 @functools.lru_cache(maxsize=None)
@@ -44,7 +43,7 @@ def _test_kernel(mode):
     # (fails on GCC 9) is not reused after switching to c++2a.
     tag = "cxx2a" if "c++2a" in CXX_STD_FLAG else "cxx20"
     return load(
-        name=f"{mode}_env_test_2_2_2_{tag}",
+        name=f"{mode}_env_test_2_2_2_{tag}_eh",
         sources=[str(HERE / "test_generic.cpp")],
         extra_include_paths=extra_includes,
         extra_cflags=[

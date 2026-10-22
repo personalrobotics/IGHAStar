@@ -223,7 +223,7 @@ On the integrator example, `generic_torch` gives the same expansions, path and c
 
 For detailed configuration and usage instructions, see [examples/standalone/README.md](examples/standalone/README.md).
 For a custom environment in Python (dynamics, cost, validity, heuristic, goal test as callbacks), see [ighastar/Environments/GENERIC.md](ighastar/src/Environments/GENERIC.md).
-For a custom C++ Environment (`Succ` and related methods), including one that lives in your own project (`USE_EXTERNAL_ENV`), see [ighastar/Environments/README.md](ighastar/src/Environments/README.md).
+For a custom C++ Environment (`Succ` and related methods), including one that lives in your own project (`IGHASTAR_ENV_HEADER`), see [ighastar/Environments/README.md](ighastar/src/Environments/README.md).
 
 For the ROS and BeamNG examples, see [examples/ROS/README.md](examples/ROS/README.md) and [examples/BeamNG/README.md](examples/BeamNG/README.md). The BeamNG README contains detailed documentation on [bidirectional search parameters](examples/BeamNG/README.md#bidirectional-search-parameters).
 
