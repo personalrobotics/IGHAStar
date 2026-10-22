@@ -1,0 +1,32 @@
+# PushT (gym-pusht / Chipmunk) — native C++ Environment
+# State [10]: ax, ay, bx, by, angle, avx, avy, bvx, bvy, bw
+# Control [2]: agent PD target xy
+experiment_info_default:
+  # Pose resolution/tolerance (5 hash dims); trailing entries pad velocities.
+  resolution: [40.0, 40.0, 40.0, 40.0, 0.5, 50.0, 50.0, 50.0, 50.0, 0.5]
+  tolerance: [1.0, 1.0, 1.0, 1.0, 0.01, 25.0, 25.0, 25.0, 25.0, 0.25]
+  # Goal region on block pose (indices 2,3,4) — agent free
+  epsilon: [1.0, 1.0, 20.0, 20.0, 0.349, 1e9, 1e9, 1e9, 1e9, 1e9] # this needs to be derived from the original dino_wm paper or something.
+  max_level: 3
+  division_factor: 2.0
+  max_expansions: 25000  # 100% on dino-50 with res=40, radii=[200], vmax=500, eps block 20/0.349
+  hysteresis: 500
+  node_info:
+    node_type: "pusht"
+    # timesteps is forced = n_substeps in C++ (dense path / video frames)
+    n_substeps: 10
+    workspace_lo: 0.0
+    workspace_hi: 512.0
+    # edge_cost is set in C++ to n_substeps * dt (0.1 s here); YAML ignored
+    # Succ: agent-relative rings at these radii × n_directions, plus aim-at-block
+    n_directions: 16  # 49/50 on dino-50 @ 25k (vs 44/50 at 8)
+    action_radii: [200.0]
+    # Agent speed cap (px/s): PD clamp + heuristic = block_dist / max_agent_vel
+    max_agent_vel: 500.0
+    # Reject Succ edges that deepen contact penetration by more than this (px).
+    # (Absolute overlap is often >1px already from Chipmunk soft contacts.)
+    max_penetration_px: 1.0
+    # Dynamics: "chipmunk" (default, gym-pusht) or "quasistatic" (Mason/Lynch LS)
+    dynamics: chipmunk
+    # Ellipsoidal limit-surface support radius (px); only used if quasistatic
+    qs_support_radius: 60.0

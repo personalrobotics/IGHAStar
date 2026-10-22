@@ -426,13 +426,22 @@ public:
       if (node->parent == nullptr || node->intermediate_poses == nullptr) {
         continue;
       }
+      // g increases linearly parent.g → node.g over substeps.
+      const float g0 = node->parent->g;
+      const float g1 = node->g;
+      const float td = static_cast<float>(node->time_direction);
       for (int j = 0; j < timesteps; j++) {
-        int intermediate_index = (timesteps - j - 1) * n_dims;
+        const int k = timesteps - j - 1;
+        int intermediate_index = k * n_dims;
         PathState s;
         for (int d = 0; d < n_dims; d++) {
           s.pose[d] = node->intermediate_poses[intermediate_index + d];
         }
-        s.g = node->g * node->time_direction;
+        // Backward Node stores intermediates reversed; map k → chrono fraction.
+        const float alpha =
+            static_cast<float>(td < 0.f ? timesteps - k : k + 1) /
+            static_cast<float>(timesteps);
+        s.g = (g0 + alpha * (g1 - g0)) * td;
         extended_path.push_back(s);
       }
     }

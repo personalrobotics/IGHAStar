@@ -15,6 +15,7 @@ import os
 # Add parent directory to path to import common utilities
 sys.path.append(str(pathlib.Path(__file__).parent.parent.parent))
 from ighastar.scripts.common_utils import BASE_DIR
+from ighastar.scripts.common_utils import CXX_STD_FLAG
 
 
 class EnvironmentTester:
@@ -216,7 +217,7 @@ class EnvironmentTester:
             ),
             sources=sources,
             extra_include_paths=extra_includes,
-            extra_cflags=["-std=c++17", "-O3", env_macro],
+            extra_cflags=[CXX_STD_FLAG, "-O3", env_macro],
             extra_cuda_cflags=extra_cuda_cflags,
             verbose=True,
         )

@@ -1,0 +1,20 @@
+# PushT Chipmunk — matched to QS best cell (ndir=24, cone actions, radii=200 vmax=500).
+experiment_info_default:
+  resolution: [40.0, 40.0, 40.0, 40.0, 0.5, 50.0, 50.0, 50.0, 50.0, 0.5]
+  tolerance: [1.0, 1.0, 1.0, 1.0, 0.01, 25.0, 25.0, 25.0, 25.0, 0.25]
+  epsilon: [1.0, 1.0, 20.0, 20.0, 0.349, 1e9, 1e9, 1e9, 1e9, 1e9]
+  max_level: 3
+  division_factor: 2.0
+  max_expansions: 25000
+  hysteresis: 500
+  node_info:
+    node_type: "pusht"
+    n_substeps: 10
+    workspace_lo: 0.0
+    workspace_hi: 512.0
+    n_directions: 24
+    action_radii: [200.0]
+    max_agent_vel: 500.0
+    max_penetration_px: 1.0
+    dynamics: chipmunk
+    qs_support_radius: 60.0

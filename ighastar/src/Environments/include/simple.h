@@ -269,7 +269,8 @@ public:
         L = step_size * t / timesteps;
         x = node->pose[0] + cosf(theta) * L;
         y = node->pose[1] + sinf(theta) * L;
-        if ((costmap[m_to_px(x, y)] != 255.0f) || !in_bounds(x, y)) {
+        // in_bounds first: m_to_px is undefined outside the map.
+        if (!in_bounds(x, y) || costmap[m_to_px(x, y)] != 255.0f) {
           valid = false;
           break;
         }

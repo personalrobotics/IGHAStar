@@ -21,6 +21,7 @@ import torch
 from torch.utils.cpp_extension import load
 
 from ighastar.scripts.common_utils import BASE_DIR
+from ighastar.scripts.common_utils import CXX_STD_FLAG
 
 _ext: Optional[Any] = None
 
@@ -40,7 +41,7 @@ def _load_ext() -> Any:
             str(src / "esdf_to_bev.cu"),
         ],
         extra_include_paths=[str(src)],
-        extra_cflags=["-std=c++17", "-O3"],
+        extra_cflags=[CXX_STD_FLAG, "-O3"],
         extra_cuda_cflags=["-O3"],
         verbose=False,
     )
