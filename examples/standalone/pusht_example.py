@@ -139,8 +139,10 @@ def main() -> None:
         )
 
     if not success:
-        print("No path found (try raising max_expansions or loosening epsilon).")
-        return
+        raise RuntimeError(
+            "pusht_example: search failed "
+            "(try raising max_expansions or loosening epsilon)"
+        )
 
     path = planner.get_best_path().numpy()  # goal-first, dense substeps
     path_sg = path[::-1].copy()  # start→goal

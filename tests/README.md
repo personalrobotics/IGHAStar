@@ -69,7 +69,7 @@ The callback-driven environments have their own pytest suites. Both suites use t
 |---|---|
 | `unit/environments/test_generic_environment.py` + `test_generic.cpp` | Environment-level checks, mirroring `test.cpp`: validity (single and batched), successors (pruning, batched vs single), goal reaching, heuristic, multi-step rollouts. Every check runs against both `generic` and `generic_torch`. Parity tests compare the two modes on identical inputs, including a seeded random control sampler. |
 | `unit/planner/test_generic_torch_planner.py` | Full IGHA\* / BiIGHA\* searches. Covers parity with `generic` (identical expansion count, path, controls and cost), proof that the search makes no Python calls (counting/raising callbacks), GIL release during search, rollouts, random samplers, fixed control tensors, the compile cache, export error messages, and CUDA (skipped without a GPU). |
-| `unit/environments/test_external_env.py` | Smoke for `USE_EXTERNAL_ENV`: builds `ighastar.cpp` against an out-of-tree stub header and constructs `IGHAStar`. |
+| `unit/environments/test_external_env.py` | Smoke for `IGHASTAR_ENV_HEADER`: builds `ighastar.cpp` against an out-of-tree stub header and constructs `IGHAStar`. |
 
 `tests/conftest.py` puts this checkout first on `sys.path`, points `IGHASTAR_SRC_DIR` at this checkout's sources, and adds the interpreter's `bin/` to `PATH` so `ninja` is found.
 

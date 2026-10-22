@@ -14,7 +14,7 @@ import os
 
 # Add parent directory to path to import common utilities
 sys.path.append(str(pathlib.Path(__file__).parent.parent.parent))
-from ighastar.scripts.common_utils import BASE_DIR
+from ighastar.scripts.common_utils import BASE_DIR, env_header_flag
 from ighastar.scripts.common_utils import CXX_STD_FLAG
 
 
@@ -169,12 +169,12 @@ class EnvironmentTester:
         # Set up environment macro and sources following common_utils.py pattern
         if self.env_type == "simple":
             print("Using header-only version (simple environment)")
-            env_macro = "-DUSE_SIMPLE_ENV"
+            env_macro = env_header_flag("simple.h")
             sources = [str(pathlib.Path(__file__).parent / "test.cpp")]
             extra_cuda_cflags = []
         elif cuda_available:
             # Use CUDA version
-            env_macro = "-DUSE_{}_ENV".format(self.env_type.upper())
+            env_macro = env_header_flag("{}.h".format(self.env_type))
             cuda_path = (
                 BASE_DIR
                 / "src"
@@ -186,7 +186,7 @@ class EnvironmentTester:
             extra_cuda_cflags = ["-O3"]
         else:
             # Use CPU version - compile with CPU header and .cpp file included
-            env_macro = "-DUSE_{}_CPU_ENV".format(self.env_type.upper())
+            env_macro = env_header_flag("{}_cpu.h".format(self.env_type))
             cpu_cpp_path = (
                 BASE_DIR
                 / "src"

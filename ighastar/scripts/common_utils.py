@@ -39,6 +39,16 @@ CXX_STD_FLAG = _cxx_std_flag()
 CUDA_CXX_STD_FLAG = _cuda_cxx_std_flag(CXX_STD_FLAG)
 
 
+def env_header_flag(header: str) -> str:
+    """-DIGHASTAR_ENV_HEADER=... with quotes that survive ninja's shell.
+
+    header is the include name only, e.g. kinodynamic.h or my_env.h
+    (found on the include path).
+    """
+    # Macro value must be the tokens `"foo.h"` after the shell strips quotes.
+    return "-DIGHASTAR_ENV_HEADER='" + chr(34) + header + chr(34) + "'"
+
+
 def _find_source_dir() -> pathlib.Path:
     """
     Find the ighastar source directory containing C++ files.
@@ -143,7 +153,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             "-O3",
             # Silence benign pybind visibility warnings from py::function members.
             "-Wno-attributes",
-            "-DUSE_GENERIC_ENV",
+            env_header_flag("generic.h"),
             f"-DN_DIMS={state_dim}",
             f"-DN_CONT={control_dim}",
             f"-DHASH_DIMS={hash_dims}",
@@ -152,7 +162,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
         # Distinct module name per (state_dim, control_dim, hash_dims) so builds
         # with different dimensions do not collide in the torch extension cache.
         kernel = load(
-            name=f"ighastar_generic_{state_dim}_{control_dim}_{hash_dims}_{build_tag}",
+            name=f"ighastar_generic_{state_dim}_{control_dim}_{hash_dims}_{build_tag}_eh",
             sources=[str(cpp_path)],
             extra_include_paths=extra_includes,
             extra_cflags=extra_cflags,
@@ -178,14 +188,15 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             cxx_std,
             "-O3",
             "-Wno-attributes",
-            "-DUSE_GENERIC_TORCH_ENV",
+            env_header_flag("generic_torch.h"),
+            "-DIGHASTAR_RELEASES_GIL",
             f"-DN_DIMS={state_dim}",
             f"-DN_CONT={control_dim}",
             f"-DHASH_DIMS={hash_dims}",
             *hash_cflags,
         ]
         kernel = load(
-            name=f"ighastar_generic_torch_{state_dim}_{control_dim}_{hash_dims}_{build_tag}",
+            name=f"ighastar_generic_torch_{state_dim}_{control_dim}_{hash_dims}_{build_tag}_eh",
             sources=[str(cpp_path)],
             extra_include_paths=extra_includes,
             extra_cflags=extra_cflags,
@@ -214,20 +225,19 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             )
         cuda_path = BASE_DIR / "src" / "Environments" / "src" / "pusht_qs.cu"
         kernel = load(
-            name=f"ighastar_pusht_qs_cuda_{build_tag}",
+            name=f"ighastar_pusht_qs_cuda_{build_tag}_eh",
             sources=[str(cpp_path), str(cuda_path)],
             extra_include_paths=extra_includes,
             extra_cflags=[
                 cxx_std,
                 "-O3",
-                "-DUSE_PUSHT_QS_CUDA_ENV",
+                env_header_flag("pusht_qs_cuda.h"),
                 *hash_cflags,
             ],
             extra_cuda_cflags=[
                 "-O3",
                 "--use_fast_math",
                 cuda_std,
-                "-DUSE_PUSHT_QS_CUDA_ENV",
                 *hash_cflags,
             ],
             verbose=True,
@@ -254,7 +264,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             if p.name != "cpHastySpace.c"
         )
         kernel = load(
-            name=f"ighastar_pusht_v2_{build_tag}",
+            name=f"ighastar_pusht_v2_{build_tag}_eh",
             sources=[str(cpp_path), *[str(p) for p in chipmunk_sources]],
             extra_include_paths=extra_includes + [str(chipmunk_root / "include")],
             # Chipmunk .c files share cflags with the .cpp; last -std= wins over
@@ -265,7 +275,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
                 "-fopenmp",
                 "-DNDEBUG",
                 "-DCP_USE_DOUBLES=1",
-                "-DUSE_PUSHT_ENV",
+                env_header_flag("pusht.h"),
                 *hash_cflags,
             ],
             extra_ldflags=["-fopenmp", "-lm"],
@@ -277,22 +287,24 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
 
     if not cuda_available:
         print("CUDA not available, using CPU versions")
-        env_macro = {
-            "simple": "-DUSE_SIMPLE_ENV",
-            "kinematic": "-DUSE_KINEMATIC_CPU_ENV",
-            "kinodynamic": "-DUSE_KINODYNAMIC_CPU_ENV",
+        env_header = {
+            "simple": "simple.h",
+            "kinematic": "kinematic_cpu.h",
+            "kinodynamic": "kinodynamic_cpu.h",
         }[env_name]
     else:
         print("CUDA available, using GPU versions")
-        env_macro = {
-            "simple": "-DUSE_SIMPLE_ENV",
-            "kinematic": "-DUSE_KINEMATIC_ENV",
-            "kinodynamic": "-DUSE_KINODYNAMIC_ENV",
+        env_header = {
+            "simple": "simple.h",
+            "kinematic": "kinematic.h",
+            "kinodynamic": "kinodynamic.h",
         }[env_name]
+    env_macro = env_header_flag(env_header)
 
     # Per-env module name: simple/kinematic/kinodynamic must not share one .so
     # (torch caches by name; colliding macros silently load the wrong Env).
-    mod_name = f"ighastar_{env_name}_{build_tag}"
+    # "_eh" = IGHASTAR_ENV_HEADER era; avoids reusing old USE_*_ENV builds.
+    mod_name = f"ighastar_{env_name}_{build_tag}_eh"
     if env_name != "simple":
         if cuda_available:
             # Use CUDA version

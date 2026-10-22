@@ -3,18 +3,11 @@
 #include <torch/extension.h>
 #include <vector>
 
-// Include the environment based on compilation flags
-#if defined(USE_KINEMATIC_ENV)
-#include <kinematic.h>
-#elif defined(USE_KINEMATIC_CPU_ENV)
-#include <kinematic_cpu.h>
-#elif defined(USE_KINODYNAMIC_ENV)
-#include <kinodynamic.h>
-#elif defined(USE_KINODYNAMIC_CPU_ENV)
-#include <kinodynamic_cpu.h>
-#elif defined(USE_SIMPLE_ENV)
-#include <simple.h>
+// Same wiring as ighastar.cpp: one header named by IGHASTAR_ENV_HEADER.
+#ifndef IGHASTAR_ENV_HEADER
+#error "test.cpp needs -DIGHASTAR_ENV_HEADER='\"simple.h\"' (or kinematic / kinodynamic)"
 #endif
+#include IGHASTAR_ENV_HEADER
 
 using namespace std;
 

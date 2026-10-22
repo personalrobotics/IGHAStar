@@ -1,6 +1,6 @@
-// Minimal Environment for USE_EXTERNAL_ENV smoke tests. Lives under tests/,
-// not the installed package: proves ighastar.cpp can include an out-of-tree
-// header via -DEXTERNAL_ENV_HEADER and still construct IGHAStar.
+// Minimal Environment for out-of-tree IGHASTAR_ENV_HEADER smoke tests. Lives
+// under tests/: proves ighastar.cpp can include a header outside Environments/
+// and still construct IGHAStar.
 #pragma once
 
 #include <generic_common.h>

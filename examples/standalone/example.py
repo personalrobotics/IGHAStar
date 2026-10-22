@@ -16,6 +16,7 @@ def main(
     bidirectional: bool = False,
     print_controls: bool = False,
     viser: bool = False,
+    no_visuals: bool = False,
 ) -> None:
     assert yaml_path, "Please provide a valid YAML configuration file path."
     print("Loading config from:", yaml_path)
@@ -153,6 +154,10 @@ def main(
         np.save(path_file, path)
         print(f"Saved path to: {path_file}")
 
+        if no_visuals:
+            print("Skipping visualization (--no-visuals)")
+            return
+
         # Create visualization
         show_map(plt, bitmap, node_type, node_info=node_info)
 
@@ -248,7 +253,6 @@ def main(
         plt.gca().invert_yaxis()
 
         print("Displaying visualization...")
-        # Save figure to output directory (create if needed)
         output_path = os.path.join(
             output_dir, f"{map_name}_{node_type}_{planner_type}.png"
         )
@@ -262,7 +266,10 @@ def main(
 
             replay_trajectory(path, bitmap, node_info)
     else:
-        print("✗ No path found - the goal may be unreachable")
+        msg = "No path found - the goal may be unreachable"
+        if no_visuals:
+            raise RuntimeError(msg)
+        print(f"✗ {msg}")
 
 
 if __name__ == "__main__":
@@ -293,6 +300,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Replay the trajectory over the terrain in Viser after planning",
     )
+    parser.add_argument(
+        "--no-visuals",
+        action="store_true",
+        help="Skip matplotlib/Viser; raise RuntimeError if search fails (smoke/CI)",
+    )
     # we assume the config is from examples/standalone folder:
     args = parser.parse_args()
     yaml_path = os.path.join(BASE_DIR.parent, "examples", "standalone", args.config)
@@ -302,4 +314,5 @@ if __name__ == "__main__":
         bidirectional=args.bidirectional,
         print_controls=args.print_controls,
         viser=args.viser,
+        no_visuals=args.no_visuals,
     )
