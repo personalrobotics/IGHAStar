@@ -232,7 +232,7 @@ extension loader:
 ```python
 from pathlib import Path
 
-from ighastar.scripts.common_utils import BASE_DIR
+from ighastar.scripts.common_utils import BASE_DIR, CXX_STD_FLAG
 from torch.utils.cpp_extension import load
 
 src = Path(BASE_DIR) / "src"
@@ -246,7 +246,7 @@ kernel = load(
         str(src),
     ],
     extra_cflags=[
-        "-std=c++20",
+        CXX_STD_FLAG,  # -std=c++20, or -std=c++2a on GCC 9
         "-O3",
         "-DUSE_EXTERNAL_ENV",
         # The extra single quotes keep the double quotes through the shell that
@@ -260,6 +260,9 @@ kernel = load(
 )
 planner = kernel.IGHAStar({"experiment_info_default": info, "my_env": my_settings}, False)
 ```
+
+A compile smoke for this path lives in `tests/unit/environments/test_external_env.py`
+(stub header next to it).
 
 Give each distinct build its own `name`: torch caches extensions by name, and IGHA*'s classes are
 `py::module_local`, so several builds (external and built-in) can be loaded in one process.
