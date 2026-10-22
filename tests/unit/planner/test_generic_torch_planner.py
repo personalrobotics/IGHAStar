@@ -215,7 +215,14 @@ def test_fixed_controls_tensor_accepted():
 # --------------------------------------------------------------------------
 def test_bidirectional_generic_torch():
     cbs = gp.callbacks(goal_test=gp.goal_test_never)
-    planner, configs = plan("generic_torch", cbs, bidirectional=True)
+    # A 2D point mass: Euclidean goal sampling, no angular dimension (the SE2 default
+    # treats dimension 2 as the heading, which this state doesn't have).
+    planner, configs = plan(
+        "generic_torch",
+        cbs,
+        bidirectional=True,
+        goal_sampling_config={"space_type": "R_N", "angular_dims": []},
+    )
     ok = planner.search(
         gp.START.clone(), gp.GOAL.clone(), torch.zeros(1), 50000, 1000, True
     )
@@ -224,6 +231,18 @@ def test_bidirectional_generic_torch():
     assert 9.0 < cost < 13.0
     path = planner.get_best_path()
     assert path.shape[0] > 0
+
+
+def test_bidirectional_rejects_angular_dims_outside_the_state():
+    # Dimension 2 doesn't exist in this 2D state: sampling around it would read past the pose.
+    cbs = gp.callbacks(goal_test=gp.goal_test_never)
+    with pytest.raises(ValueError, match="angular_dims"):
+        plan(
+            "generic_torch",
+            cbs,
+            bidirectional=True,
+            goal_sampling_config={"space_type": "SE2", "angular_dims": [2]},
+        )
 
 
 # --------------------------------------------------------------------------
@@ -262,6 +281,19 @@ def test_python_bool_goal_test_gives_clear_error():
 
     configs = gp.make_configs("generic_torch", gp.callbacks(goal_test=bad_goal_test))
     with pytest.raises(RuntimeError, match="goal_test"):
+        gt.compile_generic_torch_callbacks(configs, verbose=False)
+
+
+@pytest.mark.parametrize("shape", [(8, 1), (8, 3), (16,), (0, 2)])
+def test_random_sampler_shape_is_validated(shape):
+    # A random sampler is compiled rather than passed as a constant, so its shape is only
+    # known from a probe; the C++ side reads K * control_dim floats per sample, so a
+    # mismatched shape must be rejected up front.
+    def bad_sampler():
+        return torch.rand(*shape)
+
+    configs = gp.make_configs("generic_torch", gp.callbacks(sample_controls=bad_sampler))
+    with pytest.raises(ValueError, match=r"sample_controls must be \[K, 2\]"):
         gt.compile_generic_torch_callbacks(configs, verbose=False)
 
 
