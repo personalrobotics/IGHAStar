@@ -274,6 +274,16 @@ def _compile(
     return str(path)
 
 
+def _check_controls_shape(controls: torch.Tensor, c: int) -> int:
+    """K, after checking `controls` (fixed or sampled) is a `[K, c]` tensor with K >= 1."""
+    if controls.dim() != 2 or controls.shape[1] != c or controls.shape[0] < 1:
+        raise ValueError(
+            f"generic_torch: sample_controls must be [K, {c}] with K >= 1, got "
+            f"{tuple(controls.shape)}"
+        )
+    return int(controls.shape[0])
+
+
 def compile_generic_torch_callbacks(
     configs: Dict[str, Any],
     *,
@@ -333,19 +343,16 @@ def compile_generic_torch_callbacks(
                     "sample_controls", ep_sc, dev, cache, inductor_configs, verbose, stats
                 )
                 # Probe K from the (eager) exported program; same shape every call.
-                K = int(ep_sc.module()().shape[0])
+                # Validated like fixed controls: the C++ side reads K * c floats
+                # from every sample, so a wrong shape would read out of bounds.
+                K = _check_controls_shape(ep_sc.module()(), c)
             else:
                 # Deterministic: evaluate once (eager aten, bitwise identical to
                 # what generic mode sees each call) and pass as a constant.
                 fixed_controls = ep_sc.module()().detach().to("cpu", torch.float32)
     if fixed_controls is not None:
         fixed_controls = fixed_controls.contiguous()
-        if fixed_controls.dim() != 2 or fixed_controls.shape[1] != c:
-            raise ValueError(
-                f"generic_torch: sample_controls must be [K, {c}], got "
-                f"{tuple(fixed_controls.shape)}"
-            )
-        K = int(fixed_controls.shape[0])
+        K = _check_controls_shape(fixed_controls, c)
 
     # Example batch: any size > 1 works (B is exported as dynamic). Avoid
     # sizes that coincide with the static dims to keep export from unifying.

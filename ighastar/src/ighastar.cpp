@@ -827,9 +827,21 @@ public:
     if (gs_config.contains("angular_dims")) {
       goal_sampling_config.angular_dims =
           gs_config["angular_dims"].cast<std::vector<int>>();
-    } else {
+    } else if (n_dims > 2) {
       goal_sampling_config.angular_dims = {
           2}; // default: dimension 2 is angular
+    } else {
+      // No dimension 2 to be a heading (e.g. a 2D point mass): sampling SE2
+      // around it would read past the pose.
+      goal_sampling_config.angular_dims = {};
+    }
+    for (int dim : goal_sampling_config.angular_dims) {
+      if (dim < 0 || dim >= n_dims) {
+        throw std::invalid_argument(
+            "goal_sampling_config.angular_dims: dimension " +
+            std::to_string(dim) + " is outside the " + std::to_string(n_dims) +
+            "-dimensional state");
+      }
     }
 
     std::string space_type_str =
