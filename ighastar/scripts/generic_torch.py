@@ -251,7 +251,8 @@ def _compile(
         # torch.manual_seed, so runs would not be reproducible. fallback_random
         # keeps random ops as ATen calls on the global generator: seedable with
         # torch.manual_seed and bitwise identical to eager / generic mode.
-        inductor_configs = {"fallback_random": True, **(inductor_configs or {})}
+        # Force last: caller must not be able to turn this off (breaks seed parity).
+        inductor_configs = {**(inductor_configs or {}), "fallback_random": True}
     key = _program_key(ep, f"{name}|{device}|{sorted((inductor_configs or {}).items())}")
     path = cache_dir / f"{name}-{key}.pt2"
     if path.exists():
@@ -348,16 +349,42 @@ def compile_generic_torch_callbacks(
             with torch.device(dev):
                 # Prefer an eager constant probe: returning a captured module-
                 # level tensor trips torch.export on some 2.x releases
-                # (_tensor_constant0 metadata). Two equal calls ⇒ fixed set.
+                # (_tensor_constant0 metadata). Two equal calls with distinct
+                # storages ⇒ fixed set. Same data_ptr (in-place refill) must
+                # NOT be treated as constant — that freezes a random sampler.
                 a = sampler()
+                if not isinstance(a, torch.Tensor):
+                    raise TypeError(
+                        "sample_controls_fn must return a Tensor, got "
+                        f"{type(a).__name__}"
+                    )
+                # Snapshot before the second call: an in-place refill mutates `a`
+                # through a shared storage, which would make torch.equal(a, b)
+                # vacuously true after the second write.
+                a_snap = a.detach().clone()
                 b = sampler()
-                if (
-                    isinstance(a, torch.Tensor)
-                    and isinstance(b, torch.Tensor)
-                    and a.shape == b.shape
-                    and torch.equal(a, b)
-                ):
-                    fixed_controls = a.detach().to("cpu", torch.float32)
+                same_storage = (
+                    isinstance(b, torch.Tensor) and a.data_ptr() == b.data_ptr()
+                )
+                values_equal = (
+                    isinstance(b, torch.Tensor)
+                    and a_snap.shape == b.shape
+                    and torch.equal(a_snap, b)
+                )
+                if same_storage and not values_equal:
+                    # In-place refill with changing values: must not freeze
+                    # (silent bug), and cannot AOT-export mutable captured
+                    # buffers. Returning the same module-level Tensor every
+                    # call (same_storage + equal) is fine — that is a fixed set.
+                    raise TypeError(
+                        "sample_controls_fn refills one tensor in place with "
+                        "new values each call. That cannot be frozen as a "
+                        "fixed control set and cannot be exported. Return a "
+                        "new tensor each call (e.g. torch.rand(K, c)) or "
+                        "pass a constant Tensor."
+                    )
+                if values_equal:
+                    fixed_controls = a_snap.to("cpu", torch.float32)
                 else:
                     ep_sc = _export(
                         "sample_controls", _SampleControls(sampler), (), None

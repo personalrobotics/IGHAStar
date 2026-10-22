@@ -161,18 +161,30 @@ public:
     n_succ = info.contains("num_controls") ? info["num_controls"].cast<int>()
                                            : 1;
 
+    auto require_len = [](const std::vector<float> &v, const char *name) {
+      if (v.size() != static_cast<size_t>(n_dims)) {
+        throw std::runtime_error(
+            std::string("generic: '") + name + "' must have length n_dims=" +
+            std::to_string(n_dims) + ", got " + std::to_string(v.size()));
+      }
+    };
+
     auto res = info["resolution"].cast<std::vector<float>>();
     auto tol = info["tolerance"].cast<std::vector<float>>();
+    require_len(res, "resolution");
+    require_len(tol, "tolerance");
     for (int i = 0; i < n_dims; i++) {
       resolution[i] = res[i];
       tolerance[i] = tol[i];
     }
 
-    // Optional state-space bounds (used to reject out-of-bounds children if the
-    // user does not handle bounds in their validity callback).
+    // Optional state-space bounds: reject children outside [lower, upper] in
+    // make_successors (in addition to validity_fn).
     if (info.contains("bounds_lower") && info.contains("bounds_upper")) {
       auto lo = info["bounds_lower"].cast<std::vector<float>>();
       auto hi = info["bounds_upper"].cast<std::vector<float>>();
+      require_len(lo, "bounds_lower");
+      require_len(hi, "bounds_upper");
       for (int i = 0; i < n_dims; i++) {
         lower[i] = lo[i];
         upper[i] = hi[i];
@@ -188,6 +200,7 @@ public:
     // resolution.
     if (info.contains("LCR")) {
       auto lcr = info["LCR"].cast<std::vector<float>>();
+      require_len(lcr, "LCR");
       for (int i = 0; i < n_dims; i++) {
         local_controllability_radius[i] = lcr[i];
       }
@@ -267,8 +280,41 @@ public:
                   const torch::Tensor &final_t, const torch::Tensor &cost_t,
                   const torch::Tensor &valid_t, const torch::Tensor &h_t) {
     int M = static_cast<int>(nodes.size());
+    const int B = M * K;
     std::vector<std::vector<std::shared_ptr<Node>>> results(M);
-    int rollout_T = (next_t.dim() == 3) ? static_cast<int>(next_t.size(1)) : 1;
+    int rollout_T = 1;
+    if (next_t.dim() == 3) {
+      if (next_t.size(0) != B || next_t.size(2) != n_dims) {
+        throw std::runtime_error(
+            "generic: dynamics/expand next_states must be [B, T, n_dims] "
+            "(B=M*K, last dim = n_dims)");
+      }
+      rollout_T = static_cast<int>(next_t.size(1));
+    } else if (next_t.dim() == 2) {
+      if (next_t.size(0) != B || next_t.size(1) != n_dims) {
+        throw std::runtime_error(
+            "generic: dynamics/expand next_states must be [B, n_dims] "
+            "(B=M*K)");
+      }
+    } else {
+      throw std::runtime_error(
+          "generic: dynamics/expand next_states must be rank 2 or 3");
+    }
+    if (final_t.dim() != 2 || final_t.size(0) != B || final_t.size(1) != n_dims) {
+      throw std::runtime_error(
+          "generic: final states must be [B, n_dims] with B=M*K");
+    }
+    if (cost_t.numel() < B || valid_t.numel() < B || h_t.numel() < B) {
+      throw std::runtime_error(
+          "generic: cost/valid/heuristic must each have at least B=" +
+          std::to_string(B) + " elements");
+    }
+    if (!next_t.is_contiguous() || !final_t.is_contiguous() ||
+        !cost_t.is_contiguous() || !valid_t.is_contiguous() ||
+        !h_t.is_contiguous()) {
+      throw std::runtime_error(
+          "generic: cost/valid/heuristic/next/final tensors must be contiguous");
+    }
     // Keep the env's timesteps in sync so the path expansion matches.
     timesteps = rollout_T;
 
@@ -287,6 +333,16 @@ public:
         }
         memcpy(new_pose, fp + static_cast<size_t>(row) * n_dims,
                n_dims * sizeof(float));
+        bool in_bounds = true;
+        for (int d = 0; d < n_dims; d++) {
+          if (new_pose[d] < lower[d] || new_pose[d] > upper[d]) {
+            in_bounds = false;
+            break;
+          }
+        }
+        if (!in_bounds) {
+          continue;
+        }
         // Pointer to this row's rollout (rollout_T * n_dims floats); for the
         // 2D case this is just the single final state.
         const float *roll =

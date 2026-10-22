@@ -171,6 +171,12 @@ public:
 
     // One fused call: dynamics + cost / validity / heuristic on final state.
     auto outs = run(*expand_model, {states_t, controls_batch_t});
+    if (outs.size() < 4) {
+      throw std::runtime_error(
+          "generic_torch: expand must return (next, cost, valid, heuristic); "
+          "got " +
+          std::to_string(outs.size()) + " outputs");
+    }
     torch::Tensor next_t = outs[0];
     torch::Tensor final_t =
         (next_t.dim() == 3) ? next_t.select(1, next_t.size(1) - 1).contiguous()

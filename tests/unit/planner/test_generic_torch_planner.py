@@ -166,6 +166,29 @@ def test_search_releases_gil():
 # --------------------------------------------------------------------------
 # Controls: random sampler
 # --------------------------------------------------------------------------
+def test_inplace_buffer_sampler_is_rejected():
+    """Refilling one tensor in place must not be frozen as fixed controls.
+
+    Without a pre-second-call snapshot, torch.equal(a, b) is vacuously true
+    after the second write (same storage). That path must not freeze. In-place
+    mutation also cannot be AOT-exported, so build fails with a clear error.
+    Returning the same module-level Tensor every call remains allowed.
+    """
+    buf = torch.empty(8, 2)
+
+    def sample_inplace():
+        buf.uniform_(-1.0, 1.0)
+        return buf
+
+    with pytest.raises(TypeError, match="in place"):
+        gt.compile_generic_torch_callbacks(
+            gp.make_configs(
+                "generic_torch", gp.callbacks(sample_controls=sample_inplace)
+            ),
+            verbose=False,
+        )
+
+
 def test_random_sample_controls_search():
     """A random sampler is compiled (not frozen) and re-run every expansion.
 

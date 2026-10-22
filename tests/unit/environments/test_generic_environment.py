@@ -27,7 +27,7 @@ sys.path.insert(0, str(HERE.parent))  # generic_problems
 sys.path.insert(0, str(HERE.parent.parent.parent))  # repo root
 
 import generic_problems as gp  # noqa: E402
-from ighastar.scripts.common_utils import BASE_DIR  # noqa: E402
+from ighastar.scripts.common_utils import BASE_DIR, CXX_STD_FLAG  # noqa: E402
 from ighastar.scripts.generic_torch import compile_generic_torch_callbacks  # noqa: E402
 
 MODES = ["generic", "generic_torch"]
@@ -40,12 +40,15 @@ def _test_kernel(mode):
     extra_includes = [str(include)]
     if sys.platform == "darwin":
         extra_includes.append("/opt/homebrew/opt/boost/include")
+    # Suffix the extension name with the dialect so a stale -std=c++20 build
+    # (fails on GCC 9) is not reused after switching to c++2a.
+    tag = "cxx2a" if "c++2a" in CXX_STD_FLAG else "cxx20"
     return load(
-        name=f"{mode}_env_test_2_2_2",
+        name=f"{mode}_env_test_2_2_2_{tag}",
         sources=[str(HERE / "test_generic.cpp")],
         extra_include_paths=extra_includes,
         extra_cflags=[
-            "-std=c++20",
+            CXX_STD_FLAG,
             "-O3",
             "-Wno-attributes",
             MACROS[mode],
@@ -187,6 +190,37 @@ def test_random_sampler_parity():
         out[m] = first
     for x, y in zip(out["generic"], out["generic_torch"]):
         torch.testing.assert_close(x, y, atol=1e-6, rtol=1e-6)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_short_resolution_raises(mode):
+    """Config vectors shorter than n_dims must fail at construct, not OOB later."""
+    configs = gp.make_configs(mode, gp.callbacks(), resolution=[0.5])
+    if mode == "generic_torch":
+        configs["_generic_torch"] = compile_generic_torch_callbacks(configs, verbose=False)
+    with pytest.raises(RuntimeError, match="resolution"):
+        _test_kernel(mode).GenericEnvironmentTester(configs)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_bounds_reject_out_of_box_children(mode):
+    """bounds_lower/upper drop children even when validity_fn would accept them."""
+
+    def always_valid(states):
+        return torch.ones(states.shape[0], dtype=torch.float32, device=states.device)
+
+    # Tight box around the start so a +DT control step exits the box.
+    configs = gp.make_configs(
+        mode,
+        gp.callbacks(validity=always_valid),
+        bounds_lower=[0.9, 0.9],
+        bounds_upper=[1.1, 1.1],
+    )
+    if mode == "generic_torch":
+        configs["_generic_torch"] = compile_generic_torch_callbacks(configs, verbose=False)
+    t = _test_kernel(mode).GenericEnvironmentTester(configs)
+    poses, _, _ = t.successors(gp.START)
+    assert poses.shape[0] == 0
 
 
 @pytest.mark.parametrize("mode", MODES)

@@ -60,7 +60,7 @@ Set these under `experiment_info_default` (see `examples/standalone/Configs/gene
 | `num_controls` | Expected branching factor `K` |
 | `resolution` | Start grid size per dim (length `state_dim`) |
 | `tolerance` | Dedup tolerance per dim |
-| `bounds_lower` / `bounds_upper` | State bounds (length `state_dim`) |
+| `bounds_lower` / `bounds_upper` | State bounds (length `state_dim`). Children outside the box are dropped in successor generation (in addition to `validity_fn`). Omit both to leave the box unbounded. Length must equal `state_dim` (same for `resolution`, `tolerance`, and optional `LCR`). |
 | `max_level` | Number of resolution levels |
 | `division_factor` | Resolution shrink factor per level |
 | `max_expansions` | Search budget |
@@ -156,6 +156,8 @@ Set `node_info.node_type: "generic_torch"` to keep the same six callbacks but co
 
 The search loop never calls Python, and `search()` releases the GIL while it runs. Dynamics, cost, validity and heuristic are fused into one compiled call per batched expansion.
 
+While `search()` holds no GIL, random ops in compiled graphs still use the **global** ATen generator (`torch.manual_seed` / `torch.rand`). Do not call `torch.manual_seed`, `torch.rand`, or other global-RNG APIs from another Python thread during that search — the generator is not thread-safe, and concurrent use breaks reproducibility.
+
 ```python
 configs["experiment_info_default"]["node_info"]["node_type"] = "generic_torch"
 configs["experiment_info_default"]["node_info"]["device"] = "cpu"   # or "cuda"
@@ -192,7 +194,9 @@ Inductor may fuse or reorder float operations, for example inside a norm reducti
 | A function with no random ops | Evaluated once at build time and used as a fixed set |
 | A function with random ops (`torch.rand`, ...) | Compiled and re-run on every expansion |
 
-Graphs that contain random ops are compiled with Inductor's `fallback_random=True`. Random ops then draw from the global ATen generator, so `torch.manual_seed` controls them and they produce the same numbers as the eager callback in `generic` mode. Random ops inside dynamics or cost follow the same rule.
+Graphs that contain random ops are compiled with Inductor's `fallback_random=True` (always forced on; a caller's `inductor_configs` cannot turn it off). Random ops then draw from the global ATen generator, so `torch.manual_seed` controls them and they produce the same numbers as the eager callback in `generic` mode. Random ops inside dynamics or cost follow the same rule.
+
+A sampler that refills one buffer in place with new values (`buf.uniform_()` then `return buf`) is rejected: that must not be frozen as a fixed set, and in-place mutation cannot be AOT-exported. Returning the same module-level `Tensor` every call is fine (fixed set). For a random sampler, return a new tensor each call (for example `torch.rand(K, c)`).
 
 ### Caching and compile time
 
