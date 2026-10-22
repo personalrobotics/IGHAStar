@@ -30,6 +30,15 @@
 #include <generic.h>
 #elif defined(USE_GENERIC_TORCH_ENV)
 #include <generic_torch.h>
+#elif defined(USE_EXTERNAL_ENV)
+// An environment defined outside this repo: EXTERNAL_ENV_HEADER names its
+// header (found on the include path), which must provide `Environment` and
+// `Node` like the headers above - e.g. by building on generic_common.h. Define
+// EXTERNAL_ENV_RELEASES_GIL too if its search never calls into Python.
+#ifndef EXTERNAL_ENV_HEADER
+#error "USE_EXTERNAL_ENV needs EXTERNAL_ENV_HEADER, e.g. -DEXTERNAL_ENV_HEADER='\"my_env.h\"'"
+#endif
+#include EXTERNAL_ENV_HEADER
 #else
 #error "No environment macro defined"
 #endif
@@ -1838,12 +1847,14 @@ public:
 //     m.def("ighastar_search", &ighastar_search, "IGHA*");
 // }
 
-// The compiled generic_torch environment never touches Python during search,
-// so it releases the GIL for the whole search: other Python threads keep
-// running, and an accidental Python call from the search would fail loudly
-// instead of silently reintroducing callback overhead. The other environments
-// keep the historical behavior (generic must hold the GIL for its callbacks).
-#if defined(USE_GENERIC_TORCH_ENV)
+// The compiled generic_torch environment (and an external one that defines
+// EXTERNAL_ENV_RELEASES_GIL) never touches Python during search, so it releases
+// the GIL for the whole search: other Python threads keep running, and an
+// accidental Python call from the search would fail loudly instead of silently
+// reintroducing callback overhead. The other environments keep the historical
+// behavior (generic must hold the GIL for its callbacks).
+#if defined(USE_GENERIC_TORCH_ENV) ||                                          \
+    (defined(USE_EXTERNAL_ENV) && defined(EXTERNAL_ENV_RELEASES_GIL))
 #define IGHASTAR_SEARCH_GUARD , py::call_guard<py::gil_scoped_release>()
 #else
 #define IGHASTAR_SEARCH_GUARD
