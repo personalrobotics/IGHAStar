@@ -188,11 +188,12 @@ def main():
                     torch.tensor(ctrl_state, dtype=dtype, device=device), int(mppi_cfg["n_iter"])
                 )
                 last_action = action[0].detach().cpu().numpy()
-            core._last_action = np.asarray(last_action, dtype=np.float64)
             hold_action(core, last_action, n_sub, float(cfg["Dynamics_config"]["max_agent_vel"]))
             t_world += n_sub * DT
             agent_xy.append(_read(core)[:2].copy())
             if args.live or not args.no_visuals:
+                # Clear the action so gym does not paint the red X on the target.
+                core._last_action = None
                 frame = draw_overlay(
                     env.render(),
                     agent_xy,
