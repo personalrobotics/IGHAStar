@@ -345,3 +345,7 @@ Content/standalone/pusht_*.mp4
 Content/standalone/pusht_*_traj*/
 Content/standalone/pusht_problem_videos*/
 Content/standalone/pusht_dino_problems.npz
+# Closed-loop Push-T videos (regenerable)
+Content/push_t_example/
+examples/push_t_example/*.mp4
+examples/push_t_example/__pycache__/

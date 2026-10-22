@@ -1,0 +1,57 @@
+# Shared limits. Planner node_info aliases the keys pusht.h already reads.
+# dt/kp/kv stay the pusht_physics.h constants (0.01, 100, 20); MPPI holds each
+# command for n_substeps physics steps so one command matches one planner edge.
+
+Dynamics_config:
+  n_substeps: &n_substeps 10
+  workspace_lo: &workspace_lo 0.0
+  workspace_hi: &workspace_hi 512.0
+  max_agent_vel: &max_agent_vel 500.0
+
+MPPI_config:
+  ROLLOUTS: 32
+  TIMESTEPS: &TIMESTEPS 4
+  BINS: 1
+  u_per_command: 1
+  n_iter: 3
+
+Sampling_config:
+  control_dim: 2
+  temperature: 0.1
+  noise:
+    noise_0: 2.0
+    noise_1: 2.0
+
+Cost_config:
+  w_pusher: 1.0
+  w_block: 1.0
+  w_theta: 100.0
+
+trace_k: 8
+step_limit: 400
+fps: 10
+
+# pusht_example.py start / goal.
+start: [100.0, 100.0, 200.0, 200.0, 0.5, 0, 0, 0, 0, 0]
+goal: [256.0, 256.0, 256.0, 256.0, 0.78539816339, 0, 0, 0, 0, 0]
+
+Planner_config:
+  experiment_info_default:
+    resolution: [40.0, 40.0, 40.0, 40.0, 0.5, 50.0, 50.0, 50.0, 50.0, 0.5]
+    tolerance: [1.0, 1.0, 1.0, 1.0, 0.01, 25.0, 25.0, 25.0, 25.0, 0.25]
+    epsilon: [1.0, 1.0, 20.0, 20.0, 0.349, 1e9, 1e9, 1e9, 1e9, 1e9]
+    max_level: 3
+    division_factor: 2.0
+    max_expansions: 25000
+    hysteresis: 500
+    node_info:
+      node_type: "pusht"
+      dynamics: quasistatic
+      n_substeps: *n_substeps
+      workspace_lo: *workspace_lo
+      workspace_hi: *workspace_hi
+      max_agent_vel: *max_agent_vel
+      n_directions: 24
+      action_radii: [200.0]
+      max_penetration_px: 1.0
+      qs_support_radius: 60.0
