@@ -1,10 +1,11 @@
 # Creating a Custom Environment for IGHAStar
 
-Two paths exist:
+Three paths exist:
 
 | Path | Use when | Doc |
 |---|---|---|
 | **Generic (Python callbacks)** | You own dynamics, cost, validity, heuristic, and goal test in Python | [GENERIC.md](GENERIC.md) |
+| **generic_torch (compiled torch callbacks)** | The same callbacks as pure torch functions, compiled with AOTInductor so the search runs without Python | [GENERIC.md](GENERIC.md#generic_torch-compiled-torch-callbacks) |
 | **C++ Environment** | You implement `Succ` and related methods in C++/CUDA | This file |
 
 ## Folder Structure
@@ -18,7 +19,10 @@ Environments/
 │   ├── kinodynamic_cpu.h
 │   ├── simple.h
 │   ├── pusht.h            # PushT (Chipmunk CPU)
-│   └── pusht_physics.h
+│   ├── pusht_physics.h
+│   ├── generic_common.h   # Node + shared logic of the generic envs
+│   ├── generic.h          # Python callbacks (py::function)
+│   └── generic_torch.h    # AOTInductor-compiled torch callbacks
 ├── src/               # Source files (.cpp, .cu)
 │   ├── kinematic.cu
 │   ├── kinematic_cpu.cpp

@@ -162,6 +162,43 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             return kernel.BiIGHAStar(configs, False)
         return kernel.IGHAStar(configs, False)
 
+    # Generic environment with *compiled* torch callbacks: same API as
+    # "generic", but each callback is exported with torch.export and compiled
+    # ahead of time with AOTInductor (cached on disk), then run directly from
+    # C++ (generic_torch.h) -- the search never calls back into Python.
+    if env_name == "generic_torch":
+        from .generic_torch import compile_generic_torch_callbacks
+
+        info = configs["experiment_info_default"]
+        state_dim = int(info["state_dim"])
+        control_dim = int(info["control_dim"])
+        hash_dims = int(info.get("hash_dims", state_dim))
+        compiled = compile_generic_torch_callbacks(configs)
+        extra_cflags = [
+            cxx_std,
+            "-O3",
+            "-Wno-attributes",
+            "-DUSE_GENERIC_TORCH_ENV",
+            f"-DN_DIMS={state_dim}",
+            f"-DN_CONT={control_dim}",
+            f"-DHASH_DIMS={hash_dims}",
+            *hash_cflags,
+        ]
+        kernel = load(
+            name=f"ighastar_generic_torch_{state_dim}_{control_dim}_{hash_dims}_{build_tag}",
+            sources=[str(cpp_path)],
+            extra_include_paths=extra_includes,
+            extra_cflags=extra_cflags,
+            verbose=True,
+        )
+        # Shallow copy: the compiled package paths go to the C++ Environment
+        # without mutating the caller's config dict.
+        planner_configs = dict(configs)
+        planner_configs["_generic_torch"] = compiled
+        if bidirectional:
+            return kernel.BiIGHAStar(planner_configs, False)
+        return kernel.IGHAStar(planner_configs, False)
+
     # PushT: no backward/predecessor dynamics yet (Succ always steps +dt).
     if bidirectional and env_name in ("pusht", "pusht_qs_cuda", "pusht_qs"):
         raise NotImplementedError(
@@ -235,10 +272,8 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             verbose=True,
         )
         if bidirectional:
-            planner = kernel.BiIGHAStar(configs, False)
-        else:
-            planner = kernel.IGHAStar(configs, False)
-        return planner
+            return kernel.BiIGHAStar(configs, False)
+        return kernel.IGHAStar(configs, False)
 
     if not cuda_available:
         print("CUDA not available, using CPU versions")
