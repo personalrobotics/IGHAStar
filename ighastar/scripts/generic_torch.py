@@ -207,9 +207,13 @@ def _program_key(ep: torch.export.ExportedProgram, extra: str) -> str:
     """Stable hash of an exported program: graph code + every captured tensor."""
     h = hashlib.sha256()
     h.update(f"v{_CACHE_VERSION}|torch={torch.__version__}|{extra}".encode())
-    code = ep.graph_module.print_readable(
-        print_output=False, include_stride=True, include_device=True
-    )
+    # include_stride/include_device landed after torch 2.3; fall back if missing.
+    try:
+        code = ep.graph_module.print_readable(
+            print_output=False, include_stride=True, include_device=True
+        )
+    except TypeError:
+        code = ep.graph_module.print_readable(print_output=False)
     # Drop "# File: ...:line in fn, code: ..." provenance comments so the key
     # depends on what is computed, not on where the source lines live.
     code = "\n".join(
@@ -298,6 +302,11 @@ def compile_generic_torch_callbacks(
     ``{"device": str, "packages": {name: path}, "fixed_controls": Tensor|None,
     "stats": {...}}``.
     """
+    if not hasattr(torch._inductor, "aoti_compile_and_package"):
+        raise RuntimeError(
+            f"generic_torch requires torch>=2.6 (aoti_compile_and_package + "
+            f"AOTIModelPackageLoader); this env has torch {torch.__version__}."
+        )
     info = configs["experiment_info_default"]
     node_info = info.get("node_info", {})
     n = int(info["state_dim"])
@@ -337,19 +346,41 @@ def compile_generic_torch_callbacks(
         rng_devices = [dev.index] if dev.type == "cuda" else []
         with torch.random.fork_rng(devices=rng_devices):
             with torch.device(dev):
-                ep_sc = _export("sample_controls", _SampleControls(sampler), (), None)
-            if _has_random_ops(ep_sc):
-                packages["sample_controls"] = _compile(
-                    "sample_controls", ep_sc, dev, cache, inductor_configs, verbose, stats
-                )
-                # Probe K from the (eager) exported program; same shape every call.
-                # Validated like fixed controls: the C++ side reads K * c floats
-                # from every sample, so a wrong shape would read out of bounds.
-                K = _check_controls_shape(ep_sc.module()(), c)
-            else:
-                # Deterministic: evaluate once (eager aten, bitwise identical to
-                # what generic mode sees each call) and pass as a constant.
-                fixed_controls = ep_sc.module()().detach().to("cpu", torch.float32)
+                # Prefer an eager constant probe: returning a captured module-
+                # level tensor trips torch.export on some 2.x releases
+                # (_tensor_constant0 metadata). Two equal calls ⇒ fixed set.
+                a = sampler()
+                b = sampler()
+                if (
+                    isinstance(a, torch.Tensor)
+                    and isinstance(b, torch.Tensor)
+                    and a.shape == b.shape
+                    and torch.equal(a, b)
+                ):
+                    fixed_controls = a.detach().to("cpu", torch.float32)
+                else:
+                    ep_sc = _export(
+                        "sample_controls", _SampleControls(sampler), (), None
+                    )
+                    if _has_random_ops(ep_sc):
+                        packages["sample_controls"] = _compile(
+                            "sample_controls",
+                            ep_sc,
+                            dev,
+                            cache,
+                            inductor_configs,
+                            verbose,
+                            stats,
+                        )
+                        # Probe K from the (eager) exported program; same shape
+                        # every call. Validated like fixed controls: the C++
+                        # side reads K * c floats from every sample.
+                        K = _check_controls_shape(ep_sc.module()(), c)
+                    else:
+                        # Deterministic but exportable (e.g. recomputed each call).
+                        fixed_controls = (
+                            ep_sc.module()().detach().to("cpu", torch.float32)
+                        )
     if fixed_controls is not None:
         fixed_controls = fixed_controls.contiguous()
         K = _check_controls_shape(fixed_controls, c)

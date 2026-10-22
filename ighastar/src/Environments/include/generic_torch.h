@@ -46,8 +46,10 @@ class Environment : public GenericEnvironmentBase {
           "'");
     }
     auto path = packages[name].cast<std::string>();
-    c10::DeviceIndex idx = device.is_cuda() ? device.index() : -1;
-    return std::make_unique<Loader>(path, "model", false, 1, idx);
+    // torch>=2.6: Loader(path) / Loader(path, model_name). Newer nightlies
+    // also accept (path, name, single_threaded, num_threads, device_index);
+    // inputs are moved to `device` in run(), so the 2-arg form is enough.
+    return std::make_unique<Loader>(path, std::string("model"));
   }
 
   // Run a compiled model on `device` and return its outputs as contiguous CPU
