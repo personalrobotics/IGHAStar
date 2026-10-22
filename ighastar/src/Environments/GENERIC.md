@@ -146,6 +146,8 @@ Pass `bidirectional=True` to `create_planner`. BiIGHA\* uses the same six callba
 
 ## generic_torch: compiled torch callbacks
 
+Requires **torch ≥ 2.6** (`aoti_compile_and_package` + `AOTIModelPackageLoader`).
+
 Set `node_info.node_type: "generic_torch"` to keep the same six callbacks but compile them. `create_planner` then:
 
 1. Exports each callback with `torch.export`, with a dynamic batch dimension.
