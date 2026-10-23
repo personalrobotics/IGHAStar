@@ -257,8 +257,13 @@ def run_one(
     if success:
         # get_best_path is goal-first; flip to start→goal for playback.
         path_sg = planner.get_best_path().numpy()[::-1].copy()
-        cost = float(path_sg[-1, -1])
-        path_len = int(path_sg.shape[0])
+        if path_sg.size == 0:
+            # Rare: search reports success but best path is empty.
+            success = False
+            path_sg = None
+        else:
+            cost = float(path_sg[-1, -1])
+            path_len = int(path_sg.shape[0])
     cost_exp = np.asarray(cost_exp_list, dtype=np.float64)
     sol = np.where(cost_exp < 1e4)[0]
     first_sol_exp = int(sol[0]) if sol.size else -1
