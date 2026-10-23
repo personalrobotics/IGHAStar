@@ -342,6 +342,16 @@ Dockerfile.bak
 Content/standalone/pusht_*.csv
 Content/standalone/pusht_*.log
 Content/standalone/pusht_*.mp4
+Content/standalone/pusht_*.zip
 Content/standalone/pusht_*_traj*/
+Content/standalone/pusht_*_problems.npz
 Content/standalone/pusht_problem_videos*/
+Content/standalone/pusht_*_videos*/
 Content/standalone/pusht_dino_problems.npz
+Content/standalone/pusht_plots_share/
+Content/standalone/curve_plots/
+Content/standalone/curves/
+# Closed-loop Push-T videos (regenerable)
+Content/push_t_example/
+examples/push_t_example/*.mp4
+examples/push_t_example/__pycache__/
