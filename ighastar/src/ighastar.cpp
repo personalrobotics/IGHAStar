@@ -121,6 +121,22 @@ public:
   int max_preemptive = 0;
   std::deque<std::shared_ptr<Node>> unexpanded_stash;
   long preemptive_expansions = 0;
+  // Nodes holding preemptively cached successors. Each child keeps its parent
+  // alive (`Node::parent`) while the parent keeps the child (`cached_succ`), so
+  // a cache that is never consumed is a reference cycle: these are cleared on
+  // every reset and on destruction so the cycles are broken.
+  std::vector<std::shared_ptr<Node>> preexpanded_nodes;
+
+  // Drop every preemptive cache (and the stash), breaking the parent <-> child
+  // reference cycles of the caches no search consumed.
+  void release_preemptive_caches() {
+    for (auto &node : preexpanded_nodes) {
+      node->cached_succ.clear();
+      node->preexpanded = false;
+    }
+    preexpanded_nodes.clear();
+    unexpanded_stash.clear();
+  }
 
   IGHAStar(const py::dict &config, bool debug_ = false,
            int time_direction_ = 1) { // maybe have a debug mode?
@@ -160,6 +176,7 @@ public:
   }
 
   ~IGHAStar() {
+    release_preemptive_caches();
     if (env) {
       delete env;
       env = nullptr;
@@ -196,7 +213,7 @@ public:
     expansion_list.clear();
     cost_exp_list.clear();
     // preemptive expansion reset:
-    unexpanded_stash.clear();
+    release_preemptive_caches();
     preemptive_expansions = 0;
   }
 
@@ -218,7 +235,7 @@ public:
     Q_v_hash.insert(start_node->hash);
     // Drop any preemptive caches/stash referring to the previous round; the
     // naive baseline restarts from the start node each round.
-    unexpanded_stash.clear();
+    release_preemptive_caches();
     start_node->preexpanded = false;
     start_node->cached_succ.clear();
   }
@@ -511,6 +528,7 @@ public:
       for (auto &p : preempt_nodes) {
         p->cached_succ = std::move(results[idx]);
         p->preexpanded = true;
+        preexpanded_nodes.push_back(p);
         idx++;
         preemptive_expansions++;
       }
