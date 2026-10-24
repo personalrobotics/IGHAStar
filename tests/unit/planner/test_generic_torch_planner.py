@@ -112,6 +112,26 @@ def test_repeated_search_is_deterministic(torch_result):
     assert torch.equal(r["planner"].get_best_path(), r["path"])
 
 
+def test_preemptive_matches_non_preemptive_solution():
+    """Preemptive batching must not change the solution (same best cost).
+
+    Expansion counts can differ (FIFO stash vs pure f-order); the returned
+    best-path cost must match. Also checks that preemption actually fired.
+    """
+    cbs = gp.callbacks()
+    pe = {"min_preemptive": 8, "max_preemptive": 32}
+    off = solve(
+        "generic", cbs, preemptive_expansion={**pe, "enabled": False}
+    )
+    on = solve(
+        "generic", cbs, preemptive_expansion={**pe, "enabled": True}
+    )
+    assert off["ok"] and on["ok"]
+    assert off["planner"].get_preemptive_expansions() == 0
+    assert on["planner"].get_preemptive_expansions() > 0
+    assert abs(float(off["path"][0, -1]) - float(on["path"][0, -1])) < 1e-5
+
+
 # --------------------------------------------------------------------------
 # The search must not call back into Python
 # --------------------------------------------------------------------------
