@@ -109,7 +109,7 @@ class EnvironmentTester:
         elif self.env_type == "holonomic_6D":
             self.test_config = {
                 "experiment_info_default": {
-                    "resolution": 4.0,
+                    "resolution": [4.0, 6.283, 10.0, 10.0, 4.0],
                     "epsilon": [2.0, 2.0, 0.2, 2.0, 2.0, 0.5],
                     "tolerance": 0.5,
                     "max_level": 5,
