@@ -302,7 +302,12 @@ public:
 
   // Sets resolution, tolerance, and epsilon values for different dimensions
   void set_resolutions(py::dict &info, py::dict &node_info) {
-    float res = info["resolution"].cast<float>();
+    // resolution: [xy, yaw, vx, vy, omega] in m, rad, m/s, m/s, rad/s
+    auto res = info["resolution"].cast<std::vector<float>>();
+    if (res.size() != 5) {
+      throw std::runtime_error(
+          "resolution must be [xy, yaw, vx, vy, omega] (5 values)");
+    }
     float tol = info["tolerance"].cast<float>();
     auto eps = info["epsilon"].cast<std::vector<float>>();
     if (time_direction == -1 && info.contains("backward_epsilon")) {
@@ -311,12 +316,12 @@ public:
     float del_theta = node_info["del_theta"].cast<float>() / 57.3;
     float del_vel = node_info["del_vel"].cast<float>();
     float del_omega = node_info["del_omega"].cast<float>();
-    resolution[0] = res;
-    resolution[1] = res;
-    resolution[2] = res * del_theta;
-    resolution[3] = res * del_vel;
-    resolution[4] = res * del_vel;
-    resolution[5] = res * del_omega;
+    resolution[0] = res[0];
+    resolution[1] = res[0];
+    resolution[2] = res[1];
+    resolution[3] = res[2];
+    resolution[4] = res[3];
+    resolution[5] = res[4];
     tolerance[0] = tol;
     tolerance[1] = tol;
     tolerance[2] = tol * del_theta;
