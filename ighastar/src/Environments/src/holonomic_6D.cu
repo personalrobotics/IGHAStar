@@ -146,7 +146,8 @@ __global__ void holonomic_6d_kernel(float *state, float *intermediate_states,
                                     float car_w2, float accel_max,
                                     float alpha_max, float max_vel, float min_vel,
                                     float max_omega, float RI,
-                                    float max_vert_acc, float max_theta) {
+                                    float max_vert_acc, float max_theta,
+                                    float vy_max, float vy_floor, float K_strafe) {
   int k = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (k >= rollouts)
@@ -197,6 +198,7 @@ __global__ void holonomic_6d_kernel(float *state, float *intermediate_states,
     sr = sinf(roll);
     ct = nan_to_num(sqrtf(1.0f - sp * sp - sr * sr), 0.0f);
 
+    float vy_prev = vy_body;
     vx_body += (ax_body + sp * GRAVITY) * dt;
     vy_body += (ay_body - sr * GRAVITY) * dt;
     omega += alpha * dt;
@@ -214,7 +216,9 @@ __global__ void holonomic_6d_kernel(float *state, float *intermediate_states,
     az = GRAVITY * ct - vx_body * wy - vy_body * wx;
 
     valid[k] = valid[k] && vx_body > min_vel && vx_body < max_vel;
-    valid[k] = valid[k] && vy_body > min_vel && vy_body < max_vel;
+    // sideways speed limit shrinks as forward speed grows; slowing down is always allowed
+    float vy_cap = fmaxf(vy_max - K_strafe * fabsf(vx_body), vy_floor);
+    valid[k] = valid[k] && (fabsf(vy_body) <= vy_cap || fabsf(vy_body) <= fabsf(vy_prev));
     valid[k] = valid[k] && omega > -max_omega && omega < max_omega;
     valid[k] = valid[k] && fabsf(vx_body * wy) < max_vert_acc;
     valid[k] = valid[k] && fabsf(vy_body * wx) < max_vert_acc;
@@ -249,7 +253,8 @@ void holonomic_6d_launcher(
     bool *valid, float *cost, float dt, int timesteps, int n_succ, int NX,
     int NC, float car_l2, float car_w2, float accel_max, float alpha_max,
     float max_vel, float min_vel, float max_omega, float RI, float max_vert_acc,
-    float max_theta, int patch_length_px, int patch_width_px, const int blocks,
+    float max_theta, float vy_max, float vy_floor, float K_strafe,
+    int patch_length_px, int patch_width_px, const int blocks,
     const int threads, float *d_state, float *d_intermediate_states,
     float *d_controls, bool *d_valid, float *d_cost, cudaStream_t stream) {
   dim3 valid_threads(patch_length_px, patch_width_px);
@@ -264,7 +269,8 @@ void holonomic_6d_launcher(
   holonomic_6d_kernel<<<blocks, threads, 0, stream>>>(
       d_state, d_intermediate_states, d_controls, map, d_valid, d_cost, dt,
       timesteps, n_succ, NX, NC, car_l2, car_w2, accel_max, alpha_max,
-      max_vel, min_vel, max_omega, RI, max_vert_acc, max_theta);
+      max_vel, min_vel, max_omega, RI, max_vert_acc, max_theta, vy_max, vy_floor,
+      K_strafe);
   check_validity_batch_kernel<<<valid_blocks, valid_threads, 0, stream>>>(
       map, d_intermediate_states, patch_length_px, patch_width_px, car_l2,
       car_w2, NX, timesteps, d_valid);
