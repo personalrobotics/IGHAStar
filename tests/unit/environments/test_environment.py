@@ -131,6 +131,9 @@ class EnvironmentTester:
                         "max_vert_acc": 3.0,
                         "min_vel": -10.0,
                         "max_vel": 10.0,
+                        "vy_max": 10.0,
+                        "vy_floor": 0.0,
+                        "K_strafe": 0.0,
                         "max_theta": 30.0,
                     },
                 }

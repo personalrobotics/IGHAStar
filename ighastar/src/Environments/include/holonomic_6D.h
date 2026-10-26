@@ -21,7 +21,8 @@ void holonomic_6d_launcher(
     bool *valid, float *cost, float dt, int timesteps, int rollouts, int n_dims,
     int n_cont, float car_l2, float car_w2, float accel_max, float alpha_max,
     float max_vel, float min_vel, float max_omega, float RI, float max_vert_acc,
-    float max_theta, int patch_length_px, int patch_width_px, const int blocks,
+    float max_theta, float vy_max, float vy_floor, float K_strafe,
+    int patch_length_px, int patch_width_px, const int blocks,
     const int threads, float *d_state, float *d_intermediate_states,
     float *d_controls, bool *d_valid, float *d_cost, cudaStream_t stream);
 
@@ -151,6 +152,7 @@ class Environment {
   float dt, map_res;
   float car_l2, car_w2;
   float max_vel, min_vel, RI, max_theta, max_vert_acc;
+  float vy_max, vy_floor, K_strafe;
   float accel_max, alpha_max, max_omega;
 
   // Per-instance CUDA device memory (allows parallel execution without
@@ -353,6 +355,9 @@ public:
     RI = info["RI"].cast<float>();
     max_theta = info["max_theta"].cast<float>() / 57.3;
     max_vert_acc = info["max_vert_acc"].cast<float>();
+    vy_max = info["vy_max"].cast<float>();
+    vy_floor = info["vy_floor"].cast<float>();
+    K_strafe = info["K_strafe"].cast<float>();
     accel_max = info["accel_max"].cast<float>();
     alpha_max = info["alpha_max"].cast<float>();
     max_omega = info["max_omega"].cast<float>();
@@ -846,8 +851,8 @@ public:
     holonomic_6d_launcher(
         state, intermediate_states, terrain_map, valid, cost, dt, timesteps,
         n_succ, n_dims, n_cont, car_l2, car_w2, accel_max, alpha_max, max_vel,
-        min_vel, max_omega, RI, max_vert_acc, max_theta, patch_length_px,
-        patch_width_px, blocks, threads, d_state_instance,
+        min_vel, max_omega, RI, max_vert_acc, max_theta, vy_max, vy_floor,
+        K_strafe, patch_length_px, patch_width_px, blocks, threads, d_state_instance,
         d_intermediate_states_instance, d_controls_instance, d_valid_instance,
         d_cost_instance, cuda_stream);
 
@@ -976,7 +981,8 @@ public:
         state.data(), intermediate_states.data(), terrain_map, valid,
         cost.data(), dt, timesteps, total, n_dims, n_cont, car_l2, car_w2,
         accel_max, alpha_max, max_vel, min_vel, max_omega, RI, max_vert_acc,
-        max_theta, patch_length_px, patch_width_px, batched_blocks, threads,
+        max_theta, vy_max, vy_floor, K_strafe, patch_length_px,
+        patch_width_px, batched_blocks, threads,
         d_state_batched, d_intermediate_batched, d_controls_batched,
         d_valid_batched, d_cost_batched, cuda_stream);
 
@@ -1117,8 +1123,8 @@ public:
     holonomic_6d_launcher(
         state_buf, intermediate_states, terrain_map, &valid_buf, &cost_buf, dt,
         timesteps, 1, n_dims, n_cont, car_l2, car_w2, accel_max, alpha_max,
-        max_vel, min_vel, max_omega, RI, max_vert_acc, max_theta,
-        patch_length_px, patch_width_px, 1, threads, d_state_instance,
+        max_vel, min_vel, max_omega, RI, max_vert_acc, max_theta, vy_max,
+        vy_floor, K_strafe, patch_length_px, patch_width_px, 1, threads, d_state_instance,
         d_intermediate_states_instance, d_controls_instance, d_valid_instance,
         d_cost_instance, cuda_stream);
     memcpy(state, state_buf, n_dims * sizeof(float));
