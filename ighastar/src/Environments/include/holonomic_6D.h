@@ -31,6 +31,11 @@ void check_validity_launcher(const TerrainMap &map, float *states,
                              float car_l2, float car_w2, int n_states,
                              int n_dims, bool *result);
 
+// All combinations of (ax, ay, alpha) as fractions of their limits, scaled onto the unit sphere (defined at the end)
+inline std::vector<float> build_action_set(const std::vector<float> &ax_list,
+                                           const std::vector<float> &ay_list,
+                                           const std::vector<float> &alpha_list);
+
 size_t calc_hash(float *pose, const float *resolution) {
   std::size_t hash_val =
       0; // this is the "seed", replace with #define value later
@@ -361,18 +366,7 @@ public:
     auto alpha_list = info["alpha_list"].cast<std::vector<float>>();
     n_succ = int(ax_list.size()) * int(ay_list.size()) * int(alpha_list.size());
 
-    h_controls.resize(n_succ * n_cont);
-    int idx = 0;
-    for (int i = 0; i < ax_list.size(); ++i) {
-      for (int j = 0; j < ay_list.size(); ++j) {
-        for (int k = 0; k < alpha_list.size(); ++k) {
-          h_controls[idx * n_cont] = ax_list[i];
-          h_controls[idx * n_cont + 1] = ay_list[j];
-          h_controls[idx * n_cont + 2] = alpha_list[k];
-          ++idx;
-        }
-      }
-    }
+    h_controls = build_action_set(ax_list, ay_list, alpha_list);
 
     // Allocate per-instance CUDA device memory (replaces global cuda_setup)
     cudaError_t err;
@@ -1132,3 +1126,20 @@ public:
     *cost = cost_buf;
   }
 };
+
+// All combinations of (ax, ay, alpha) as fractions of their limits, one shared effort budget:
+// an action longer than 1 is scaled back onto the unit sphere. The zero action and the
+// single-axis actions are unchanged.
+inline std::vector<float> build_action_set(const std::vector<float> &ax_list,
+                                           const std::vector<float> &ay_list,
+                                           const std::vector<float> &alpha_list) {
+  std::vector<float> controls;
+  for (float a : ax_list)
+    for (float b : ay_list)
+      for (float c : alpha_list) {
+        float n = std::sqrt(a * a + b * b + c * c);
+        float scale = n > 1.0f ? 1.0f / n : 1.0f;
+        controls.insert(controls.end(), {a * scale, b * scale, c * scale});
+      }
+  return controls;
+}
