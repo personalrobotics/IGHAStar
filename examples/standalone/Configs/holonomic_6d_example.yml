@@ -10,20 +10,22 @@ map:
     case2:
       start: [11.9, 16.8, 1.3574384016819936, 1.5, 0.0, 0.0]
       goal: [46.6, 25.0, 0.19076360687480998, 1.5, 0.0, 0.0]
+unstuck_expansions: 40000
 experiment_info_default:
-  resolution: 4.0
-  epsilon: [2, 2, 0.2, 2.0, 2.0, 0.5]  # ate, cte, heading, vx, vy, omega
-  backward_epsilon: [2, 2, 0.2, 2.0, 2.0, 0.5]
-  LCR: [1.5, 1.5, 0.2, 2.0, 2.0, 0.5]
-  tolerance: 0.5
-  max_level: 5
-  division_factor: 2
-  max_expansions: 100000
-  hysteresis: 1000
+  bidirectional: true
+  resolution: [1.0, 1.571, 2.5, 2.5, 1.0]  # xy, yaw, vx, vy, omega (level-0 cell)
+  tolerance: 0.1
+  epsilon: [0.25, 0.25, 0.4, 0.15, 0.15, 0.3]  # ate, cte, heading, vx, vy, omega
+  backward_epsilon: [0.25, 0.25, 0.4, 0.15, 0.15, 0.3]
+  LCR: [0.125, 0.125, 0.2, 1.2, 1.2, 0.1]
+  max_level: 12
+  division_factor: 2.0
+  max_expansions: 5000
+  hysteresis: 100
   preemptive_expansion:
-    enabled: false
-    min_preemptive: 64
-    max_preemptive: 100
+    enabled: true
+    min_preemptive: 32
+    max_preemptive: 64
   near_meet_config:
     num_interpolation_points: 0
     num_perturbations: 0
@@ -33,7 +35,7 @@ experiment_info_default:
     space_type: "SE2"
     angular_dims: [2]
     num_samples: 32
-    sigma: [2.0, 2.0, 0.2, 2.0, 2.0, 0.5]
+    sigma: [0.25, 0.25, 0.3, 0.15, 0.15, 0.3]
   node_info:
     node_type: "holonomic_6D"
     map_type: "esdf_bev"
@@ -42,22 +44,25 @@ experiment_info_default:
       z_margin: 1.0
       method: "plane"
       cache: "Maps/Offroad/race-2_esdf.npz"
-    length: 2.6
-    width: 1.6
+    length: 0.7
+    width: 0.75
     map_res: *map_res
     dt: 0.05
     timesteps: 10
     ax_list: [-1.0, 0.0, 1.0]
     ay_list: [-1.0, 0.0, 1.0]
     alpha_list: [-1.0, 0.0, 1.0]
-    accel_max: 5.0
+    accel_max: 1.0
     alpha_max: 2.0
-    max_omega: 3.0
-    del_theta: 90.0
-    del_vel: 2.5
-    del_omega: 1.0
+    max_omega: 0.6
+    del_theta: 28.65  # deg; scales the yaw tolerance cell: tolerance * del_theta / 57.3
+    del_vel: 2.5      # scales the vx, vy tolerance cells
+    del_omega: 1.0    # scales the omega tolerance cell
     RI: 0.8
     max_vert_acc: 3.0
-    min_vel: -10.0
-    max_vel: 10.0
+    min_vel: -0.2
+    max_vel: 1.55
+    vy_max: 0.55
+    vy_floor: 0.2
+    K_strafe: 2.0
     max_theta: 30.0
