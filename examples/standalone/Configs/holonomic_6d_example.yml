@@ -13,7 +13,7 @@ map:
 unstuck_expansions: 40000
 experiment_info_default:
   bidirectional: true
-  resolution: [1.0, 1.571, 2.5, 2.5, 1.0]  # xy, yaw, vx, vy, omega (level-0 cell)
+  resolution: [1.0, 1.571, 0.5, 0.5, 1.0]  # xy, yaw, vx, vy, omega (level-0 cell)
   tolerance: 0.1
   epsilon: [0.25, 0.25, 0.4, 0.15, 0.15, 0.3]  # ate, cte, heading, vx, vy, omega
   backward_epsilon: [0.25, 0.25, 0.4, 0.15, 0.15, 0.3]
