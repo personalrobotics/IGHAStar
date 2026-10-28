@@ -3,8 +3,6 @@
 // not re-include environment headers or duplicate symbols like calc_hash.
 // Do not compile this file as a separate translation unit.
 
-#include <unordered_map>
-
 namespace tree_utils {
 
 namespace {
@@ -51,13 +49,13 @@ py::dict node_to_dict(const std::shared_ptr<Node> &node, int timesteps) {
 } // namespace
 
 py::dict export_search_tree(
-    const std::unordered_set<std::shared_ptr<Node>> &Seen,
+    const igha::unordered_set<std::shared_ptr<Node>> &Seen,
     std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>,
                         NodePtrCompare>
         Q_v,
-    const std::unordered_set<std::shared_ptr<Node>> &inactive_Q_v, int timesteps,
+    const igha::unordered_set<std::shared_ptr<Node>> &inactive_Q_v, int timesteps,
     int expansion_count) {
-  std::unordered_map<size_t, std::shared_ptr<Node>> unique;
+  igha::unordered_map<size_t, std::shared_ptr<Node>> unique;
   auto consider = [&](const std::shared_ptr<Node> &node) {
     if (node && unique.find(node->hash) == unique.end()) {
       unique.emplace(node->hash, node);
