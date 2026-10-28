@@ -7,15 +7,19 @@ Can test any environment type (kinematic, kinodynamic, simple).
 """
 
 import torch
-from torch.utils.cpp_extension import load
 import pathlib
 import sys
 import os
 
 # Add parent directory to path to import common utilities
 sys.path.append(str(pathlib.Path(__file__).parent.parent.parent))
-from ighastar.scripts.common_utils import BASE_DIR, env_header_flag
-from ighastar.scripts.common_utils import CXX_STD_FLAG
+from ighastar.scripts.common_utils import (
+    BASE_DIR,
+    CXX_STD_FLAG,
+    _ext_load,
+    cuda_cflags,
+    env_header_flag,
+)
 
 
 class EnvironmentTester:
@@ -183,7 +187,7 @@ class EnvironmentTester:
                 / "{}.cu".format(self.env_type)
             )
             sources = [str(pathlib.Path(__file__).parent / "test.cpp"), str(cuda_path)]
-            extra_cuda_cflags = ["-O3"]
+            extra_cuda_cflags = cuda_cflags()
         else:
             # Use CPU version - compile with CPU header and .cpp file included
             env_macro = env_header_flag("{}_cpu.h".format(self.env_type))
@@ -211,7 +215,7 @@ class EnvironmentTester:
             extra_includes = [str(header_path), boost_include]
 
         # Compile the test kernel
-        self.test_kernel = load(
+        self.test_kernel = _ext_load(
             name="{}_{}_test".format(
                 self.env_type, "cpu" if not cuda_available else "gpu"
             ),

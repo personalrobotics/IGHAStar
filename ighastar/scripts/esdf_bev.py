@@ -18,10 +18,8 @@ from typing import Any, Optional, Tuple
 
 import numpy as np
 import torch
-from torch.utils.cpp_extension import load
 
-from ighastar.scripts.common_utils import BASE_DIR
-from ighastar.scripts.common_utils import CXX_STD_FLAG
+from ighastar.scripts.common_utils import BASE_DIR, CXX_STD_FLAG, _ext_load, cuda_cflags
 
 _ext: Optional[Any] = None
 
@@ -34,7 +32,7 @@ def _load_ext() -> Any:
         raise RuntimeError("esdf_to_bev requires CUDA")
 
     src = BASE_DIR / "src" / "utils" / "esdf_bev"
-    _ext = load(
+    _ext = _ext_load(
         name="esdf_to_bev",
         sources=[
             str(src / "esdf_to_bev_binding.cpp"),
@@ -42,7 +40,7 @@ def _load_ext() -> Any:
         ],
         extra_include_paths=[str(src)],
         extra_cflags=[CXX_STD_FLAG, "-O3"],
-        extra_cuda_cflags=["-O3"],
+        extra_cuda_cflags=cuda_cflags(),
         verbose=False,
     )
     return _ext

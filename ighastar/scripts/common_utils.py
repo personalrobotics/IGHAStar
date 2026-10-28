@@ -1,9 +1,8 @@
 import torch
-from torch.utils.cpp_extension import load
 import pathlib
 import os
 import subprocess
-from typing import Any, Dict
+from typing import Any, Dict, List, Sequence
 import sys
 
 
@@ -37,6 +36,18 @@ def _cuda_cxx_std_flag(host_flag: str) -> str:
 
 CXX_STD_FLAG = _cxx_std_flag()
 CUDA_CXX_STD_FLAG = _cuda_cxx_std_flag(CXX_STD_FLAG)
+
+
+def cuda_cflags(*extra: str) -> List[str]:
+    """Flags for every CUDA extension build (fast-math on by default)."""
+    return ["-O3", "--use_fast_math", CUDA_CXX_STD_FLAG, *extra]
+
+
+def _ext_load(*, name: str, sources: Sequence[str], **kwargs: Any) -> Any:
+    """``cpp_extension.load`` with Jetson/Docker .so reuse when enabled."""
+    from ighastar.scripts.ext_cache import load_extension
+
+    return load_extension(name, sources, **kwargs)
 
 
 def env_header_flag(header: str) -> str:
@@ -129,7 +140,6 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
         print("hash maps: std::unordered_*")
     # Include dialect + hash backend so torch extension cache doesn't reuse old ABIs.
     cxx_std = CXX_STD_FLAG
-    cuda_std = CUDA_CXX_STD_FLAG
     std_tag = cxx_std.replace("-std=", "").replace("+", "x")
     build_tag = f"{std_tag}_{hash_tag}"
 
@@ -161,7 +171,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
         ]
         # Distinct module name per (state_dim, control_dim, hash_dims) so builds
         # with different dimensions do not collide in the torch extension cache.
-        kernel = load(
+        kernel = _ext_load(
             name=f"ighastar_generic_{state_dim}_{control_dim}_{hash_dims}_{build_tag}_eh",
             sources=[str(cpp_path)],
             extra_include_paths=extra_includes,
@@ -195,7 +205,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             f"-DHASH_DIMS={hash_dims}",
             *hash_cflags,
         ]
-        kernel = load(
+        kernel = _ext_load(
             name=f"ighastar_generic_torch_{state_dim}_{control_dim}_{hash_dims}_{build_tag}_eh",
             sources=[str(cpp_path)],
             extra_include_paths=extra_includes,
@@ -224,7 +234,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
                 "use node_type: pusht with dynamics: quasistatic for CPU QS."
             )
         cuda_path = BASE_DIR / "src" / "Environments" / "src" / "pusht_qs.cu"
-        kernel = load(
+        kernel = _ext_load(
             name=f"ighastar_pusht_qs_cuda_{build_tag}_eh",
             sources=[str(cpp_path), str(cuda_path)],
             extra_include_paths=extra_includes,
@@ -234,12 +244,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
                 env_header_flag("pusht_qs_cuda.h"),
                 *hash_cflags,
             ],
-            extra_cuda_cflags=[
-                "-O3",
-                "--use_fast_math",
-                cuda_std,
-                *hash_cflags,
-            ],
+            extra_cuda_cflags=cuda_cflags(*hash_cflags),
             verbose=True,
         )
         if bidirectional:
@@ -263,7 +268,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             for p in (chipmunk_root / "src").glob("*.c")
             if p.name != "cpHastySpace.c"
         )
-        kernel = load(
+        kernel = _ext_load(
             name=f"ighastar_pusht_v2_{build_tag}_eh",
             sources=[str(cpp_path), *[str(p) for p in chipmunk_sources]],
             extra_include_paths=extra_includes + [str(chipmunk_root / "include")],
@@ -309,12 +314,12 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
         if cuda_available:
             # Use CUDA version
             cuda_path = BASE_DIR / "src" / "Environments" / "src" / f"{env_name}.cu"
-            kernel = load(
+            kernel = _ext_load(
                 name=mod_name,
                 sources=[str(cpp_path), str(cuda_path)],
                 extra_include_paths=extra_includes,
                 extra_cflags=[cxx_std, "-O3", env_macro, *hash_cflags],
-                extra_cuda_cflags=["-O3", cuda_std, *hash_cflags],
+                extra_cuda_cflags=cuda_cflags(*hash_cflags),
                 verbose=True,
             )
         else:
@@ -322,7 +327,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             cpu_cpp_path = (
                 BASE_DIR / "src" / "Environments" / "src" / f"{env_name}_cpu.cpp"
             )
-            kernel = load(
+            kernel = _ext_load(
                 name=mod_name,
                 sources=[str(cpp_path), str(cpu_cpp_path)],
                 extra_include_paths=extra_includes,
@@ -330,7 +335,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
                 verbose=True,
             )
     else:
-        kernel = load(
+        kernel = _ext_load(
             name=mod_name,
             sources=[str(cpp_path)],
             extra_include_paths=extra_includes,
