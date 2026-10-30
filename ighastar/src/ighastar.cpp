@@ -32,6 +32,7 @@
 #include "utils/tree_utils.cpp"
 #include <chrono>
 #include <iomanip>
+#include <stdexcept>
 #include <pybind11/stl.h>
 #include "utils/hash_map.h"
 
@@ -702,6 +703,30 @@ public:
       std::cout << "Search finished" << expansion_counter << std::endl;
     }
     return SUCCESS;
+  }
+
+  // Batch of states, one world tensor. Same check_validity_batched the env
+  // already implements. Used by problem sampling.
+  torch::Tensor check_validity_batched_adapter(torch::Tensor states,
+                                              torch::Tensor world) {
+    env->set_world(world);
+    auto s = states.to(torch::kCPU).to(torch::kFloat32).contiguous();
+    if (s.dim() != 2 || s.size(1) != n_dims) {
+      throw std::runtime_error("states must have shape [B, n_dims]");
+    }
+    const int B = static_cast<int>(s.size(0));
+    std::vector<float *> ptrs(B);
+    float *data = s.data_ptr<float>();
+    for (int i = 0; i < B; i++)
+      ptrs[i] = data + static_cast<size_t>(i) * n_dims;
+    std::vector<bool> results;
+    env->check_validity_batched(ptrs, results);
+    auto out = torch::empty(
+        {B}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCPU));
+    auto *o = out.data_ptr<bool>();
+    for (int i = 0; i < B; i++)
+      o[i] = results[i];
+    return out;
   }
 
   std::vector<torch::Tensor> get_path_list() {
@@ -1891,6 +1916,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def(py::init<const py::dict &, bool, int>(), py::arg("config"),
            py::arg("debug") = false, py::arg("time_direction") = 1)
       .def("search", &IGHAStar::search_adapter IGHASTAR_SEARCH_GUARD)
+      .def("check_validity_batched", &IGHAStar::check_validity_batched_adapter)
       .def("get_path_list", &IGHAStar::get_path_list)
       .def("get_best_path", &IGHAStar::get_best_path)
       .def("get_best_path_with_controls", &IGHAStar::get_best_path_with_controls)

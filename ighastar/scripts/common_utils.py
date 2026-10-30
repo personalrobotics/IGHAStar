@@ -221,7 +221,12 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
         return kernel.IGHAStar(planner_configs, False)
 
     # PushT: no backward/predecessor dynamics yet (Succ always steps +dt).
-    if bidirectional and env_name in ("pusht", "pusht_qs_cuda", "pusht_qs"):
+    if bidirectional and env_name in (
+        "pusht",
+        "pusht_qs_cuda",
+        "pusht_qs",
+        "pusht_multi",
+    ):
         raise NotImplementedError(
             "PushT backward dynamics are not implemented; use bidirectional=False."
         )
@@ -251,8 +256,12 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             return kernel.BiIGHAStar(configs, False)
         return kernel.IGHAStar(configs, False)
 
-    # PushT: Chipmunk CPU env (header + vendored Chipmunk sources). No CUDA.
-    if env_name == "pusht":
+    # PushT / multi-T: Chipmunk CPU env (header + vendored Chipmunk sources).
+    if env_name in ("pusht", "pusht_multi"):
+        env_header = "pusht.h" if env_name == "pusht" else "pusht_multi.h"
+        ext_name = (
+            "ighastar_pusht_v2" if env_name == "pusht" else "ighastar_pusht_multi"
+        )
         chipmunk_root = (
             pathlib.Path(os.environ["PUSHT_CHIPMUNK_DIR"])
             if os.environ.get("PUSHT_CHIPMUNK_DIR")
@@ -269,7 +278,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
             if p.name != "cpHastySpace.c"
         )
         kernel = _ext_load(
-            name=f"ighastar_pusht_v2_{build_tag}_eh",
+            name=f"{ext_name}_{build_tag}_eh",
             sources=[str(cpp_path), *[str(p) for p in chipmunk_sources]],
             extra_include_paths=extra_includes + [str(chipmunk_root / "include")],
             # Chipmunk .c files share cflags with the .cpp; last -std= wins over
@@ -280,7 +289,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
                 "-fopenmp",
                 "-DNDEBUG",
                 "-DCP_USE_DOUBLES=1",
-                env_header_flag("pusht.h"),
+                env_header_flag(env_header),
                 *hash_cflags,
             ],
             extra_ldflags=["-fopenmp", "-lm"],
