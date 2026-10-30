@@ -117,6 +117,18 @@ def render_clear_video(
     print(f"wrote {out_mp4} ({len(frames)} frames)")
 
 
+def cost_expansion(planner):
+    """Best-cost curve from the last search, and the expansion of the first solution.
+
+    The curve is one sample per completed expansion. A solution is the first
+    sample whose cost is below 1e4 (unsolved searches stay at 1e5).
+    """
+    cost = np.asarray(planner.get_profiler_info()[9], dtype=np.float32)
+    hit = np.where(cost < 1e4)[0]
+    first = int(hit[0]) if hit.size else -1
+    return first, cost
+
+
 def self_check(planner) -> None:
     """One separated start is valid. One tee on the obstacle is not."""
     world = torch.tensor([400.0, 400.0], dtype=torch.float32)
@@ -163,6 +175,8 @@ def main() -> None:
     obstacles = []
     seeds = []
     paths = []
+    cost_exps = []
+    first_sols = []
     planned = 0
     draws = 0
     goal = torch.zeros(N_DIMS, dtype=torch.float32)
@@ -197,6 +211,7 @@ def main() -> None:
                 )
             )
             path = planner.get_best_path()
+            first_sol, cost_exp = cost_expansion(planner)
             if ok and path.numel() == 0:
                 ok = False
             if ok:
@@ -205,6 +220,8 @@ def main() -> None:
                 obstacles.append(worlds[i])
                 seeds.append(draw_ids[i])
                 paths.append(path_np)
+                cost_exps.append(cost_exp)
+                first_sols.append(first_sol)
                 if args.video_dir:
                     render_clear_video(
                         path_np,
@@ -213,10 +230,9 @@ def main() -> None:
                             args.video_dir, f"p{len(starts) - 1:03d}_draw{draw_ids[i]}.mp4"
                         ),
                     )
-            expansions = int(planner.get_profiler_info()[7])
             print(
                 f"candidate {planned} draw {draw_ids[i]} solved={ok} "
-                f"expansions={expansions} path={tuple(path.shape)} "
+                f"first_sol={first_sol} path={tuple(path.shape)} "
                 f"kept={len(starts)}/{args.n}"
             )
             if planned >= args.max_candidates or len(starts) >= args.n:
@@ -229,6 +245,8 @@ def main() -> None:
         obstacles=np.stack(obstacles) if obstacles else np.zeros((0, 2), np.float32),
         seeds=np.asarray(seeds, dtype=np.int64),
         paths=np.array(paths, dtype=object),
+        cost_exp=np.array(cost_exps, dtype=object),
+        first_sol_expansions=np.asarray(first_sols, dtype=np.int64),
         problem_class=np.array("2T1O_clear"),
         max_expansions=np.array(limit),
     )

@@ -115,6 +115,8 @@ class Environment {
   float edge_cost;
   float max_agent_vel;
   float max_penetration_px;
+  bool rearrange;     // pose goal per tee. Clear uses the exit box.
+  bool close_right;   // fourth wall. Rearrange closes it. Clear leaves it open.
 
 public:
   int max_level;
@@ -126,7 +128,8 @@ public:
   float division_factor;
 
   Environment(const py::dict &config, int time_direction_ = 1)
-      : obstacle_x(256.f), obstacle_y(256.f), time_direction(time_direction_) {
+      : obstacle_x(256.f), obstacle_y(256.f), rearrange(false),
+        close_right(false), time_direction(time_direction_) {
     auto info = config["experiment_info_default"].cast<py::dict>();
     auto node_info = info["node_info"].cast<py::dict>();
 
@@ -156,6 +159,14 @@ public:
     obstacle_side = node_info.contains("obstacle_side")
                         ? node_info["obstacle_side"].cast<float>()
                         : static_cast<float>(pusht_multi_physics::kTeeScale);
+    if (node_info.contains("objective")) {
+      rearrange = node_info["objective"].cast<std::string>() == "rearrange";
+    }
+    // Clear leaves the right wall open. Rearrange closes the box.
+    close_right = rearrange;
+    if (node_info.contains("open_right")) {
+      close_right = !node_info["open_right"].cast<bool>();
+    }
     edge_cost = static_cast<float>(n_substeps) *
                 static_cast<float>(pusht_multi_physics::kDt);
     set_resolutions(info);
@@ -293,17 +304,52 @@ public:
 
   float distance(float *pose, float *goal) { return heuristic(pose, goal); }
 
-  // Pose-only. A tee counts as cleared only if its CoG is in the exit box now.
-  // Successors set f from Node::cleared, which also remembers a past entry.
-  float heuristic(float *pose, float * /*goal*/) {
+  static float wrap_angle(float d) {
+    while (d > float(M_PI))
+      d -= 2.f * float(M_PI);
+    while (d < -float(M_PI))
+      d += 2.f * float(M_PI);
+    return d;
+  }
+
+  // Body xy plus a small angle term (40 px per radian), same scale single-T used.
+  // Without the angle term the search sits near the goal pose and misses epsilon.
+  float h_rearrange(const float *pose, const float *goal) const {
+    float dist = 0.f;
+    for (int i = 0; i < kNumTees; i++) {
+      const int b = 2 + 3 * i;
+      const float dx = pose[b] - goal[b];
+      const float dy = pose[b + 1] - goal[b + 1];
+      const float dth = wrap_angle(pose[b + 2] - goal[b + 2]);
+      dist += std::sqrt(dx * dx + dy * dy) + 40.f * std::fabs(dth);
+    }
+    return max_agent_vel > 0.f ? dist / max_agent_vel : 0.f;
+  }
+
+  bool tee_at_goal(const float *pose, const float *goal, int tee) const {
+    const int b = 2 + 3 * tee;
+    return std::fabs(pose[b] - goal[b]) < epsilon[b] &&
+           std::fabs(pose[b + 1] - goal[b + 1]) < epsilon[b + 1] &&
+           std::fabs(wrap_angle(pose[b + 2] - goal[b + 2])) < epsilon[b + 2];
+  }
+
+  // Clear: pose-only, a tee counts as cleared only if its CoG is in the exit
+  // box now. Successors set f from Node::cleared, which also remembers a past
+  // entry. Rearrange: distance of each tee body to its goal pose.
+  float heuristic(float *pose, float *goal) {
+    if (rearrange)
+      return h_rearrange(pose, goal);
     bool now[kNumTees];
     for (int i = 0; i < kNumTees; i++)
       now[i] = cog_in_exit(pose, i);
     return h_cleared(pose, now);
   }
 
-  bool reached_goal_region(std::shared_ptr<Node> v, std::shared_ptr<Node>) {
-    return v->cleared[0] && v->cleared[1];
+  bool reached_goal_region(std::shared_ptr<Node> v, std::shared_ptr<Node> goal) {
+    if (!rearrange)
+      return v->cleared[0] && v->cleared[1];
+    return tee_at_goal(v->pose, goal->pose, 0) &&
+           tee_at_goal(v->pose, goal->pose, 1);
   }
 
   bool finite_pose(const float *pose) const {
@@ -322,11 +368,14 @@ public:
   bool valid_at(float *pose, float ox, float oy) {
     if (!finite_pose(pose) || !in_agent_workspace(pose))
       return false;
-    for (int i = 0; i < kNumTees; i++) {
-      if (cog_in_exit(pose, i))
-        return false;
+    if (!rearrange) {
+      for (int i = 0; i < kNumTees; i++) {
+        if (cog_in_exit(pose, i))
+          return false;
+      }
     }
-    return !pusht_multi_physics::overlaps_forbidden(pose, ox, oy, obstacle_side);
+    return !pusht_multi_physics::overlaps_forbidden(pose, ox, oy, obstacle_side,
+                                                   close_right);
   }
 
   bool check_validity_single(float *pose) {
@@ -355,13 +404,17 @@ public:
   }
 
   // Uncleared tee the agent is touching, else the nearest uncleared tee.
-  int select_tee(const Node &node) const {
+  int select_tee(const Node &node, const float *goal_pose) const {
     const float *p = node.pose;
     int best = -1;
     float best_score = -1e30f;
     for (int i = 0; i < kNumTees; i++) {
-      if (node.cleared[i])
+      if (rearrange) {
+        if (goal_pose && tee_at_goal(p, goal_pose, i))
+          continue;
+      } else if (node.cleared[i]) {
         continue;
+      }
       float pen = 0.f;
       pusht_qs::Vec2 nrm, contact, cog;
       const bool hit = pusht_qs::deepest_contact(
@@ -383,7 +436,7 @@ public:
     std::vector<std::shared_ptr<Node>> neighbors;
     neighbors.reserve(n_succ);
 
-    const int tee = select_tee(*node);
+    const int tee = select_tee(*node, goal->pose);
     const int b = 2 + 3 * tee;
     float ring_pose[5] = {node->pose[0], node->pose[1], node->pose[b],
                           node->pose[b + 1], node->pose[b + 2]};
@@ -411,7 +464,7 @@ public:
       pusht_multi_physics::step_from_snapshot(
           node->pose, actions[i * n_cont], actions[i * n_cont + 1], out,
           n_substeps, inter, max_agent_vel, &pen_inc, &hit_obs, obstacle_x,
-          obstacle_y, obstacle_side);
+          obstacle_y, obstacle_side, close_right);
       memcpy(&next_states[i * n_dims], out, n_dims * sizeof(float));
       valid[i] = (finite_pose(out) && in_agent_workspace(out) &&
                   pen_inc <= max_penetration_px && hit_obs == 0)
@@ -434,8 +487,10 @@ public:
           time_direction, controls_seq);
       delete[] controls_seq;
       stamp_cleared(*neighbor, node.get(), inter);
-      neighbor->f = neighbor->g + h_cleared(neighbor->pose, neighbor->cleared);
-      (void)goal;
+      neighbor->f =
+          neighbor->g + (rearrange
+                             ? h_rearrange(neighbor->pose, goal->pose)
+                             : h_cleared(neighbor->pose, neighbor->cleared));
       neighbors.push_back(neighbor);
     }
     return neighbors;
