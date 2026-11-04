@@ -95,7 +95,7 @@ public:
     }
   }
 
-  ~Environment() {}
+  virtual ~Environment() {}
 
   float heuristic(float *pose, float *goal) {
     (void)goal;

@@ -34,7 +34,7 @@ public:
     goal_test_fn = config["goal_test_fn"].cast<py::function>();
   }
 
-  ~Environment() {}
+  virtual ~Environment() {}
 
   // Convert a Python-returned object to a contiguous CPU float32 tensor.
   static torch::Tensor to_cpu_float(py::handle obj) {

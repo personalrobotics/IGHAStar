@@ -13,6 +13,8 @@
 // core unchanged.
 #pragma once
 
+#include "solve_2pbvp.h"
+
 #include <boost/functional/hash.hpp>
 #include <cmath>
 #include <cstring>
@@ -151,6 +153,7 @@ public:
   float resolution[n_dims];
   float tolerance[n_dims];
   float local_controllability_radius[n_dims];
+  NearMeet2PBVP near_meet_;
   float lower[n_dims];
   float upper[n_dims];
   float division_factor;
@@ -223,6 +226,31 @@ public:
     } else {
       timesteps = 1;
     }
+    near_meet_.load(config, n_dims, local_controllability_radius);
+  }
+
+  virtual void check_validity_batched(const std::vector<float *> &states,
+                                      std::vector<bool> &results) = 0;
+
+  void solve_2pBVP(
+      const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
+          &pairs,
+      std::vector<bool> &valid,
+      std::vector<std::vector<float>> &trajectories) {
+    mpc_solve(pairs, valid, trajectories);
+  }
+
+  // Default: geometric interpolation. Override for a dynamics-aware MPC.
+  virtual void mpc_solve(
+      const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
+          &pairs,
+      std::vector<bool> &valid,
+      std::vector<std::vector<float>> &trajectories) {
+    near_meet_.mpc_solve(
+        pairs, valid, trajectories,
+        [this](const std::vector<float *> &states, std::vector<bool> &results) {
+          check_validity_batched(states, results);
+        });
   }
 
   virtual ~GenericEnvironmentBase() {}

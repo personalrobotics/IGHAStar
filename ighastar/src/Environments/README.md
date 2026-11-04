@@ -119,6 +119,15 @@ elevation representation only and rejects 4D tensors.
   ```
   Computes the distance between two poses for near-meet detection in bidirectional search.
 
+**solve_2pBVP**
+  ```cpp
+  void solve_2pBVP(
+      const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>> &pairs,
+      std::vector<bool> &valid,
+      std::vector<std::vector<float>> &trajectories);
+  ```
+  2-point boundary-value solver for bidirectional near-meet checks. `pairs[i]` is a source node and a target node (the nodes, not just their coordinates, so the solver can use parent state). `valid[i]` is true when that connection is usable. `trajectories[i]` is the connecting states, row-major `[n_states * n_dims]` (empty if the solver does not return one). A single connection is a batch of size 1. `solve_2pBVP` calls `mpc_solve`. The default `mpc_solve` is geometric interpolation between the two nodes. Override `mpc_solve` to supply a dynamics-aware solver.
+
 **Succ**
   ```cpp
   std::vector<std::shared_ptr<Node>> Succ(std::shared_ptr<Node> node,

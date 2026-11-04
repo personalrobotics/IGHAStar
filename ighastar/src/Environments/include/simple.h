@@ -1,3 +1,4 @@
+#include "solve_2pbvp.h"
 #include <boost/functional/hash.hpp>
 #include <pybind11/stl.h>
 #include <torch/extension.h>
@@ -101,6 +102,7 @@ public:
   float resolution[n_dims];
   float tolerance[n_dims];
   float local_controllability_radius[n_dims];
+  NearMeet2PBVP near_meet_;
   float division_factor;
 
   Environment(const py::dict &config, int time_direction_ = 1)
@@ -115,10 +117,11 @@ public:
 
     set_resolutions(info, node_info);
     set_simple_params(node_info);
+    near_meet_.load(config, n_dims, local_controllability_radius);
   }
 
   // Destructor
-  ~Environment() {
+  virtual ~Environment() {
     if (costmap) {
       delete[] costmap;
       costmap = nullptr;
@@ -199,6 +202,27 @@ public:
   // Compute near-meet distance between two poses
   float compute_near_meet_distance(float *pose1, float *pose2) {
     return heuristic(pose1, pose2);
+  }
+
+  void solve_2pBVP(
+      const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
+          &pairs,
+      std::vector<bool> &valid,
+      std::vector<std::vector<float>> &trajectories) {
+    mpc_solve(pairs, valid, trajectories);
+  }
+
+  // Default: geometric interpolation. Override for a dynamics-aware MPC.
+  virtual void mpc_solve(
+      const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
+          &pairs,
+      std::vector<bool> &valid,
+      std::vector<std::vector<float>> &trajectories) {
+    near_meet_.mpc_solve(
+        pairs, valid, trajectories,
+        [this](const std::vector<float *> &states, std::vector<bool> &results) {
+          check_validity_batched(states, results);
+        });
   }
 
   // Batched validity check for multiple states

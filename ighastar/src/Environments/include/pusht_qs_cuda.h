@@ -3,6 +3,7 @@
 #pragma once
 
 #include <algorithm>
+#include "solve_2pbvp.h"
 #include <boost/functional/hash.hpp>
 #include <cmath>
 #include <cstring>
@@ -141,6 +142,7 @@ public:
   float resolution[n_dims];
   float tolerance[n_dims];
   float local_controllability_radius[n_dims];
+  NearMeet2PBVP near_meet_;
   float division_factor;
 
   Environment(const py::dict &config, int time_direction_ = 1)
@@ -168,9 +170,10 @@ public:
     if (cudaStreamCreate(&stream) != cudaSuccess)
       throw std::runtime_error("pusht_qs_cuda: cudaStreamCreate failed");
     alloc_instance_buffers();
+    near_meet_.load(config, n_dims, local_controllability_radius);
   }
 
-  ~Environment() {
+  virtual ~Environment() {
     free_instance_buffers();
     free_batch_buffers();
     if (stream)
@@ -300,6 +303,27 @@ public:
 
   float compute_near_meet_distance(float *pose1, float *pose2) {
     return heuristic(pose1, pose2);
+  }
+
+  void solve_2pBVP(
+      const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
+          &pairs,
+      std::vector<bool> &valid,
+      std::vector<std::vector<float>> &trajectories) {
+    mpc_solve(pairs, valid, trajectories);
+  }
+
+  // Default: geometric interpolation. Override for a dynamics-aware MPC.
+  virtual void mpc_solve(
+      const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
+          &pairs,
+      std::vector<bool> &valid,
+      std::vector<std::vector<float>> &trajectories) {
+    near_meet_.mpc_solve(
+        pairs, valid, trajectories,
+        [this](const std::vector<float *> &states, std::vector<bool> &results) {
+          check_validity_batched(states, results);
+        });
   }
 
   bool reached_goal_region(std::shared_ptr<Node> v,
