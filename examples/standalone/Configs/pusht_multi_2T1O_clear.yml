@@ -1,0 +1,30 @@
+# 2T1O_clear: two tees, one static square, open right wall.
+# Knobs match pusht_ndir24 (Chipmunk). Goal is both tee CoGs in the exit box.
+# Clear bits are on the search node, not in this 16D state.
+experiment_info_default:
+  resolution: [40.0, 40.0, 40.0, 40.0, 0.5, 40.0, 40.0, 0.5, 50.0, 50.0, 50.0, 50.0, 0.5, 50.0, 50.0, 0.5]
+  tolerance: [1.0, 1.0, 1.0, 1.0, 0.01, 1.0, 1.0, 0.01, 25.0, 25.0, 25.0, 25.0, 0.25, 25.0, 25.0, 0.25]
+  epsilon: [1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9]
+  max_level: 3
+  division_factor: 2.0
+  max_expansions: 25000
+  hysteresis: 500
+  node_info:
+    node_type: "pusht_multi"
+    n_substeps: 10
+    workspace_lo: 0.0
+    workspace_hi: 512.0
+    agent_x_hi: 700.0
+    exit_x0: 512.0
+    exit_x1: 700.0
+    exit_y0: 0.0
+    exit_y1: 512.0
+    num_tees: 2
+    num_obstacles: 1
+    obstacle_side: 30.0
+    objective: clear
+    n_directions: 24
+    action_radii: [200.0]
+    max_agent_vel: 500.0
+    max_penetration_px: 1.0
+    dynamics: chipmunk
