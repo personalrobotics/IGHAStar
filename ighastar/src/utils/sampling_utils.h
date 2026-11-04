@@ -1,9 +1,13 @@
 #pragma once
 
+#include "config_utils.h"
+
 #include <cmath>
 #include <functional>
 #include <memory>
 #include <random>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace sampling {
@@ -369,6 +373,56 @@ struct GoalSamplingConfig {
   // Default sigma values
   GoalSamplingConfig() : sigma({2.0f, 2.0f, 0.2f, 5.0f}) {}
 };
+
+// Read goal_sampling_config once. sigma falls back to lcr per dimension.
+inline GoalSamplingConfig load_goal_sampling(const py::dict &config, int n_dims,
+                                             const float *lcr) {
+  auto gs = config_utils::get_config_dict(config, "goal_sampling_config").first;
+  GoalSamplingConfig goal_sampling;
+  goal_sampling.n_dims = n_dims;
+  goal_sampling.enabled =
+      gs.contains("enabled") ? gs["enabled"].cast<bool>() : true;
+  goal_sampling.num_samples =
+      gs.contains("num_samples") ? gs["num_samples"].cast<int>() : 32;
+  if (gs.contains("angular_dims")) {
+    goal_sampling.angular_dims = gs["angular_dims"].cast<std::vector<int>>();
+  } else if (n_dims > 2) {
+    goal_sampling.angular_dims = {2};
+  } else {
+    goal_sampling.angular_dims = {};
+  }
+  for (int dim : goal_sampling.angular_dims) {
+    if (dim < 0 || dim >= n_dims) {
+      throw std::invalid_argument(
+          "goal_sampling_config.angular_dims: dimension " + std::to_string(dim) +
+          " is outside the " + std::to_string(n_dims) + "-dimensional state");
+    }
+  }
+  std::string space_type_str = gs.contains("space_type")
+                                   ? gs["space_type"].cast<std::string>()
+                                   : "SE2";
+  if (space_type_str == "SE2" || space_type_str == "se2") {
+    goal_sampling.space_type = SpaceType::SE2;
+  } else if (space_type_str == "R_N" || space_type_str == "r_n" ||
+             space_type_str == "RN" || space_type_str == "rn") {
+    goal_sampling.space_type = SpaceType::R_N;
+  } else {
+    goal_sampling.space_type = SpaceType::SE2;
+  }
+  goal_sampling.sigma.resize(n_dims);
+  if (gs.contains("sigma")) {
+    auto sigma_vec = gs["sigma"].cast<std::vector<float>>();
+    for (int i = 0; i < n_dims; i++) {
+      goal_sampling.sigma[i] =
+          (i < static_cast<int>(sigma_vec.size())) ? sigma_vec[i] : lcr[i];
+    }
+  } else {
+    for (int i = 0; i < n_dims; i++) {
+      goal_sampling.sigma[i] = lcr[i];
+    }
+  }
+  return goal_sampling;
+}
 
 // Sample states in the goal region and create nodes
 // This is the main entry point for goal region sampling in bidirectional search

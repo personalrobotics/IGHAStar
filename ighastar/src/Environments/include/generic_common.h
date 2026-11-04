@@ -154,6 +154,7 @@ public:
   float tolerance[n_dims];
   float local_controllability_radius[n_dims];
   NearMeet2PBVP near_meet_;
+  sampling::GoalSamplingConfig goal_sampling;
   float lower[n_dims];
   float upper[n_dims];
   float division_factor;
@@ -226,11 +227,16 @@ public:
     } else {
       timesteps = 1;
     }
-    near_meet_.load(config, n_dims, local_controllability_radius);
+    goal_sampling = sampling::load_goal_sampling(
+        config, n_dims, local_controllability_radius);
+    near_meet_.load(config, n_dims, local_controllability_radius,
+                    goal_sampling.angular_dims);
   }
 
   virtual void check_validity_batched(const std::vector<float *> &states,
                                       std::vector<bool> &results) = 0;
+
+  virtual float heuristic(float *pose, float *goal) = 0;
 
   void solve_2pBVP(
       const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
@@ -251,6 +257,12 @@ public:
         [this](const std::vector<float *> &states, std::vector<bool> &results) {
           check_validity_batched(states, results);
         });
+  }
+
+  // Default calls sampling::sample_goal_region. Override to replace the sampler.
+  virtual std::vector<std::shared_ptr<Node>>
+  sample_goals(std::shared_ptr<Node> start, std::shared_ptr<Node> goal) {
+    return default_sample_goals(this, std::move(start), std::move(goal));
   }
 
   virtual ~GenericEnvironmentBase() {}

@@ -797,12 +797,6 @@ public:
   igha::unordered_map<int, std::vector<std::pair<float, std::shared_ptr<Node>>>>
       backward_LCR_table;
 
-  // Goal sampling configuration for backward search
-  // Goal sampling is needed in practice because your exact goal state may be
-  // unreachable. Sampling around the goal allows the backward search to start
-  // from reachable states within the goal region.
-  sampling::GoalSamplingConfig goal_sampling_config;
-
   // Best path storage
   std::mutex path_mutex;
   std::vector<std::shared_ptr<Node>> best_path;
@@ -829,122 +823,12 @@ public:
   BiIGHAStar(const py::dict &config, bool debug_ = false) : debug(debug_) {
     forward_search = new IGHAStar(config, debug_, 1);
     backward_search = new IGHAStar(config, debug_, -1);
-
-    setup_goal_sampling(config);
-  }
-
-  void setup_goal_sampling(const py::dict &config) {
-    auto [gs_config, found] =
-        config_utils::get_config_dict(config, "goal_sampling_config");
-
-    goal_sampling_config.n_dims = n_dims;
-    goal_sampling_config.enabled = gs_config.contains("enabled")
-                                       ? gs_config["enabled"].cast<bool>()
-                                       : true;
-    goal_sampling_config.num_samples =
-        gs_config.contains("num_samples") ? gs_config["num_samples"].cast<int>()
-                                          : 32;
-
-    // Parse angular_dims as a list (supports multiple angular dimensions, e.g.,
-    // for multi-car systems)
-    if (gs_config.contains("angular_dims")) {
-      goal_sampling_config.angular_dims =
-          gs_config["angular_dims"].cast<std::vector<int>>();
-    } else if (n_dims > 2) {
-      goal_sampling_config.angular_dims = {
-          2}; // default: dimension 2 is angular
-    } else {
-      // No dimension 2 to be a heading (e.g. a 2D point mass): sampling SE2
-      // around it would read past the pose.
-      goal_sampling_config.angular_dims = {};
-    }
-    for (int dim : goal_sampling_config.angular_dims) {
-      if (dim < 0 || dim >= n_dims) {
-        throw std::invalid_argument(
-            "goal_sampling_config.angular_dims: dimension " +
-            std::to_string(dim) + " is outside the " + std::to_string(n_dims) +
-            "-dimensional state");
-      }
-    }
-
-    std::string space_type_str =
-        gs_config.contains("space_type")
-            ? gs_config["space_type"].cast<std::string>()
-            : "SE2";
-    if (space_type_str == "SE2" || space_type_str == "se2") {
-      goal_sampling_config.space_type = sampling::SpaceType::SE2;
-    } else if (space_type_str == "R_N" || space_type_str == "r_n" ||
-               space_type_str == "RN" || space_type_str == "rn") {
-      goal_sampling_config.space_type = sampling::SpaceType::R_N;
-    } else {
-      goal_sampling_config.space_type = sampling::SpaceType::SE2;
-    }
-
-    // Parse sigma vector (defaults to LCR if not specified)
-    goal_sampling_config.sigma.resize(n_dims);
-    const float *LCR = forward_search->env->local_controllability_radius;
-    if (gs_config.contains("sigma")) {
-      auto sigma_vec = gs_config["sigma"].cast<std::vector<float>>();
-      for (int i = 0; i < n_dims; i++) {
-        goal_sampling_config.sigma[i] =
-            (i < static_cast<int>(sigma_vec.size())) ? sigma_vec[i] : LCR[i];
-      }
-    } else {
-      for (int i = 0; i < n_dims; i++) {
-        goal_sampling_config.sigma[i] = LCR[i];
-      }
-    }
   }
 
   void sample_goals(std::shared_ptr<Node> backward_start,
                     std::shared_ptr<Node> backward_goal) {
-    // Define callbacks for the sampling utility
-    auto validity_checker = [this](const std::vector<float *> &states,
-                                   std::vector<bool> &results) {
-      std::vector<float *> non_const_states(states.begin(), states.end());
-      backward_search->env->check_validity_batched(non_const_states, results);
-    };
-
-    auto heuristic_fn = [this](const float *p1, const float *p2) {
-      return backward_search->env->heuristic(const_cast<float *>(p1),
-                                             const_cast<float *>(p2));
-    };
-
-    auto node_factory = [this, &backward_start](float *pose,
-                                                float *intermediate_poses,
-                                                float g_value, float f_value) {
-      auto node = std::make_shared<Node>(
-          pose, intermediate_poses, backward_start, backward_start->g + g_value,
-          backward_search->env->resolution, backward_search->env->tolerance,
-          backward_search->env->max_level,
-          backward_search->env->division_factor,
-          backward_search->env->timesteps,
-          backward_search->env->local_controllability_radius,
-          backward_search->env->time_direction);
-      node->f = backward_start->g + f_value;
-      return node;
-    };
-
-    auto near_meet_checker = [this, &backward_start](
-                                 const std::shared_ptr<Node> &node) {
-      std::vector<bool> valid;
-      std::vector<std::vector<float>> trajectories;
-      backward_search->env->solve_2pBVP({{node, backward_start}}, valid,
-                                        trajectories);
-      return !valid.empty() && valid[0];
-    };
-
-    // Sample goal region using utility function, then, filter the sampled nodes
-    // using the near-meet checker we only consider those sampled states that
-    // satisfy the near-meet checker, as they are the ones that are likely to be
-    // valid. This function is not part of the core Bi-IGHAStar method; we are
-    // simply putting it inside the class because it is convenient to pass the
-    // function pointers to the sampling utility function, which is defined
-    // elsewhere.
-    auto sampled_nodes = sampling::sample_goal_region<std::shared_ptr<Node>>(
-        backward_start->pose, backward_goal->pose, goal_sampling_config,
-        backward_search->env->timesteps, validity_checker, heuristic_fn,
-        node_factory, near_meet_checker);
+    auto sampled_nodes = backward_search->env->sample_goals(backward_start,
+                                                            backward_goal);
 
     if (debug) {
       int num_sampled_nodes = sampled_nodes.size();

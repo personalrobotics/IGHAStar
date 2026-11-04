@@ -10,8 +10,6 @@
 #include "../../utils/sampling_utils.h"
 
 #include <memory>
-#include <stdexcept>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -23,8 +21,10 @@ struct NearMeet2PBVP {
   std::vector<int> angular_dims;
   std::vector<std::vector<float>> cached_perturbations;
 
-  void load(const py::dict &config, int dims, const float *lcr) {
+  void load(const py::dict &config, int dims, const float *lcr,
+            const std::vector<int> &angular) {
     n_dims = dims;
+    angular_dims = angular;
     auto nm = config_utils::get_config_dict(config, "near_meet_config").first;
     if (nm.contains("num_interpolation_points")) {
       num_interpolation_points = nm["num_interpolation_points"].cast<int>();
@@ -34,23 +34,6 @@ struct NearMeet2PBVP {
     }
     if (nm.contains("perturbation_scale")) {
       perturbation_scale = nm["perturbation_scale"].cast<float>();
-    }
-
-    auto gs = config_utils::get_config_dict(config, "goal_sampling_config").first;
-    if (gs.contains("angular_dims")) {
-      angular_dims = gs["angular_dims"].cast<std::vector<int>>();
-    } else if (n_dims > 2) {
-      angular_dims = {2};
-    } else {
-      angular_dims = {};
-    }
-    for (int dim : angular_dims) {
-      if (dim < 0 || dim >= n_dims) {
-        throw std::invalid_argument(
-            "goal_sampling_config.angular_dims: dimension " +
-            std::to_string(dim) + " is outside the " + std::to_string(n_dims) +
-            "-dimensional state");
-      }
     }
     cached_perturbations = sampling::generate_perturbation_cache(
         lcr, n_dims, num_perturbations, perturbation_scale);
@@ -72,8 +55,8 @@ struct NearMeet2PBVP {
       const float *source = pairs[i].first->pose;
       const float *target = pairs[i].second->pose;
       valid[i] = sampling::check_interpolation_validity(
-          source, target, n_dims, angular_dims, num_interpolation_points,
-          cached_perturbations, validity_checker);
+          source, target, n_dims, angular_dims,
+          num_interpolation_points, cached_perturbations, validity_checker);
       if (!valid[i] || num_interpolation_points <= 1) {
         continue;
       }
@@ -100,3 +83,36 @@ struct NearMeet2PBVP {
                     std::forward<ValidityChecker>(validity_checker));
   }
 };
+
+// Default goal sampler. Environment::sample_goals calls this.
+// Override Environment::sample_goals to replace it.
+template <typename Env, typename NodeT>
+std::vector<std::shared_ptr<NodeT>>
+default_sample_goals(Env *env, std::shared_ptr<NodeT> start,
+                     std::shared_ptr<NodeT> goal) {
+  auto validity_checker = [env](const std::vector<float *> &states,
+                                std::vector<bool> &results) {
+    env->check_validity_batched(states, results);
+  };
+  auto heuristic_fn = [env](const float *p1, const float *p2) {
+    return env->heuristic(const_cast<float *>(p1), const_cast<float *>(p2));
+  };
+  auto node_factory = [env, &start](float *pose, float *intermediate_poses,
+                                    float g_value, float f_value) {
+    auto node = std::make_shared<NodeT>(
+        pose, intermediate_poses, start, start->g + g_value, env->resolution,
+        env->tolerance, env->max_level, env->division_factor, env->timesteps,
+        env->local_controllability_radius, env->time_direction);
+    node->f = start->g + f_value;
+    return node;
+  };
+  auto near_meet_checker = [env, &start](const std::shared_ptr<NodeT> &node) {
+    std::vector<bool> valid;
+    std::vector<std::vector<float>> trajectories;
+    env->solve_2pBVP({{node, start}}, valid, trajectories);
+    return !valid.empty() && valid[0];
+  };
+  return sampling::sample_goal_region<std::shared_ptr<NodeT>>(
+      start->pose, goal->pose, env->goal_sampling, env->timesteps,
+      validity_checker, heuristic_fn, node_factory, near_meet_checker);
+}
