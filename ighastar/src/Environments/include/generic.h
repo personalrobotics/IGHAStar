@@ -8,10 +8,9 @@
 //   - validity(states[B, n_dims]) -> [B]   (nonzero == valid)
 //   - heuristic(states[B, n_dims]) -> [B]  (cost-to-go; encodes goal knowledge)
 //   - goal_test(state[n_dims]) -> bool
-//
-// Node, hashing, config parsing and path conversion are shared with the
-// compiled `generic_torch` environment (see generic_common.h).
+//   - sample_goals(start[n_dims], goal[n_dims]) -> [N, n_dims]  (optional)
 #include <generic_common.h>
+#include <stdexcept>
 
 class Environment : public GenericEnvironmentBase {
   // User-provided Python callbacks.
@@ -21,6 +20,7 @@ class Environment : public GenericEnvironmentBase {
   py::function validity_fn;
   py::function heuristic_fn;
   py::function goal_test_fn;
+  py::object sample_goals_fn;
 
 public:
   Environment(const py::dict &config, int time_direction_ = 1)
@@ -32,9 +32,13 @@ public:
     validity_fn = config["validity_fn"].cast<py::function>();
     heuristic_fn = config["heuristic_fn"].cast<py::function>();
     goal_test_fn = config["goal_test_fn"].cast<py::function>();
+    if (config.contains("sample_goals_fn") &&
+        !config["sample_goals_fn"].is_none()) {
+      sample_goals_fn = config["sample_goals_fn"].cast<py::function>();
+    }
   }
 
-  ~Environment() {}
+  virtual ~Environment() {}
 
   // Convert a Python-returned object to a contiguous CPU float32 tensor.
   static torch::Tensor to_cpu_float(py::handle obj) {
@@ -144,6 +148,45 @@ public:
       return {};
     }
     return results[0];
+  }
+
+  // Optional Python sampler. Absent: sampling::default_sample_goals.
+  // sample_goals_fn(start[n_dims], goal[n_dims]) -> [N, n_dims]
+  std::vector<std::shared_ptr<Node>>
+  sample_goals(std::shared_ptr<Node> start, std::shared_ptr<Node> goal) override {
+    if (!sample_goals_fn) {
+      return sampling::default_sample_goals(this, std::move(start),
+                                            std::move(goal));
+    }
+    auto start_t = torch::empty({n_dims}, torch::kFloat32);
+    auto goal_t = torch::empty({n_dims}, torch::kFloat32);
+    memcpy(start_t.data_ptr<float>(), start->pose, n_dims * sizeof(float));
+    memcpy(goal_t.data_ptr<float>(), goal->pose, n_dims * sizeof(float));
+    torch::Tensor poses = to_cpu_float(sample_goals_fn(start_t, goal_t));
+    if (poses.dim() != 2 || poses.size(1) != n_dims) {
+      throw std::invalid_argument(
+          "sample_goals_fn must return a float tensor of shape [N, n_dims]");
+    }
+    std::vector<std::shared_ptr<Node>> nodes;
+    const float *data = poses.data_ptr<float>();
+    const int n = static_cast<int>(poses.size(0));
+    for (int i = 0; i < n; ++i) {
+      float *pose = const_cast<float *>(data + static_cast<size_t>(i) * n_dims);
+      float g_value = heuristic(start->pose, pose);
+      float h_to_goal = heuristic(pose, goal->pose);
+      auto node = std::make_shared<Node>(
+          pose, nullptr, start, start->g + g_value, resolution, tolerance,
+          max_level, division_factor, timesteps,
+          local_controllability_radius, time_direction);
+      node->f = start->g + g_value + h_to_goal;
+      std::vector<bool> valid;
+      std::vector<std::vector<float>> trajectories;
+      solve_2pBVP({{node, start}}, valid, trajectories);
+      if (!valid.empty() && valid[0]) {
+        nodes.push_back(std::move(node));
+      }
+    }
+    return nodes;
   }
   // Path / controls export lives on GenericEnvironmentBase (generic_common.h).
 };

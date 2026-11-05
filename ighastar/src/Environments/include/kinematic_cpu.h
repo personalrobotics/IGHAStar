@@ -1,4 +1,5 @@
 #include <algorithm>
+#include "solve_2pbvp.h"
 #include <boost/functional/hash.hpp>
 #include <cfloat>
 #include <cmath>
@@ -161,6 +162,8 @@ public:
   float resolution[n_dims];
   float tolerance[n_dims];
   float local_controllability_radius[n_dims];
+  NearMeet2PBVP near_meet_;
+  sampling::GoalSamplingConfig goal_sampling;
   float division_factor;
 
   Environment(const py::dict &config, int time_direction_ = 1)
@@ -179,9 +182,13 @@ public:
 
     threads = 1; // CPU version doesn't need thread/block calculations
     blocks = 1;
+    goal_sampling = sampling::load_goal_sampling(
+        config, n_dims, local_controllability_radius);
+    near_meet_.load(config, n_dims, local_controllability_radius,
+                    goal_sampling.angular_dims);
   }
 
-  ~Environment() {
+  virtual ~Environment() {
     if (h_costmap) {
       delete[] h_costmap;
       h_costmap = nullptr;
@@ -330,6 +337,33 @@ public:
   // Compute near-meet distance between two poses
   float compute_near_meet_distance(float *pose1, float *pose2) {
     return heuristic(pose1, pose2);
+  }
+
+  void solve_2pBVP(
+      const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
+          &pairs,
+      std::vector<bool> &valid,
+      std::vector<std::vector<float>> &trajectories) {
+    mpc_solve(pairs, valid, trajectories);
+  }
+
+  // Default: geometric interpolation. Override for a dynamics-aware MPC.
+  virtual void mpc_solve(
+      const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
+          &pairs,
+      std::vector<bool> &valid,
+      std::vector<std::vector<float>> &trajectories) {
+    near_meet_.mpc_solve(
+        pairs, valid, trajectories,
+        [this](const std::vector<float *> &states, std::vector<bool> &results) {
+          check_validity_batched(states, results);
+        });
+  }
+
+  // Default calls sampling::sample_goal_region. Override to replace the sampler.
+  virtual std::vector<std::shared_ptr<Node>>
+  sample_goals(std::shared_ptr<Node> start, std::shared_ptr<Node> goal) {
+    return sampling::default_sample_goals(this, std::move(start), std::move(goal));
   }
 
   // Batched validity check for multiple states
