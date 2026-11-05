@@ -95,6 +95,7 @@ public:
   int hysteresis_threshold;
   std::vector<std::shared_ptr<Node>> best_path;
   std::vector<std::vector<std::shared_ptr<Node>>> best_path_list;
+  std::vector<tree_utils::Trajectory> trajectory_library;
   float Omega;
   Environment *env;
   bool debug;
@@ -1966,7 +1967,25 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("get_preemptive_hits", &IGHAStar::get_preemptive_hits)
       .def("get_level_history", &IGHAStar::get_level_history)
       .def("get_first_goal_level", &IGHAStar::get_first_goal_level)
-      .def("export_search_tree", &IGHAStar::export_search_tree);
+      .def("export_search_tree", &IGHAStar::export_search_tree)
+      .def("record_solution_trajectory",
+           [](IGHAStar &self) {
+             tree_utils::record_solution(self.trajectory_library, self.best_path,
+                                         self.Seen, self.Q_v, self.inactive_Q_v);
+           })
+      .def("export_trajectory_library",
+           [](IGHAStar &self) {
+             return tree_utils::export_library(self.trajectory_library,
+                                               self.env->timesteps);
+           })
+      .def("import_trajectory_library",
+           [](IGHAStar &self, const py::list &items) {
+             self.trajectory_library =
+                 tree_utils::import_trajectories(items, self.env);
+           })
+      .def("trajectory_library_links_ok", [](const IGHAStar &self) {
+        return tree_utils::library_links_ok(self.trajectory_library);
+      });
 
 #ifdef IGHASTAR_HAS_PUSHT_MULTI_STEP
   m.def("step", &pusht_multi_step, py::arg("state"), py::arg("world"),

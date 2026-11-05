@@ -7,6 +7,8 @@
 #include <queue>
 #include <vector>
 
+class Environment;
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -27,5 +29,40 @@ py::dict export_search_tree(
         Q_v,
     const igha::unordered_set<std::shared_ptr<Node>> &inactive_Q_v, int timesteps,
     int expansion_count);
+
+// Solution path plus off-path children of those vertices. Parent pointers are
+// the links. The next path vertex is not copied into children.
+struct Trajectory {
+  std::vector<std::shared_ptr<Node>> path;
+  std::vector<std::shared_ptr<Node>> children;
+};
+
+Trajectory capture_trajectory(
+    const std::vector<std::shared_ptr<Node>> &path,
+    const igha::unordered_set<std::shared_ptr<Node>> &Seen,
+    std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>,
+                        NodePtrCompare>
+        Q_v,
+    const igha::unordered_set<std::shared_ptr<Node>> &inactive_Q_v);
+
+// Packed arrays, one buffer per field. Per-vertex Python lists are the cost
+// that dominates load and export.
+py::dict export_trajectory(const Trajectory &traj, int timesteps);
+
+std::vector<Trajectory> import_trajectories(const py::list &items,
+                                            Environment *env);
+
+void record_solution(
+    std::vector<Trajectory> &library,
+    const std::vector<std::shared_ptr<Node>> &path,
+    const igha::unordered_set<std::shared_ptr<Node>> &Seen,
+    std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>,
+                        NodePtrCompare>
+        Q_v,
+    const igha::unordered_set<std::shared_ptr<Node>> &inactive_Q_v);
+
+py::list export_library(const std::vector<Trajectory> &library, int timesteps);
+
+bool library_links_ok(const std::vector<Trajectory> &library);
 
 } // namespace tree_utils
