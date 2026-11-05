@@ -288,6 +288,41 @@ def test_bidirectional_rejects_angular_dims_outside_the_state():
         )
 
 
+def test_bidirectional_rejects_unknown_space_type():
+    cbs = gp.callbacks(goal_test=gp.goal_test_never)
+    with pytest.raises(ValueError, match="space_type"):
+        plan(
+            "generic_torch",
+            cbs,
+            bidirectional=True,
+            goal_sampling_config={"space_type": "se3", "angular_dims": []},
+        )
+
+
+def test_generic_sample_goals_fn_is_called():
+    called = {}
+
+    def sample_goals(start, goal):
+        called["start"] = start.detach().clone()
+        called["goal"] = goal.detach().clone()
+        return torch.zeros((0, 2))
+
+    cbs = gp.callbacks(goal_test=gp.goal_test_never)
+    cbs["sample_goals_fn"] = sample_goals
+    planner, _configs = plan(
+        "generic",
+        cbs,
+        bidirectional=True,
+        goal_sampling_config={"space_type": "R_N", "angular_dims": []},
+    )
+    planner.search(
+        gp.START.clone(), gp.GOAL.clone(), torch.zeros(1), 0, 1000, True
+    )
+    # Backward search starts at the goal and aims at the start.
+    assert torch.equal(called["start"], gp.GOAL)
+    assert torch.equal(called["goal"], gp.START)
+
+
 # --------------------------------------------------------------------------
 # Compilation cache + errors
 # --------------------------------------------------------------------------

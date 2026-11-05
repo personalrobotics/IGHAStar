@@ -630,7 +630,7 @@ public:
   // Default calls sampling::sample_goal_region. Override to replace the sampler.
   virtual std::vector<std::shared_ptr<Node>>
   sample_goals(std::shared_ptr<Node> start, std::shared_ptr<Node> goal) {
-    return default_sample_goals(this, std::move(start), std::move(goal));
+    return sampling::default_sample_goals(this, std::move(start), std::move(goal));
   }
 
   // Checks validity of start and goal positions

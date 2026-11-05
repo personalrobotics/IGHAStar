@@ -83,36 +83,3 @@ struct NearMeet2PBVP {
                     std::forward<ValidityChecker>(validity_checker));
   }
 };
-
-// Default goal sampler. Environment::sample_goals calls this.
-// Override Environment::sample_goals to replace it.
-template <typename Env, typename NodeT>
-std::vector<std::shared_ptr<NodeT>>
-default_sample_goals(Env *env, std::shared_ptr<NodeT> start,
-                     std::shared_ptr<NodeT> goal) {
-  auto validity_checker = [env](const std::vector<float *> &states,
-                                std::vector<bool> &results) {
-    env->check_validity_batched(states, results);
-  };
-  auto heuristic_fn = [env](const float *p1, const float *p2) {
-    return env->heuristic(const_cast<float *>(p1), const_cast<float *>(p2));
-  };
-  auto node_factory = [env, &start](float *pose, float *intermediate_poses,
-                                    float g_value, float f_value) {
-    auto node = std::make_shared<NodeT>(
-        pose, intermediate_poses, start, start->g + g_value, env->resolution,
-        env->tolerance, env->max_level, env->division_factor, env->timesteps,
-        env->local_controllability_radius, env->time_direction);
-    node->f = start->g + f_value;
-    return node;
-  };
-  auto near_meet_checker = [env, &start](const std::shared_ptr<NodeT> &node) {
-    std::vector<bool> valid;
-    std::vector<std::vector<float>> trajectories;
-    env->solve_2pBVP({{node, start}}, valid, trajectories);
-    return !valid.empty() && valid[0];
-  };
-  return sampling::sample_goal_region<std::shared_ptr<NodeT>>(
-      start->pose, goal->pose, env->goal_sampling, env->timesteps,
-      validity_checker, heuristic_fn, node_factory, near_meet_checker);
-}

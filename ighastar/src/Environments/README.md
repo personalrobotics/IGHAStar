@@ -133,7 +133,7 @@ elevation representation only and rejects 4D tensors.
   virtual std::vector<std::shared_ptr<Node>>
   sample_goals(std::shared_ptr<Node> start, std::shared_ptr<Node> goal);
   ```
-  `sample_goals` returns goal nodes for the backward search. The default method calls `sampling::sample_goal_region`. Override `sample_goals` to supply a different sampler. `sampling::load_goal_sampling` reads `goal_sampling_config`. The environment stores that config. Interpolation uses the angular dimensions from that config.
+  `sample_goals` returns goal nodes for the backward search. The default method calls `sampling::sample_goal_region`. Override `sample_goals` to supply a different sampler. `sampling::load_goal_sampling` reads `goal_sampling_config`. `space_type` is `SE2` or `R_N`. Any other value throws. The environment stores that config. Interpolation uses the angular dimensions from that config. The generic environment calls `sample_goals_fn` when the config provides it. That function takes the start pose and the goal pose. It returns a tensor of shape `[N, n_dims]`.
 
 **Succ**
   ```cpp
