@@ -119,7 +119,12 @@ public:
   //   happens when there is enough work to make it worthwhile.
   // - max_preemptive: hardware cap. Once gated on, at most this many vertices
   //   are expanded preemptively in a single launch.
+  // - active_only: only vertices that are active (in Q_v, not dominated at the
+  //   current resolution level) enter the preemptive stash. Inactive vertices
+  //   are never pre-expanded; a vertex that became inactive after being stashed
+  //   is skipped (and dropped from the stash) when the batch is gathered.
   bool preemptive_enabled = false;
+  bool preempt_active_only = false;
   int min_preemptive = 0;
   int max_preemptive = 0;
   std::deque<std::shared_ptr<Node>> unexpanded_stash;
@@ -154,6 +159,9 @@ public:
       preemptive_enabled = pe_config.contains("enabled")
                                ? pe_config["enabled"].cast<bool>()
                                : false;
+      preempt_active_only = pe_config.contains("active_only")
+                                ? pe_config["active_only"].cast<bool>()
+                                : false;
       max_preemptive = pe_config.contains("max_preemptive")
                            ? pe_config["max_preemptive"].cast<int>()
                            : 0;
@@ -462,9 +470,9 @@ public:
           inactive_Q_v.insert(neighbor);
           inactive_Q_v_hash.insert(neighbor->hash);
         }
-        if (preemptive_enabled) {
-          // Both active and inactive newly-discovered vertices are eligible for
-          // preemptive expansion in a later iteration.
+        if (preemptive_enabled && (!preempt_active_only || neighbor->active)) {
+          // Newly discovered vertices are eligible for preemptive expansion in
+          // a later iteration (only the active ones when active_only is set).
           unexpanded_stash.push_back(neighbor);
         }
       }
@@ -513,7 +521,8 @@ public:
       unexpanded_stash.pop_front();
       // Skip: v (already handled above), already-expanded vertices, and
       // vertices no longer promising (would be pruned anyway).
-      if (p == v || p->preexpanded || p->f >= Omega) {
+      if (p == v || p->preexpanded || p->f >= Omega ||
+          (preempt_active_only && !p->active)) {
         continue;
       }
       preempt_nodes.push_back(p);
@@ -1300,7 +1309,8 @@ public:
               search->inactive_Q_v.insert(neighbor);
               search->inactive_Q_v_hash.insert(neighbor->hash);
             }
-            if (search->preemptive_enabled) {
+            if (search->preemptive_enabled &&
+                (!search->preempt_active_only || neighbor->active)) {
               // Newly discovered vertex becomes eligible for preemptive
               // expansion in a later iteration of this search direction.
               search->unexpanded_stash.push_back(neighbor);

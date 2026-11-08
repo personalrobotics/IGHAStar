@@ -89,13 +89,17 @@ problem's dimensions: `ighastar_generic_<state>_<14>_<11>_...`, cached under
 clone) if `ighastar/third_party/robin_hood` is missing, so it needs network
 access once. It takes about a minute. Later runs print `ninja: no work to do.`
 
-### 2.4 ssik (installed and verified, not used by the planner yet)
+### 2.4 frax (IK for the TCP-delta sampler) and ssik (probing only)
 
 ```bash
-uv pip install --python ~/abc_src/abc/.venv/bin/python ssik==8.2.0
-# optional, for reading the source:
-git clone https://github.com/personalrobotics/ssik.git ~/ssik_src/ssik
+git clone https://github.com/StanfordASL/frax.git ~/frax_src/frax   # tested at f5e87ab (0.2.0)
+uv pip install --python ~/abc_src/abc/.venv/bin/python -e "$HOME/frax_src/frax[ik]"
+# adds jax 0.12.0.1 (CPU), elastiqp, lxml; abc's pins are untouched
+uv pip install --python ~/abc_src/abc/.venv/bin/python ssik==8.2.0   # optional: only for the old IK probes
 ```
+
+frax runs on CPU JAX (`tcp_ik.py` sets `JAX_PLATFORMS=cpu`; the GPU stays with MJWarp).
+There is no YAM URDF on disk; `tcp_ik.arm_urdf` generates one from abc's MJCF.
 
 ### 2.5 Smoke tests
 
@@ -103,7 +107,7 @@ git clone https://github.com/personalrobotics/ssik.git ~/ssik_src/ssik
 PY=~/abc_src/abc/.venv/bin/python
 $PY -c "import torch, mujoco, mujoco_warp, warp; print(torch.cuda.is_available(), mujoco.__version__)"
 $PY -c "import abc_sim; e=abc_sim.make_env(task='put_relative', render_cameras=False); e.reset(seed=0, randomize=True); print(e.prompt)"
-$PY -c "from ssik.prebuilt.i2rt import yam_ik; import numpy as np; print(yam_ik.fk(np.zeros(6)))"
+$PY tools/tcp_ik_check.py   # frax frames vs MuJoCo (1e-11), IK timing; run from examples/abc_example
 ```
 
 Set `MUJOCO_GL=egl` on headless machines. The scripts set it themselves.
@@ -136,8 +140,8 @@ set wins:
 2. `planner:` in `config.yml`,
 3. `task.put_relative` in `config.yml`.
 
-The run prints the effective values. Preemptive expansion is **off**
-(`planner.preemptive_expansion.enabled: false`), as requested. Heuristics must
+The run prints the effective values. Preemptive expansion is **on**
+(`planner.preemptive_expansion.enabled: true`; `plan_abc.py --save-tree` switches it off by itself). `active_only: true` keeps inactive (dominated) vertices out of the preemptive set (new C++ option, default false). Heuristics must
 stay **admissible**.
 
 ### 3.2 Save and view a search tree
@@ -210,35 +214,46 @@ nsys stats -r cuda_gpu_kern_sum step64.nsys-rep
   - The solver averages 1.2 iterations. Collision narrowphase is about 4% of
     GPU time.
 
-### ssik (installed, verified, not integrated)
-- **FK matches abc:** `yam_ik.fk(q)` equals abc's `<side>_arm` → `<side>_link_6`
-  transform to within 6.5 µm. No offsets needed.
-- **abc's `tcp_site` is the wrist flange** (the `link_6` origin). The point
-  between the fingertips is `grasp_site`, +0.1347 m along `link_6` z.
-- **IK:**
-  - exact when it returns, about 0.35 ms per pose;
-  - 2.6% of round trips return nothing;
-  - the nearest returned branch can be a different solution (up to 3.1 rad away).
-- **abc's home pose is near-singular** (Jacobian condition number 342).
-- **4 cm fixed-orientation TCP steps:**
-  - 14% get no solution;
-  - median |dq| is 0.05–0.13 rad;
-  - 9% need more than 0.5 rad on some joint.
+### TCP-delta sampling with frax IK (done; `--sampler tcp --tcp-site grasp`)
+- Controls are grasp-site motions (+ gripper delta); `tcp_ik.py` turns them into joint
+  targets with `frax.ik` inside `dynamics()`. No per-edge joint cap, only abc's joint
+  limits. Default step 15 cm/edge, from `tools/tcp_reach.py` (the PD arm saturates around
+  13-17 cm per 0.34 s edge).
+- The admissible bound in tcp mode comes from the TCP step (0.37 m/edge vs 0.11-0.16 m
+  largest mover step seen).
+- Results at 1000 expansions: **seeds 13 and 19 both solved**, abc CPU replay 2/2
+  (joint sampling: 0/4 at 2500). About 147 s per 1000 expansions; IK adds about 35 ms of
+  the ~147 ms per expansion. Joint-space sampling with ssik-style caps (4 cm, 0.2-0.3 rad)
+  was worse than random joint sampling.
+- Near abc's home pose even 4 cm TCP moves need median max-joint moves of 0.5-0.8 rad
+  (singular home, condition number 342); frax stays on-branch, so that is real.
+- Grasp-targeted controls (`--grasp-fraction`, default 0.5; see the README): 4 seeds, 1000 expansions,
+  preemption off. With 32 grasp rows: seeds 13 and 19 solved with 19-24% cheaper plans and a closer
+  TCP-to-mover approach on every seed; seed 10 solved only without grasps; seed 3 unsolved both ways.
+- IK failures (no pose within 1 mm / 0.01 rad; single solve, no retries) just make that control invalid.
+- Earlier ssik findings (exact FK match to 6.5 um, abc's `tcp_site` is the flange,
+  `grasp_site` is +0.1347 m along link_6) still hold.
+
+### Physics step size vs abc's demos (`tools/dt_sweep_demos.py`)
+Replays the recorded actions of abc's `put_relative` sim demos (download: `prepare.py --sim-data put_relative`)
+open-loop in abc's CPU env with the same 34 ms control period but physics step 34 ms / n, and compares
+abc's evaluator and the mover's final position against the demo (300 random episodes, 40 s on 28 cores).
+The 2 ms replay reproduces the demos (285/300 succeed vs 290/300 for the demos themselves). Coarser steps:
+3.4 ms 276, 4.25 ms 278, 6.8 ms 262, 8.5 ms 267, 11.3 ms 256, 17 ms 248, 34 ms 161 of 300 succeed;
+mover final position within 1 cm of the demo: 94 % (2 ms), 85, 83, 77, 76, 73, 67, 19 %.
+Only steps that divide 34 ms are possible without changing the control period.
 
 ### Open decisions (not yet chosen)
-1. **TCP-space sampling with ssik:**
-   - sample small position + orientation steps;
-   - reject IK failures and big |dq| jumps (cap around 0.15 rad);
-   - hash and score on `grasp_site`.
-
-   The |dq| cap also tightens the admissible bound to about a third.
+1. ~~TCP-space sampling~~: done, see above.
 2. **A tighter admissible heuristic,** for example
    max(object term, arm-to-object distance / v_max), or simply a bigger budget
    (about 25k expansions).
-3. **Throughput:**
+3. **Throughput** (CPU MuJoCo is competitive: `tools/cpu_rollout_bench.py` gets 11.9 / 13.5
+   expansions/s at 16 / 32 threads vs ~10 on the GPU; `tools/speed_sweep.py` shows
+   solver/integrator settings do not matter, only substep count does):
    - more controls per node (256 costs about the same as 64);
    - batch several seeds' searches into one launch;
-   - re-enable preemptive expansion (currently off by request);
+   - ~~re-enable preemptive expansion~~ (now on);
    - trim the 20 ms of torch glue;
    - a coarser physics step, such as 6.8 ms × 5 substeps (3.4× fewer substeps).
      This must be checked against abc's 2 ms replay. abc's 2 ms is MuJoCo's

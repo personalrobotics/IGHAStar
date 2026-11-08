@@ -3,11 +3,12 @@
 
 planner:  # experiment_info_default
   max_level: 4
-  division_factor: 2.0
+  division_factor: 1.148698354997035
   max_expansions: 4000
   hysteresis: 400
   preemptive_expansion:   # batch up to 1 + max_preemptive nodes per MJWarp launch
-    enabled: false        # off for now: one node (K worlds) per MJWarp launch
+    enabled: true         # batch several nodes (K worlds each) per MJWarp launch
+    active_only: true     # only active vertices (not dominated at the current level) are pre-expanded
     min_preemptive: 7
     max_preemptive: 15    # (1 + 15) * num_controls(64) = 1024 worlds
 
@@ -40,7 +41,6 @@ task:
     # Heuristic (admissible): distance from the mover to abc's goal cone, minus the
     # slack the reference may still move, divided by the max per-edge object step
     # derived from the arm kinematics (problem.speed_bound_margin), times edge_dt.
-    goal_max_speed: 0.05  # goal test also requires the mover to be at rest (m/s)
 
 video:
   camera: overhead
