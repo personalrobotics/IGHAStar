@@ -72,7 +72,7 @@ def warp_replay(problem, states):
     out = [s]
     for c0, c1 in zip(froms, tos):
         u = (c1 - problem.ctrl(s)[0])[None]
-        nxt = problem.dynamics(s, u)  # [1, T, n]
+        nxt = problem.dynamics_joint(s, u)  # [1, T, n]; u is the realized joint delta
         out.append(nxt[0])
         s = nxt[:, -1]
     replay = torch.cat(out, 0)
@@ -128,7 +128,9 @@ def mover_summary(problem, states):
 def run_seed(env, spec, task, seed, cfg, args):
     t_reset = time.perf_counter()
     env.reset(seed=seed, randomize=True)
-    pcfg = ProblemConfig.from_dict({**cfg.get("problem", {}), "seed": seed, "log_tree": args.save_tree})
+    overrides = {k: getattr(args, k) for k in ("sampler", "tcp_site", "tcp_step", "tcp_rot_step", "grasp_fraction", "plan_substeps")
+                 if getattr(args, k) is not None}
+    pcfg = ProblemConfig.from_dict({**cfg.get("problem", {}), **overrides, "seed": seed, "log_tree": args.save_tree})
     problem = PROBLEMS[task](env, pcfg, cfg["task"][task])
     t_build = time.perf_counter() - t_reset
     print(f"\n=== {task} seed {seed}: '{env.prompt}'  arms={problem.active_arms} "
@@ -148,6 +150,9 @@ def run_seed(env, spec, task, seed, cfg, args):
     for key in ("resolution", "tolerance", "division_factor", "max_level"):
         if getattr(args, key) is not None:
             planner_cfg[key] = getattr(args, key)
+    if args.save_tree and planner_cfg.get("preemptive_expansion", {}).get("enabled"):
+        print("--save-tree: switching preemptive expansion off for this run (the tree log needs it)")
+        planner_cfg["preemptive_expansion"] = {**planner_cfg["preemptive_expansion"], "enabled": False}
     configs = problem.planner_config(planner_cfg)
     info = configs["experiment_info_default"]
     print("hash (resolution/tolerance): " + ", ".join(
@@ -174,9 +179,14 @@ def run_seed(env, spec, task, seed, cfg, args):
         "max_object_step_bound": problem.max_object_step,
         "max_mover_step_seen": p.get("max_mover_step", 0.0),
         "min_tcp_mover_dist": p.get("min_tcp_mover_dist", float("nan")),
+        "sampler": problem.cfg.sampler,
+        "ik_fail_frac": p.get("ik_fail", 0) / max(p.get("ik_rows", 0), 1),
+        "grasp_fraction": problem.cfg.grasp_fraction if problem.cfg.sampler == "tcp" else 0.0,
+        "grasp_pool": int(len(getattr(problem, "grasp_pool", []))),
+        "plan_substeps": problem.cfg.plan_substeps or int(env._control_decimation),
     }
     cost_curve = [float(c) for c in prof[9]]
-    first = next((i for i, c in enumerate(cost_curve) if c < 1e6), None)
+    first = next((i for i, c in enumerate(cost_curve) if c < 1e5), None)  # 1e5 = planner's 'no solution' sentinel
     rec["first_solution_expansion"] = None if first is None else first + 1
     rec["first_solution_cost"] = None if first is None else cost_curve[first]
     rec["cost_vs_expansion"] = cost_curve[:: max(1, len(cost_curve) // 200)]
@@ -216,7 +226,7 @@ def run_seed(env, spec, task, seed, cfg, args):
         print(f"first solution at expansion {rec['first_solution_expansion']} (cost "
               f"{rec['first_solution_cost']:.2f}); final cost {cost_curve[-1]:.2f}")
     if not ok:
-        problem.rollout.close()
+        problem.close()
         return rec
 
     path = planner.get_best_path()
@@ -270,7 +280,7 @@ def run_seed(env, spec, task, seed, cfg, args):
         render_video(env, qpos, out / f"{task}_seed{seed}_plan.mp4", cam, fps=30)
         render_video(env, cq, out / f"{task}_seed{seed}_cpu_replay.mp4", cam, fps=30)
         print(f"videos -> {out}")
-    problem.rollout.close()
+    problem.close()
     return rec
 
 
@@ -287,6 +297,16 @@ def main() -> None:
     ap.add_argument("--division-factor", dest="division_factor", type=float, default=None)
     ap.add_argument("--max-level", dest="max_level", type=int, default=None)
     ap.add_argument("--out", default=str(HERE.parent.parent / "Content" / "abc_example"))
+    ap.add_argument("--sampler", choices=["joint", "tcp"], default=None,
+                    help="control sampler, overrides problem.sampler (tcp = grasp-site deltas + ssik IK)")
+    ap.add_argument("--tcp-site", dest="tcp_site", choices=["flange", "grasp"], default=None)
+    ap.add_argument("--tcp-step", dest="tcp_step", type=float, default=None, help="max TCP translation per edge [m]")
+    ap.add_argument("--tcp-rot-step", dest="tcp_rot_step", type=float, default=None, help="max TCP rotation per edge [rad]")
+    ap.add_argument("--grasp-fraction", dest="grasp_fraction", type=float, default=None,
+                    help="tcp sampler: fraction of controls that reach toward a sampled grasp of the object (0 = random only)")
+    ap.add_argument("--plan-substeps", dest="plan_substeps", type=int, default=None,
+                    help="physics substeps per 34 ms control period while planning (17 = abc's 2 ms; 8 = 4.25 ms); "
+                         "the CPU replay check always uses abc's 2 ms")
     ap.add_argument("--video", action="store_true")
     ap.add_argument("--save-tree", action="store_true", help="log every expansion to <task>_seed<k>_tree.npz")
     args = ap.parse_args()
