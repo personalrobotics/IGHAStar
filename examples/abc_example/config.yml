@@ -1,0 +1,46 @@
+# IGHA* on abc_sim tasks via the generic (Python callback) environment.
+# The state/control dims are filled in per scene by abc_problem.py.
+
+planner:  # experiment_info_default
+  max_level: 4
+  division_factor: 2.0
+  max_expansions: 4000
+  hysteresis: 400
+  preemptive_expansion:   # batch up to 1 + max_preemptive nodes per MJWarp launch
+    enabled: false        # off for now: one node (K worlds) per MJWarp launch
+    min_preemptive: 7
+    max_preemptive: 15    # (1 + 15) * num_controls(64) = 1024 worlds
+
+problem:  # ProblemConfig (task independent)
+  ctrl_steps_per_edge: 10       # one edge = 10 x 30 Hz control periods = 0.33 s
+  num_controls: 64              # K random delta actions per expansion (first = zero)
+  joint_delta: [0.2, 0.2, 0.2, 0.3, 0.3, 0.3]  # max |delta| per edge, rad
+  gripper_delta: 1.0            # policy space, gripper in [0, 1]
+  include_zero_control: true
+  active_arms: auto             # auto | left | right | both
+  settle_ctrl_steps: 15
+  rollout_capacities: [64, 256, 1024]
+  nconmax: 128                  # per world
+  njmax: 1200                   # per world
+  joint_motion_weight: 0.05
+  table_z: 0.75
+  min_tcp_height: 0.01
+  max_qvel: 50.0
+  object_xy_bounds: [0.2, 1.0, -0.65, 0.65]
+  disturb_tol: 0.05             # non-mover objects may slide at most this far (m)
+  speed_bound_margin: 1.5       # x kinematic per-edge arm-point bound (PD overshoot)
+
+task:
+  put_relative:
+    # hash dims: mover xyz, left tcp xyz, right tcp xyz, left grip, right grip
+    # (11 values each). Can also be set under `planner:` (wins) or with
+    # --resolution / --tolerance on the command line (wins over both).
+    resolution: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.5, 0.5]
+    tolerance: [0.004, 0.004, 0.004, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.1, 0.1]
+    # Heuristic (admissible): distance from the mover to abc's goal cone, minus the
+    # slack the reference may still move, divided by the max per-edge object step
+    # derived from the arm kinematics (problem.speed_bound_margin), times edge_dt.
+    goal_max_speed: 0.05  # goal test also requires the mover to be at rest (m/s)
+
+video:
+  camera: overhead
