@@ -150,7 +150,8 @@ class AbcGenericProblem:
             raise ValueError(f"missing TCP sites {tcp_sites}")
         self.active_arms = self._resolve_active_arms()
         self.ik = TcpIK(self.mjm, self.mjd, self.active_arms) if cfg.sampler == "tcp" else None
-        self.control_dim = 14 if cfg.sampler != "tcp" else 15  # tcp: + grasp-candidate id (0 = none)
+        # tcp: + one grasp-candidate id column per active arm (0 = none): col 14 (+ col 15 for a second arm)
+        self.control_dim = 14 if cfg.sampler != "tcp" else 14 + len(self.active_arms)
         self.grasp_adr = self._grasp_object_adr() if cfg.sampler == "tcp" else None
         self.grasp_pool = np.zeros((0, 4, 4))
         if self.grasp_adr is not None and cfg.grasp_fraction > 0:
@@ -239,6 +240,7 @@ class AbcGenericProblem:
                 step = sum(dq * r for dq, r in zip(self.cfg.joint_delta, radii))
             step += self.cfg.gripper_delta * float(_GRIPPER_CTRL_MAX)
             steps.append(step)
+        self.arm_steps = steps  # per active arm [m per edge]
         # Two independently moving arms could both push the object.
         # tcp mode: the bound is the commanded TCP motion itself, no margin.
         margin = 1.0 if self.cfg.sampler == "tcp" else self.cfg.speed_bound_margin
@@ -350,10 +352,15 @@ class AbcGenericProblem:
         n_pool = len(self.grasp_pool)
         n_g = min(int(round(K * c.grasp_fraction)), K - 7) if n_pool else 0
         if n_g > 0:  # the last n_g rows reach toward a grasp (their random delta is the fallback)
-            idx = torch.randperm(n_pool, generator=g)[:n_g]
-            if n_g > n_pool:
-                idx = torch.randint(0, n_pool, (n_g,), generator=g)
-            u[K - n_g:, 14] = idx.float() + 1.0
+            for i in range(len(self.active_arms)):
+                idx = torch.randperm(n_pool, generator=g)[:n_g]
+                if n_g > n_pool:
+                    idx = torch.randint(0, n_pool, (n_g,), generator=g)
+                if len(self.active_arms) == 1:
+                    rows = torch.arange(K - n_g, K)  # single arm: the last n_g rows
+                else:  # each arm picks its own random rows (never the zero / axis rows) and its own grasps
+                    rows = 7 + torch.randperm(K - 7, generator=g)[:n_g]
+                u[rows, 14 + i] = idx.float() + 1.0
         return u
 
     def tcp_to_joint(self, states: torch.Tensor, controls: torch.Tensor):
@@ -376,7 +383,14 @@ class AbcGenericProblem:
             deltas = controls[:, a:a + 6].double().numpy().copy()
             grip = controls[:, a + 6].clone()
             if len(self.grasp_pool) and controls.shape[1] > 14:
-                self._grasp_rows(arm, a, states, controls, q, c0[:, a + 6], deltas, grip)
+                ctl = controls
+                if len(self.active_arms) > 1:
+                    # Two arms: each has its own grasp-id column (14 left, 15 right); both may
+                    # aim at the object at once (e.g. the receiving hand reaches the item the
+                    # other hand holds). _grasp_rows reads column 14, so hand it this arm's.
+                    ctl = controls.clone()
+                    ctl[:, 14] = controls[:, 14 + self.active_arms.index(arm)]
+                self._grasp_rows(arm, a, states, ctl, q, c0[:, a + 6], deltas, grip)
             dq, good = self.ik.solve_deltas(arm, q, deltas, cap)
             u[:, a:a + 6] = torch.from_numpy(dq).float()
             u[:, a + 6] = grip
@@ -622,6 +636,15 @@ class PutRelativeProblem(AbcGenericProblem):
     def _grasp_object_adr(self):
         return self.mover_adr
 
+    def summary(self, states):
+        mover, ref, along, perp = self._cone(states)
+        return {
+            "along": float(along[-1]),
+            "perp": float(perp[-1]),
+            "mover_z": float(mover[-1, 2]),
+            "mover_disp": float((mover[-1] - self.mover_start).norm()),
+        }
+
     def dynamics(self, states, controls):
         out = super().dynamics(states, controls)
         a = self.o_qpos + self.mover_adr
@@ -712,4 +735,100 @@ class PutRelativeProblem(AbcGenericProblem):
         return ok
 
 
-PROBLEMS = {"put_relative": PutRelativeProblem}
+class InhandTransferProblem(AbcGenericProblem):
+    """abc ``inhand_transfer``: get the item onto the table on the other side of the y axis.
+
+    Goal test = abc's ``InhandTransferOtherSideEvaluator`` exactly, on qpos: the object's
+    y (signed by its start side) is past ``other_side_min_y_m``, it is no higher than
+    ``table_z + max_resting_height_m`` and inside the table. The evaluator does not ask
+    for a handover, so neither does the planner. Both arms are active by default.
+    """
+
+    feature_names = PutRelativeProblem.feature_names
+
+    def __init__(self, env, cfg: ProblemConfig, task_cfg: dict[str, Any]) -> None:
+        ev = env._task_evaluator
+        if getattr(ev, "_start_sign", None) is None:
+            raise RuntimeError("inhand_transfer evaluator was not configured by reset()")
+        self.ev = ev
+        self.mover_adr = int(ev._object_adr)
+        self.sign = float(ev._start_sign)
+        self.y_goal = float(ev.other_side_min_y_m)
+        self.z_max = float(ev._table_z + ev.max_resting_height_m)
+        self.x_bounds, self.y_bounds = ev._table_x_bounds, ev._table_y_bounds
+        super().__init__(env, cfg, task_cfg)
+        self.mover_start = self.qpos(self.start)[self.mover_adr:self.mover_adr + 3].clone()
+        # One body cannot be moved faster than the fastest single arm point (two arms
+        # pushing it do not add up): the bound is the max over arms, not the sum.
+        self.max_object_step = max(self.arm_steps)
+        j = next(j for j in range(self.mjm.njnt) if int(self.mjm.jnt_qposadr[j]) == self.mover_adr)
+        self.mover_vadr = int(self.mjm.jnt_dofadr[j])
+        self.profile["max_mover_step"] = 0.0
+
+    def _grasp_object_adr(self):
+        return self.mover_adr
+
+    def _resolve_active_arms(self):
+        if self.cfg.active_arms == "auto":
+            return ("left", "right")
+        return super()._resolve_active_arms()
+
+    def features(self, qpos, tcp, ctrl):
+        mover = qpos[..., self.mover_adr:self.mover_adr + 3]
+        return torch.cat([mover, tcp[..., 0, :], tcp[..., 1, :], ctrl[..., 6:7], ctrl[..., 13:14]], dim=-1)
+
+    def _pos(self, states):
+        a = self.o_qpos + self.mover_adr
+        return states[:, a:a + 3]
+
+    def goal_mask(self, states):
+        p = self._pos(states)
+        ok = (p[:, 1] * self.sign) <= -self.y_goal
+        ok &= p[:, 2] <= self.z_max
+        ok &= (p[:, 0] >= self.x_bounds[0]) & (p[:, 0] <= self.x_bounds[1])
+        ok &= (p[:, 1] >= self.y_bounds[0]) & (p[:, 1] <= self.y_bounds[1])
+        return ok
+
+    def goal_distance(self, states):
+        """Distance the object still has to travel to satisfy the y and height conditions."""
+        p = self._pos(states)
+        gap_y = (p[:, 1] * self.sign + self.y_goal).clamp(min=0.0)
+        gap_z = (p[:, 2] - self.z_max).clamp(min=0.0)
+        return torch.hypot(gap_y, gap_z)
+
+    def heuristic(self, states):
+        # Each edge costs >= edge_dt and the object moves <= max_object_step per edge (one arm's
+        # TCP bound). A flung object can be faster than any arm: where its own speed exceeds
+        # that, use its speed (distance per edge) instead.
+        a = self.o_qvel + self.mover_vadr
+        v_edge = states[:, a:a + 3].norm(dim=1) * self.edge_dt
+        return self.goal_distance(states) / torch.clamp(v_edge, min=self.max_object_step) * self.edge_dt
+
+    def task_valid(self, states):
+        c = self.cfg
+        tcp = states[:, 3:9].view(-1, 2, 3)
+        return (tcp[:, :, 2] > c.table_z + c.min_tcp_height).all(dim=1)
+
+    def summary(self, states):
+        p = self._pos(states)[-1]
+        return {"y_signed": float(p[1] * self.sign), "mover_z": float(p[2]),
+                "mover_disp": float((p - self.mover_start).norm())}
+
+    def dynamics(self, states, controls):
+        out = super().dynamics(states, controls)
+        a = self.o_qpos + self.mover_adr
+        step = (out[:, -1, a:a + 3] - states[:, a:a + 3]).norm(dim=1)
+        step = step[torch.isfinite(step)]
+        if step.numel():
+            self.profile["max_mover_step"] = max(self.profile["max_mover_step"], float(step.max()))
+        fin = out[:, -1]
+        tcp = fin[:, 3:9].view(-1, 2, 3)
+        dmin = (tcp - fin[:, None, 0:3]).norm(dim=2).amin(1)
+        dmin = dmin[torch.isfinite(dmin)]
+        if dmin.numel():
+            self.profile["min_tcp_mover_dist"] = min(
+                self.profile.get("min_tcp_mover_dist", float("inf")), float(dmin.min()))
+        return out
+
+
+PROBLEMS = {"put_relative": PutRelativeProblem, "inhand_transfer": InhandTransferProblem}

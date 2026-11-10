@@ -41,6 +41,10 @@ task:
     # Heuristic (admissible): distance from the mover to abc's goal cone, minus the
     # slack the reference may still move, divided by the max per-edge object step
     # derived from the arm kinematics (problem.speed_bound_margin), times edge_dt.
+  inhand_transfer:
+    # same hash dims as put_relative (the single item is the "mover")
+    resolution: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.5, 0.5]
+    tolerance: [0.004, 0.004, 0.004, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.1, 0.1]
 
 video:
   camera: overhead

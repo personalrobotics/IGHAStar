@@ -116,13 +116,7 @@ def render_video(env, qpos_seq: np.ndarray, out_mp4: Path, camera: str, fps: int
 
 
 def mover_summary(problem, states):
-    mover, ref, along, perp = problem._cone(states)
-    return {
-        "along": float(along[-1]),
-        "perp": float(perp[-1]),
-        "mover_z": float(mover[-1, 2]),
-        "mover_disp": float((mover[-1] - problem.mover_start).norm()),
-    }
+    return problem.summary(states)
 
 
 def run_seed(env, spec, task, seed, cfg, args):
@@ -235,8 +229,8 @@ def run_seed(env, spec, task, seed, cfg, args):
     duration = (states.shape[0] - 1) * problem.dt_ctrl
     rec.update(cost=float(g[-1]), plan_steps=int(states.shape[0] - 1), plan_duration_s=duration,
                plan_goal=bool(problem.goal_mask(states[-1:])[0]), **{f"plan_{k}": v for k, v in mover_summary(problem, states).items()})
-    print(f"plan: {rec['plan_steps']} steps @30Hz = {duration:.2f}s, cost {rec['cost']:.2f}, "
-          f"final along={rec['plan_along']:.3f} perp={rec['plan_perp']:.3f} z={rec['plan_mover_z']:.3f}")
+    summ = ", ".join(f"{k}={v:.3f}" for k, v in problem.summary(states).items())
+    print(f"plan: {rec['plan_steps']} steps @30Hz = {duration:.2f}s, cost {rec['cost']:.2f}, final {summ}")
 
     wr = warp_replay(problem, states)
     mv = problem.qpos(wr)[:, problem.mover_adr:problem.mover_adr + 3]
@@ -253,7 +247,7 @@ def run_seed(env, spec, task, seed, cfg, args):
     rec["cpu_replay_mover_err"] = float(np.linalg.norm(cpu_mover - to_numpy(mp[-1])))
     te = cpu_info.get("task_eval", {})
     print(f"cpu replay (abc evaluator): success_final={cpu_final} ever={cpu_any} "
-          f"along={te.get('mover_along_m')} perp={te.get('mover_perp_m')} "
+          f"{ {k: v for k, v in te.items() if isinstance(v, (int, float, str, bool))} } "
           f"mover end err {rec['cpu_replay_mover_err'] * 100:.2f} cm")
 
     out = Path(args.out)
