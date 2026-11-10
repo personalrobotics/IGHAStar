@@ -15,13 +15,16 @@
 
 #include <pusht_multi_physics.h>
 #include <pusht_qs.h>
+#include "lazy_index.h"
 
 using namespace std;
 
 constexpr int n_dims = pusht_multi_physics::kStateDim;
-constexpr int hash_dims = 8; // agent xy + both tee poses
-constexpr int n_cont = 2;
+constexpr int kNumAgents = pusht_multi_physics::kNumAgents;
 constexpr int kNumTees = pusht_multi_physics::kNumTees;
+// Poses only: every agent xy, then both tee poses. Velocities are not hashed.
+constexpr int hash_dims = 2 * kNumAgents + 3 * kNumTees;
+constexpr int n_cont = 2 * kNumAgents;
 
 inline size_t calc_hash(float *pose, const float *resolution) {
   std::size_t hash_val = 0;
@@ -42,7 +45,7 @@ public:
   size_t hash;
   size_t LCR_index;
   int time_direction;
-  std::vector<size_t> index;
+  LazyIndex<hash_dims, calc_hash> index;
   std::shared_ptr<Node> parent;
   bool preexpanded = false;
   std::vector<std::shared_ptr<Node>> cached_succ;
@@ -55,7 +58,7 @@ public:
 
   Node(const float *pose_in, const float *intermediate_poses_,
        std::shared_ptr<Node> parent_in, float g_in, const float *resolution_,
-       const float *tolerance, int max_level, float division_factor,
+       const float *tolerance, float division_factor,
        int timesteps, const float *LCR_, int time_direction_ = 1,
        const float *intermediate_controls_ = nullptr)
       : intermediate_poses(nullptr), intermediate_controls(nullptr), g(g_in),
@@ -77,16 +80,7 @@ public:
     }
     hash = calc_hash(pose, tolerance);
     LCR_index = calc_hash(pose, LCR_);
-    float resolution[n_dims];
-    for (int i = 0; i < n_dims; i++) {
-      resolution[i] = resolution_[i];
-    }
-    for (int i = 0; i < max_level; i++) {
-      index.push_back(calc_hash(pose, resolution));
-      for (int j = 0; j < n_dims; j++) {
-        resolution[j] = resolution[j] / division_factor;
-      }
-    }
+    index.init(pose, resolution_, division_factor);
   }
 
   ~Node() {
@@ -109,18 +103,29 @@ class Environment {
   float epsilon[n_dims];
   float workspace_lo, workspace_hi, agent_x_hi;
   float exit_x0, exit_x1, exit_y0, exit_y1;
-  float obstacle_x, obstacle_y, obstacle_side;
-  // Row-major [B, 2] when the last set_world passed one center per state.
+  float max_agent_force;
+  // Active interior walls for the search. A batch validity call also keeps
+  // the raw rows so each state can use its own maze.
+  pusht_multi_physics::WallSpec walls_[pusht_multi_physics::kMaxWalls];
+  int n_walls_ = 0;
   std::vector<float> world_rows;
+  int world_stride = 0;
+  bool world_is_batch = false;
   std::vector<float> action_radii;
   float edge_cost;
   float max_agent_vel;
   float max_penetration_px;
   bool rearrange;     // pose goal per tee. Clear uses the exit box.
   bool close_right;   // fourth wall. Rearrange closes it. Clear leaves it open.
+  // Two-agent constraints. Agent 0 keeps y >= agent_y_split (top half, y is up)
+  // and agent 1 keeps y <= agent_y_split. Centers stay min_agent_sep apart.
+  // Both are off unless the config sets them.
+  bool split_agents = false;
+  float agent_y_split = 256.f;
+  float min_agent_sep = 0.f;
+
 
 public:
-  int max_level;
   int timesteps;
   int time_direction;
   float resolution[n_dims];
@@ -131,12 +136,11 @@ public:
   float division_factor;
 
   Environment(const py::dict &config, int time_direction_ = 1)
-      : obstacle_x(256.f), obstacle_y(256.f), rearrange(false),
-        close_right(false), time_direction(time_direction_) {
+      : max_agent_force(1.0e9f), rearrange(false), close_right(false),
+        time_direction(time_direction_) {
     auto info = config["experiment_info_default"].cast<py::dict>();
     auto node_info = info["node_info"].cast<py::dict>();
 
-    max_level = info["max_level"].cast<int>();
     division_factor = info["division_factor"].cast<float>();
     n_substeps = node_info.contains("n_substeps")
                      ? node_info["n_substeps"].cast<int>()
@@ -159,9 +163,14 @@ public:
                                            : 0.f;
     exit_y1 = node_info.contains("exit_y1") ? node_info["exit_y1"].cast<float>()
                                            : 512.f;
-    obstacle_side = node_info.contains("obstacle_side")
-                        ? node_info["obstacle_side"].cast<float>()
-                        : static_cast<float>(pusht_multi_physics::kTeeScale);
+    if (node_info.contains("agent_y_split")) {
+      split_agents = true;
+      agent_y_split = node_info["agent_y_split"].cast<float>();
+    }
+    if (node_info.contains("min_agent_separation"))
+      min_agent_sep = node_info["min_agent_separation"].cast<float>();
+    if (node_info.contains("max_agent_force"))
+      max_agent_force = node_info["max_agent_force"].cast<float>();
     if (node_info.contains("objective")) {
       rearrange = node_info["objective"].cast<std::string>() == "rearrange";
     }
@@ -180,7 +189,8 @@ public:
                     goal_sampling.angular_dims);
   }
 
-  virtual ~Environment() = default;
+  virtual ~Environment() {
+  }
 
   static std::vector<float> as_fvec(const py::handle &h) {
     std::vector<float> out;
@@ -225,28 +235,80 @@ public:
     max_penetration_px = node_info.contains("max_penetration_px")
                              ? node_info["max_penetration_px"].cast<float>()
                              : 1.f;
-    n_succ = n_directions * int(action_radii.size()) + 1;
+    // One agent moves per successor. The others are commanded to hold.
+    n_succ = kNumAgents * (n_directions * int(action_radii.size()) + 1);
   }
 
-  // World tensor: one center [2], or one center per state [B, 2].
+  // Row is [n, then n segments of x1, y1, x2, y2]. n above kMaxWalls throws.
+  // A row of length 17 is the old gap encoding: orient, coord, gap_lo, gap_hi.
+  // Each of those becomes the two solid pieces of a wall across the box.
+  static int read_walls(const float *row, int stride,
+                        pusht_multi_physics::WallSpec *out) {
+    if (!row || stride < 5)
+      return 0;
+    int n = static_cast<int>(row[0]);
+    if (n < 0)
+      n = 0;
+    if (stride == 1 + 4 * 4) {
+      if (n > 4)
+        n = 4;
+      int w = 0;
+      for (int i = 0; i < n; i++) {
+        const float *p = row + 1 + 4 * i;
+        float g0 = p[2];
+        float g1 = p[3];
+        if (g0 > g1)
+          std::swap(g0, g1);
+        const float a = pusht_multi_physics::kBoxLo;
+        const float b = pusht_multi_physics::kBoxHi;
+        if (p[0] < 0.5f) {
+          if (w < pusht_multi_physics::kMaxWalls)
+            out[w++] = {a, p[1], g0, p[1]};
+          if (w < pusht_multi_physics::kMaxWalls)
+            out[w++] = {g1, p[1], b, p[1]};
+        } else {
+          if (w < pusht_multi_physics::kMaxWalls)
+            out[w++] = {p[1], a, p[1], g0};
+          if (w < pusht_multi_physics::kMaxWalls)
+            out[w++] = {p[1], g1, p[1], b};
+        }
+      }
+      return w;
+    }
+    const int avail = (stride - 1) / 4;
+    if (n > avail)
+      n = avail;
+    if (n > pusht_multi_physics::kMaxWalls)
+      throw std::runtime_error("pusht_multi: " + std::to_string(n) + " wall segments, at most " +
+                               std::to_string(pusht_multi_physics::kMaxWalls) + " are supported");
+    for (int i = 0; i < n; i++) {
+      const float *p = row + 1 + 4 * i;
+      out[i] = {p[0], p[1], p[2], p[3]};
+    }
+    return n;
+  }
+
+  // One maze [n, wall...], or one maze per state [B, stride].
   void set_world(torch::Tensor world) {
     world_rows.clear();
-    if (!world.defined() || world.numel() < 2)
+    n_walls_ = 0;
+    world_stride = 0;
+    world_is_batch = false;
+    if (!world.defined() || world.numel() < 1)
       return;
     auto w = world.to(torch::kCPU).to(torch::kFloat32).contiguous();
-    if (w.dim() == 2 && w.size(1) == 2) {
-      world_rows.assign(w.data_ptr<float>(),
-                        w.data_ptr<float>() + w.numel());
-      obstacle_x = world_rows[0];
-      obstacle_y = world_rows[1];
-      return;
+    world_rows.assign(w.data_ptr<float>(), w.data_ptr<float>() + w.numel());
+    if (w.dim() == 2) {
+      world_is_batch = true;
+      world_stride = static_cast<int>(w.size(1));
+    } else {
+      world_stride = static_cast<int>(w.numel());
     }
-    obstacle_x = w.data_ptr<float>()[0];
-    obstacle_y = w.data_ptr<float>()[1];
+    n_walls_ = read_walls(world_rows.data(), world_stride, walls_);
   }
 
   void tee_cog(const float *pose, int tee, float &cx, float &cy) const {
-    const int b = 2 + 3 * tee;
+    const int b = pusht_multi_physics::tee_pose(tee);
     pusht_qs::Vec2 cog_l;
     pusht_qs::tee_cog_local(cog_l);
     const float c = std::cos(pose[b + 2]);
@@ -256,17 +318,45 @@ public:
     cy = pose[b + 1] + w.y;
   }
 
+  bool point_in_exit(float x, float y) const {
+    return x >= exit_x0 && x <= exit_x1 && y >= exit_y0 && y <= exit_y1;
+  }
+
   bool cog_in_exit(const float *pose, int tee) const {
     float cx, cy;
     tee_cog(pose, tee, cx, cy);
-    return cx >= exit_x0 && cx <= exit_x1 && cy >= exit_y0 && cy <= exit_y1;
+    return point_in_exit(cx, cy);
+  }
+
+  // Both rects of the tee. The exit box is convex, so a CoG outside it means
+  // some corner is outside and the corner loop can be skipped.
+  bool tee_in_exit(const float *pose, int tee) const {
+    if (!cog_in_exit(pose, tee))
+      return false;
+    const int b = pusht_multi_physics::tee_pose(tee);
+    const float c = std::cos(pose[b + 2]);
+    const float s = std::sin(pose[b + 2]);
+    pusht_qs::LocalRect rects[2];
+    pusht_qs::tee_rects(rects[0], rects[1]);
+    for (const auto &r : rects) {
+      const float xs[2] = {r.xmin, r.xmax};
+      const float ys[2] = {r.ymin, r.ymax};
+      for (float lx : xs) {
+        for (float ly : ys) {
+          const pusht_qs::Vec2 w = pusht_qs::rot({lx, ly}, c, s);
+          if (!point_in_exit(pose[b] + w.x, pose[b + 1] + w.y))
+            return false;
+        }
+      }
+    }
+    return true;
   }
 
   void stamp_cleared(Node &node, const Node *parent,
                      const float *intermediates) const {
     for (int i = 0; i < kNumTees; i++) {
       node.cleared[i] = parent ? parent->cleared[i] : false;
-      if (cog_in_exit(node.pose, i))
+      if (tee_in_exit(node.pose, i))
         node.cleared[i] = true;
     }
     if (!intermediates)
@@ -274,7 +364,7 @@ public:
     for (int t = 0; t < timesteps; t++) {
       const float *s = intermediates + t * n_dims;
       for (int i = 0; i < kNumTees; i++) {
-        if (cog_in_exit(s, i))
+        if (tee_in_exit(s, i))
           node.cleared[i] = true;
       }
     }
@@ -298,7 +388,7 @@ public:
 
   std::shared_ptr<Node> create_Node(float *pose) {
     auto node = std::make_shared<Node>(pose, nullptr, nullptr, 0, resolution,
-                                       tolerance, max_level, division_factor,
+                                       tolerance, division_factor,
                                        timesteps, local_controllability_radius,
                                        time_direction);
     stamp_cleared(*node, nullptr, nullptr);
@@ -351,7 +441,7 @@ public:
   float h_rearrange(const float *pose, const float *goal) const {
     float dist = 0.f;
     for (int i = 0; i < kNumTees; i++) {
-      const int b = 2 + 3 * i;
+      const int b = pusht_multi_physics::tee_pose(i);
       const float dx = pose[b] - goal[b];
       const float dy = pose[b + 1] - goal[b + 1];
       const float dth = wrap_angle(pose[b + 2] - goal[b + 2]);
@@ -361,21 +451,21 @@ public:
   }
 
   bool tee_at_goal(const float *pose, const float *goal, int tee) const {
-    const int b = 2 + 3 * tee;
+    const int b = pusht_multi_physics::tee_pose(tee);
     return std::fabs(pose[b] - goal[b]) < epsilon[b] &&
            std::fabs(pose[b + 1] - goal[b + 1]) < epsilon[b + 1] &&
            std::fabs(wrap_angle(pose[b + 2] - goal[b + 2])) < epsilon[b + 2];
   }
 
-  // Clear: pose-only, a tee counts as cleared only if its CoG is in the exit
-  // box now. Successors set f from Node::cleared, which also remembers a past
+  // Clear: a tee counts as cleared only if the whole tee is in the exit box
+  // now. Successors set f from Node::cleared, which also remembers a past
   // entry. Rearrange: distance of each tee body to its goal pose.
   float heuristic(float *pose, float *goal) {
     if (rearrange)
       return h_rearrange(pose, goal);
     bool now[kNumTees];
     for (int i = 0; i < kNumTees; i++)
-      now[i] = cog_in_exit(pose, i);
+      now[i] = tee_in_exit(pose, i);
     return h_cleared(pose, now);
   }
 
@@ -395,25 +485,42 @@ public:
   }
 
   bool in_agent_workspace(const float *pose) const {
-    return pose[0] >= workspace_lo && pose[0] <= agent_x_hi &&
-           pose[1] >= workspace_lo && pose[1] <= workspace_hi;
+    for (int i = 0; i < kNumAgents; i++) {
+      const int p = pusht_multi_physics::agent_pose(i);
+      if (pose[p] < workspace_lo || pose[p] > agent_x_hi ||
+          pose[p + 1] < workspace_lo || pose[p + 1] > workspace_hi)
+        return false;
+      if (split_agents && kNumAgents == 2 &&
+          (i == 0 ? pose[p + 1] < agent_y_split : pose[p + 1] > agent_y_split))
+        return false;
+    }
+    if (kNumAgents == 2 && min_agent_sep > 0.f) {
+      const int p0 = pusht_multi_physics::agent_pose(0);
+      const int p1 = pusht_multi_physics::agent_pose(1);
+      const float dx = pose[p0] - pose[p1];
+      const float dy = pose[p0 + 1] - pose[p1 + 1];
+      if (dx * dx + dy * dy < min_agent_sep * min_agent_sep)
+        return false;
+    }
+    return true;
   }
 
-  bool valid_at(float *pose, float ox, float oy) {
+  bool valid_at(float *pose, const pusht_multi_physics::WallSpec *walls,
+                int n_walls) {
     if (!finite_pose(pose) || !in_agent_workspace(pose))
       return false;
     if (!rearrange) {
       for (int i = 0; i < kNumTees; i++) {
-        if (cog_in_exit(pose, i))
+        if (tee_in_exit(pose, i))
           return false;
       }
     }
-    return !pusht_multi_physics::overlaps_forbidden(pose, ox, oy, obstacle_side,
+    return !pusht_multi_physics::overlaps_forbidden(pose, walls, n_walls,
                                                    close_right);
   }
 
   bool check_validity_single(float *pose) {
-    return valid_at(pose, obstacle_x, obstacle_y);
+    return valid_at(pose, walls_, n_walls_);
   }
 
   void check_validity(float *start, float *goal, bool *result) {
@@ -425,21 +532,30 @@ public:
                               std::vector<bool> &results) {
     const int n = static_cast<int>(states.size());
     results.resize(n);
-    const bool per_row = static_cast<int>(world_rows.size()) == 2 * n;
+    const bool per_row =
+        world_is_batch && world_stride > 0 &&
+        static_cast<int>(world_rows.size()) == world_stride * n;
     std::vector<char> ok(n, 0);
 #pragma omp parallel for schedule(static)
     for (int i = 0; i < n; i++) {
-      const float ox = per_row ? world_rows[2 * i] : obstacle_x;
-      const float oy = per_row ? world_rows[2 * i + 1] : obstacle_y;
-      ok[i] = valid_at(states[i], ox, oy) ? 1 : 0;
+      pusht_multi_physics::WallSpec row[pusht_multi_physics::kMaxWalls];
+      int n_row = n_walls_;
+      const pusht_multi_physics::WallSpec *use = walls_;
+      if (per_row) {
+        n_row = read_walls(world_rows.data() + i * world_stride, world_stride,
+                           row);
+        use = row;
+      }
+      ok[i] = valid_at(states[i], use, n_row) ? 1 : 0;
     }
     for (int i = 0; i < n; i++)
       results[i] = ok[i] != 0;
   }
 
-  // Uncleared tee the agent is touching, else the nearest uncleared tee.
-  int select_tee(const Node &node, const float *goal_pose) const {
+  // Uncleared tee this agent is touching, else the nearest uncleared tee.
+  int select_tee(const Node &node, const float *goal_pose, int agent) const {
     const float *p = node.pose;
+    const int ap = pusht_multi_physics::agent_pose(agent);
     int best = -1;
     float best_score = -1e30f;
     for (int i = 0; i < kNumTees; i++) {
@@ -449,13 +565,14 @@ public:
       } else if (node.cleared[i]) {
         continue;
       }
+      const int tp = pusht_multi_physics::tee_pose(i);
       float pen = 0.f;
       pusht_qs::Vec2 nrm, contact, cog;
       const bool hit = pusht_qs::deepest_contact(
-          {p[0], p[1]}, {p[2 + 3 * i], p[3 + 3 * i]}, p[4 + 3 * i], pen, nrm,
-          contact, cog);
-      const float dx = p[0] - p[2 + 3 * i];
-      const float dy = p[1] - p[3 + 3 * i];
+          {p[ap], p[ap + 1]}, {p[tp], p[tp + 1]}, p[tp + 2], pen, nrm, contact,
+          cog);
+      const float dx = p[ap] - p[tp];
+      const float dy = p[ap + 1] - p[tp + 1];
       const float score = hit ? pen : -std::sqrt(dx * dx + dy * dy);
       if (score > best_score) {
         best_score = score;
@@ -465,24 +582,83 @@ public:
     return best < 0 ? 0 : best;
   }
 
+  // The actions of one successor expansion: for each agent, its single-pusher ring (Coulomb cone on
+  // contact, uniform off contact) plus a hold, with every other agent commanded to hold.
+  // Appends n_succ actions of n_cont floats each.
+  void gen_actions(const std::shared_ptr<Node> &node,
+                   const std::shared_ptr<Node> &goal,
+                   std::vector<float> &actions) {
+    const float mu = pusht_multi_physics::contact_friction_mu();
+    for (int agent = 0; agent < kNumAgents; agent++) {
+      const int tee = select_tee(*node, goal->pose, agent);
+      const int tp = pusht_multi_physics::tee_pose(tee);
+      const int ap = pusht_multi_physics::agent_pose(agent);
+      float ring_pose[5] = {node->pose[ap], node->pose[ap + 1], node->pose[tp],
+                            node->pose[tp + 1], node->pose[tp + 2]};
+      std::vector<float> ring;
+      for (float r : action_radii)
+        pusht_qs::append_qs_ring_targets(ring_pose, r, n_directions,
+                                         workspace_lo, workspace_hi, mu, ring);
+      ring.push_back(node->pose[tp]);
+      ring.push_back(node->pose[tp + 1]);
+      const int n_ring = int(ring.size()) / 2;
+      for (int k = 0; k < n_ring; k++) {
+        for (int j = 0; j < kNumAgents; j++) {
+          if (j == agent) {
+            actions.push_back(ring[2 * k]);
+            actions.push_back(ring[2 * k + 1]);
+          } else {
+            const int jp = pusht_multi_physics::agent_pose(j);
+            actions.push_back(node->pose[jp]);
+            actions.push_back(node->pose[jp + 1]);
+          }
+        }
+      }
+    }
+  }
+
+  // Whether a rolled-out edge is usable: finite, inside the workspace at the end and along the whole
+  // edge (the half-plane and separation limits hold along it), and within the penetration and force
+  // limits.
+  bool rollout_valid(const float *out, const float *inter, float pen_inc,
+                     float peak_force) const {
+    bool path_ok = finite_pose(out) && in_agent_workspace(out);
+    for (int t = 0; path_ok && t < timesteps; t++)
+      path_ok = in_agent_workspace(inter + t * n_dims);
+    return path_ok && pen_inc <= max_penetration_px &&
+           peak_force <= max_agent_force;
+  }
+
+  // The child node for one valid edge: state ns, the substep states inter, and the action that made it.
+  std::shared_ptr<Node> make_neighbor(const std::shared_ptr<Node> &node,
+                                      const std::shared_ptr<Node> &goal,
+                                      const float *action, const float *ns,
+                                      const float *inter) {
+    float ctrl[n_cont];
+    memcpy(ctrl, action, n_cont * sizeof(float));
+    float *controls_seq = new float[timesteps * n_cont];
+    for (int t = 0; t < timesteps; t++)
+      memcpy(&controls_seq[t * n_cont], ctrl, n_cont * sizeof(float));
+    auto neighbor = std::make_shared<Node>(
+        ns, inter, node, node->g + edge_cost, resolution, tolerance, division_factor, timesteps, local_controllability_radius,
+        time_direction, controls_seq);
+    delete[] controls_seq;
+    stamp_cleared(*neighbor, node.get(), inter);
+    neighbor->f =
+        neighbor->g + (rearrange
+                           ? h_rearrange(neighbor->pose, goal->pose)
+                           : h_cleared(neighbor->pose, neighbor->cleared));
+    return neighbor;
+  }
+
   std::vector<std::shared_ptr<Node>> Succ(std::shared_ptr<Node> node,
                                           std::shared_ptr<Node> goal) {
     std::vector<std::shared_ptr<Node>> neighbors;
     neighbors.reserve(n_succ);
 
-    const int tee = select_tee(*node, goal->pose);
-    const int b = 2 + 3 * tee;
-    float ring_pose[5] = {node->pose[0], node->pose[1], node->pose[b],
-                          node->pose[b + 1], node->pose[b + 2]};
     std::vector<float> actions;
     actions.reserve(n_succ * n_cont);
-    for (float r : action_radii) {
-      pusht_qs::append_qs_ring_targets(
-          ring_pose, r, n_directions, workspace_lo, workspace_hi,
-          pusht_multi_physics::contact_friction_mu(), actions);
-    }
-    actions.push_back(node->pose[b]);
-    actions.push_back(node->pose[b + 1]);
+    gen_actions(node, goal, actions);
 
     const int n_actions = int(actions.size()) / n_cont;
     std::vector<float> next_states(n_actions * n_dims);
@@ -493,39 +669,21 @@ public:
     for (int i = 0; i < n_actions; i++) {
       float out[n_dims];
       float pen_inc = 0.f;
-      int hit_obs = 0;
+      float peak_force = 0.f;
       float *inter = &intermediates[i * timesteps * n_dims];
       pusht_multi_physics::step_from_snapshot(
-          node->pose, actions[i * n_cont], actions[i * n_cont + 1], out,
-          n_substeps, inter, max_agent_vel, &pen_inc, &hit_obs, obstacle_x,
-          obstacle_y, obstacle_side, close_right);
+          node->pose, &actions[i * n_cont], out, n_substeps, inter,
+          max_agent_vel, &pen_inc, &peak_force, walls_, n_walls_, close_right);
       memcpy(&next_states[i * n_dims], out, n_dims * sizeof(float));
-      valid[i] = (finite_pose(out) && in_agent_workspace(out) &&
-                  pen_inc <= max_penetration_px && hit_obs == 0)
-                     ? 1
-                     : 0;
+      valid[i] = rollout_valid(out, inter, pen_inc, peak_force) ? 1 : 0;
     }
 
     for (int i = 0; i < n_actions; i++) {
       if (!valid[i])
         continue;
-      float *ns = &next_states[i * n_dims];
-      float *inter = &intermediates[i * timesteps * n_dims];
-      float ctrl[n_cont] = {actions[i * n_cont], actions[i * n_cont + 1]};
-      float *controls_seq = new float[timesteps * n_cont];
-      for (int t = 0; t < timesteps; t++)
-        memcpy(&controls_seq[t * n_cont], ctrl, n_cont * sizeof(float));
-      auto neighbor = std::make_shared<Node>(
-          ns, inter, node, node->g + edge_cost, resolution, tolerance,
-          max_level, division_factor, timesteps, local_controllability_radius,
-          time_direction, controls_seq);
-      delete[] controls_seq;
-      stamp_cleared(*neighbor, node.get(), inter);
-      neighbor->f =
-          neighbor->g + (rearrange
-                             ? h_rearrange(neighbor->pose, goal->pose)
-                             : h_cleared(neighbor->pose, neighbor->cleared));
-      neighbors.push_back(neighbor);
+      neighbors.push_back(make_neighbor(
+          node, goal, &actions[i * n_cont], &next_states[i * n_dims],
+          &intermediates[i * timesteps * n_dims]));
     }
     return neighbors;
   }
@@ -615,3 +773,47 @@ public:
     return controls_tensor;
   }
 };
+
+// Open-loop Chipmunk step. target is one xy per agent.
+// Returns [state, penetration increase, peak agent force].
+// world is one row: [n, x1, y1, x2, y2, ...]. close_right adds the box wall at x=506.
+#define IGHASTAR_HAS_PUSHT_MULTI_STEP
+inline torch::Tensor pusht_multi_step(torch::Tensor state, torch::Tensor world,
+                                      torch::Tensor target, int n_substeps,
+                                      bool close_right, double max_agent_vel) {
+  auto s = state.to(torch::kCPU).to(torch::kFloat32).contiguous().view({-1});
+  if (s.size(0) < pusht_multi_physics::kStateDim)
+    throw std::runtime_error("pusht_multi_step: state is short");
+  auto tgt = target.to(torch::kCPU).to(torch::kFloat32).contiguous().view({-1});
+  if (tgt.size(0) < n_cont)
+    throw std::runtime_error("pusht_multi_step: target needs one xy per agent");
+  float in[pusht_multi_physics::kStateDim];
+  float tgt_xy[n_cont];
+  std::memcpy(in, s.data_ptr<float>(), sizeof(in));
+  std::memcpy(tgt_xy, tgt.data_ptr<float>(), sizeof(tgt_xy));
+
+  pusht_multi_physics::WallSpec walls[pusht_multi_physics::kMaxWalls];
+  int n = 0;
+  if (world.defined() && world.numel() > 0) {
+    auto w = world.to(torch::kCPU).to(torch::kFloat32).contiguous().view({-1});
+    n = Environment::read_walls(w.data_ptr<float>(), static_cast<int>(w.size(0)),
+                                walls);
+  }
+  if (n_substeps < 1)
+    n_substeps = 1;
+  if (n_substeps > 500)
+    n_substeps = 500;
+  float out[pusht_multi_physics::kStateDim];
+  float pen = 0.f;
+  float force = 0.f;
+  pusht_multi_physics::step_from_snapshot(
+      in, tgt_xy, out, n_substeps, nullptr, static_cast<cpFloat>(max_agent_vel),
+      &pen, &force, walls, n, close_right);
+  auto result = torch::empty({pusht_multi_physics::kStateDim + 2},
+                             torch::TensorOptions().dtype(torch::kFloat32));
+  std::memcpy(result.data_ptr<float>(), out,
+              sizeof(float) * pusht_multi_physics::kStateDim);
+  result[pusht_multi_physics::kStateDim] = pen;
+  result[pusht_multi_physics::kStateDim + 1] = force;
+  return result;
+}

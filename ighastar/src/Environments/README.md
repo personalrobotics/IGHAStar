@@ -153,7 +153,6 @@ elevation representation only and rejects 4D tensors.
   The tensor should have shape `[path_length, n_dims + 1]`, where the last column contains `g * time_direction` to indicate search direction.
 
 ### **Required Members**
-- `int max_level;` - The maximum number of resolution levels (used for multi-resolution search).
 - `int time_direction;` - Direction of search: `1` for forward, `-1` for backward.
 - `int timesteps;` - Number of intermediate states between nodes.
 - `float local_controllability_radius[n_dims];` - Local controllability radius for each dimension.
@@ -173,7 +172,7 @@ Your environment must define a `Node` struct or class with the following members
 - `size_t hash;` // Hash value for fast lookup
 - `size_t LCR_index;` // Index for local controllability radius table (used in bidirectional search)
 - `int time_direction;` // Direction of search: `1` for forward, `-1` for backward
-- `std::vector<size_t> index;` // Multi-resolution indices
+- `index;` // Multi-resolution cell hashes: `index[l]` is the hash at level `l`, for any `l` the search reaches. Use `LazyIndex<hash_dims, calc_hash>` from `Environments/include/lazy_index.h`, which computes a level the first time it is read. A fixed-size vector would be read out of range once the search goes deeper than its length.
 - `std::shared_ptr<Node> parent;` // Pointer to parent node
 
 ### **Required Methods**
@@ -181,7 +180,7 @@ Your environment must define a `Node` struct or class with the following members
   ```cpp
   Node(const float *pose_in, const float *intermediate_poses_,
        std::shared_ptr<Node> parent_in, float g_in,
-       const float *resolution_, float *tolerance, int max_level,
+       const float *resolution_, float *tolerance,
        float division_factor, int timesteps,
        const float *LCR_, int time_direction_ = 1);
   ```
