@@ -50,6 +50,10 @@ class PegConfig:
     hole_height: float = 0.04  # target heights above the assembled pose are U(0, hole_height)
     joint_motion_weight: float = 0.05
     max_joint_vel: float = 20.0  # validity
+    # validity: an edge is invalid if the peg's acceleration between consecutive policy steps exceeds this many g.
+    # Free fall is 1 g; ordinary edges stayed below 0.6 g in a replay of 512 edges, blow-ups (>0.2 m peg step) were all above it.
+    max_peg_accel_g: float = 1.1
+    log_tree: bool = False  # record every expansion (edge paths, link poses) for viser_peg_tree.py
     table_z_margin: float = 0.05
     seed: int = 0
     extra: dict[str, Any] = field(default_factory=dict)
@@ -130,6 +134,14 @@ class PegProblem:
         self.max_rot_step = float(self.T * torch.linalg.norm(self.scale[3:] * self.realised[3:]))  # rad / edge
         self.profile = {"dyn_calls": 0, "dyn_rows": 0, "dyn_time": 0.0, "max_peg_step": 0.0,
                         "max_hand_step": 0.0, "bad_rows": 0}
+        self.flung = []  # (state[n], control[NCTRL], peg_step, bad) of edges with peg step > 0.1 m or bad; for contact replays
+        self.normal = []  # random ~2% sample of ordinary edges (same fields): baseline for contact replays
+        self._tree = {k: [] for k in ("parent_call", "parent_child_id", "parent_feat", "child_parent", "child_feat",
+                                      "child_peg", "child_bp", "child_valid", "child_cost", "child_h")}
+        self._tree_index: dict[int, int] = {}
+        self._n_children = 0
+        self.start_bp = None  # [n_bodies,7] link poses (env frame) of the start node, set by set_start
+        self.diag = []  # per simulated edge: [peak |qd|/limit over robot joints, peg step (m), bad(1/0), peak peg speed m/s]
 
     # ------------------------------------------------------------------ geometry
     def _peg_local_box(self) -> torch.Tensor:
@@ -163,6 +175,12 @@ class PegProblem:
         feats = torch.cat([pp[:, :3], _quat_axis(pp[:, 3:7], 2), hand, grip_cmd[:, None]], dim=1)
         return torch.cat([feats, grip_cmd[:, None], jp, jv, pp, pv], dim=1)
 
+    def _body_poses(self) -> torch.Tensor:
+        """Link poses [N,n_bodies,7] (pos, quat xyzw) in each env's frame, for visualisation."""
+        d = self.robot.data
+        pos = d.body_link_pos_w.torch - self.env_origins[:, None]
+        return torch.cat([pos, d.body_link_quat_w.torch], dim=-1)
+
     def _hand_point(self) -> torch.Tensor:
         """Hand reference point (the gripper's pinch point), env-relative [N,3]."""
         d = self.robot.data
@@ -192,6 +210,7 @@ class PegProblem:
         cmd = torch.where(grip > 0.4, -1.0, 1.0).reshape(1)  # closed finger -> last command was "close"
         s = self._read_states(cmd.expand(self.N).clone())[env_idx:env_idx + 1]
         self.start = s[0].cpu()
+        self.start_bp = self._body_poses()[env_idx].cpu().clone()
         return self.start
 
     # ------------------------------------------------------------------ success / heuristic
@@ -320,14 +339,40 @@ class PegProblem:
             act, cmd = self._resolve(s, u)
             self._write_states(s)
             bad = torch.zeros(self.N, dtype=torch.bool, device=self.device)
+            lim = self.robot.data.joint_vel_limits.torch
+            acc_bad = torch.zeros(self.N, dtype=torch.bool, device=self.device)
+            prev_v = s[:, self.o_pegv:self.o_pegv + 3]
+            a_max = self.cfg.max_peg_accel_g * 9.81
+            ratio = torch.zeros(self.N, device=self.device)
+            bp = None
             for t in range(self.T):
                 self.env.step(act)
                 cur = self._read_states(cmd)
+                if self.cfg.log_tree and t == self.T - 1:
+                    bp = self._body_poses()
+                ratio = torch.maximum(ratio, torch.nan_to_num((cur[:, self.o_qd:self.o_qd + self.J].abs() / lim).amax(dim=1), nan=1e9))
                 bad |= ~torch.isfinite(cur).all(dim=1)
                 bad |= cur[:, self.o_qd:self.o_qd + self.J].abs().amax(dim=1) > self.cfg.max_joint_vel
+                v = cur[:, self.o_pegv:self.o_pegv + 3]
+                acc_bad |= ~((v - prev_v).norm(dim=1) / self.env.step_dt <= a_max)  # NaN also counts
+                prev_v = v
                 out[c0:c1, t] = cur[:nb].cpu()
-            bad = bad[:nb].cpu()
+            self.profile["accel_rows"] = self.profile.get("accel_rows", 0) + int((acc_bad & ~bad)[:nb].sum())
+            bad = (bad | acc_bad)[:nb].cpu()
+            pstep = torch.nan_to_num((out[c0:c1, -1, self.o_peg:self.o_peg + 3] - states[c0:c1, self.o_peg:self.o_peg + 3]).norm(dim=1), nan=1e9)
+            self.diag.append(torch.stack([ratio[:nb].cpu(), pstep, bad.float()], dim=1))
+            sel = ((pstep > 0.1) | bad).nonzero().flatten()
+            if len(self.normal) < 1500:
+                ok_rows = ((pstep <= 0.1) & ~bad & (torch.rand(nb) < 0.02)).nonzero().flatten()
+                for i in ok_rows.tolist():
+                    self.normal.append((states[c0 + i].clone(), controls[c0 + i].clone(), float(pstep[i]), False))
+            if len(self.flung) < 3000:
+                for i in sel.tolist():
+                    self.flung.append((states[c0 + i].clone(), controls[c0 + i].clone(), float(pstep[i]), bool(bad[i])))
+            raw = out[c0:c1].clone() if self.cfg.log_tree else None  # keep blown-up edges for the viewer
             out[c0:c1][bad] = float("nan")
+            if self.cfg.log_tree:
+                self._log_expansion(states[c0:c1], controls[c0:c1], out[c0:c1], raw, bp[:nb].cpu())
             self.profile["bad_rows"] += int(bad.sum())
             hs = (out[c0:c1, -1, 6:9] - states[c0:c1, 6:9]).norm(dim=1)
             hs = hs[torch.isfinite(hs)]
@@ -340,6 +385,46 @@ class PegProblem:
         self.profile["dyn_calls"] += 1
         self.profile["dyn_rows"] += B
         self.profile["dyn_time"] += time.perf_counter() - t0
+        return out
+
+    # ------------------------------------------------------------------ tree log (for viser_peg_tree.py)
+    @staticmethod
+    def _key(row: torch.Tensor) -> int:
+        return hash(row.contiguous().numpy().tobytes())
+
+    def _log_expansion(self, states, controls, out, raw, bp) -> None:
+        """One batched expansion: parents (rows are parent-major, K controls each) and their children's paths."""
+        t = self._tree
+        K = self.cfg.num_controls if states.shape[0] % self.cfg.num_controls == 0 else 1
+        parents = states[::K]
+        call = self.profile["dyn_calls"] + 1
+        p0 = sum(len(a) for a in t["parent_feat"])
+        for row in parents:
+            t["parent_child_id"].append(self._tree_index.get(self._key(row), -1))
+            t["parent_call"].append(call)
+        t["parent_feat"].append(parents[:, :self.F].numpy().copy())
+        fin = out[:, -1]
+        valid = self.validity(fin) > 0
+        B = out.shape[0]
+        t["child_parent"].append(p0 + torch.arange(B).numpy() // K)
+        t["child_feat"].append(raw[:, :, :self.F].numpy().copy())
+        t["child_peg"].append(raw[:, :, self.o_peg:self.o_peg + 7].numpy().copy())
+        t["child_bp"].append(bp.numpy().astype(np.float16))
+        t["child_valid"].append(valid.numpy())
+        t["child_cost"].append(self.cost(states, controls, fin).numpy())
+        t["child_h"].append(self.heuristic(fin).numpy())
+        for i in range(B):
+            if valid[i]:
+                self._tree_index[self._key(fin[i])] = self._n_children + i
+        self._n_children += B
+
+    def tree_arrays(self) -> dict:
+        t = self._tree
+        if not t["parent_call"]:
+            return {}
+        out = {k: np.concatenate(v) for k, v in t.items() if k not in ("parent_call", "parent_child_id")}
+        out["parent_call"] = np.asarray(t["parent_call"], np.int32)
+        out["parent_child_id"] = np.asarray(t["parent_child_id"], np.int64)
         return out
 
     # ------------------------------------------------------------------ planner callbacks

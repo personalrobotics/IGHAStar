@@ -17,5 +17,7 @@ problem:  # PegConfig
   n_hole_rows: 8          # hand (or held peg) toward the hole
 
 task:
-  resolution: [0.2, 0.2, 0.2, 0.5, 0.5, 0.5, 0.2, 0.2, 0.2, 0.5]
-  tolerance:  [0.005, 0.005, 0.005, 0.05, 0.05, 0.05, 0.01, 0.01, 0.01, 0.1]
+  # consider this set of states: hand point states: [x,y,z, 6D rotation vector], peg states: [x,y,z, x,y,z of peg's Z axis], gripper state
+  resolution: [0.2, 0.2, 0.2, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.2, 0.2, 0.2, 0.2]
+  # tolerance is 10% of the resolution
+  tolerance: [0.02, 0.02, 0.02, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.02, 0.02, 0.02, 0.02]

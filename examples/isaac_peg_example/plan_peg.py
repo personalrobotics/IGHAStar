@@ -27,13 +27,22 @@ ap.add_argument("--num-envs", type=int, default=None, help="Isaac envs = nodes p
 ap.add_argument("--config", default=str(HERE / "config.yml"))
 ap.add_argument("--out", default=str(HERE / "out"))
 ap.add_argument("--selftest", action="store_true")
+ap.add_argument("--reset-type", default="ObjectAnywhereEEAnywhere",
+                help="OmniReset reset dataset used for start states (e.g. ObjectPartiallyAssembledEEGrasped)")
+ap.add_argument("--start-idx", type=int, nargs="+", default=None,
+                help="dataset index per seed (default: seed %% M)")
+ap.add_argument("--scan-out", default=None, help="with --scan: save all rows (idx, dist, angle, goal, grip, h0) as .npy")
+ap.add_argument("--save-tree", action="store_true",
+                help="log every expansion to <out>/peg_seed<k>_tree.npz (+ scene_meshes.npz) for viser_peg_tree.py; "
+                     "turns preemptive expansion off and uses num_controls envs")
+ap.add_argument("--scan", type=int, default=0, help="print alignment/grasp stats of the first N start states and exit")
 AppLauncher.add_app_launcher_args(ap)
 args, hydra_args = ap.parse_known_args()
 for ov in ("env.scene.insertive_object=peg", "env.scene.receptive_object=peghole"):
     if not any(h.startswith(ov.split("=")[0] + "=") for h in hydra_args):
         hydra_args.append(ov)
 if not any("reset_from_reset_states.params.reset_types" in h for h in hydra_args):
-    hydra_args += ["env.events.reset_from_reset_states.params.reset_types=[ObjectAnywhereEEAnywhere]",
+    hydra_args += [f"env.events.reset_from_reset_states.params.reset_types=[{args.reset_type}]",
                    "env.events.reset_from_reset_states.params.probs=[1.0]"]
 sys.argv = [sys.argv[0]] + hydra_args
 app = AppLauncher(args).app
@@ -59,7 +68,7 @@ def load_start_states(env):
 
     pair = ou.compute_pair_dir(env.scene["insertive_object"].cfg.spawn.usd_path,
                                env.scene["receptive_object"].cfg.spawn.usd_path)
-    f = f"{UWLAB_CLOUD_ASSETS_DIR}/Datasets/OmniReset_isaaclab3/Resets/{pair}/resets_ObjectAnywhereEEAnywhere.pt"
+    f = f"{UWLAB_CLOUD_ASSETS_DIR}/Datasets/OmniReset_isaaclab3/Resets/{pair}/resets_{args.reset_type}.pt"
     data = torch.load(ou.safe_retrieve_file_path(f))
     data.pop("quat_convention", None)
     M = len(data["initial_state"]["articulation"]["robot"]["joint_position"])
@@ -155,16 +164,45 @@ def main(env_cfg, agent_cfg):
     cfg = yaml.safe_load(open(args.config))
     pcfg0 = PegConfig.from_dict(cfg.get("problem", {}))
     planner_cfg = dict(cfg["planner"])
+    if args.save_tree:
+        planner_cfg["preemptive_expansion"] = {**planner_cfg.get("preemptive_expansion", {}), "enabled": False}
+        print("--save-tree: preemptive expansion off (the tree log needs one parent per batch)")
     pre = planner_cfg.get("preemptive_expansion", {})
-    n_envs = args.num_envs or pcfg0.num_controls * (1 + int(pre.get("max_preemptive", 0)))
+    n_envs = args.num_envs or pcfg0.num_controls * (1 + (int(pre.get("max_preemptive", 0)) if pre.get("enabled", True) else 0))
     env_cfg.scene.num_envs = n_envs
     env_cfg.episode_length_s = 1.0e6
     env_cfg.terminations.time_out = None
     env_cfg.terminations.abnormal_robot = None
     env = gym.make(TASK, cfg=env_cfg).unwrapped
     env.reset()
+    ph = env.sim.cfg.physics
+    print(f"[plan_peg] physics: dt={env.sim.cfg.dt:.5f} decimation={env.cfg.decimation} solver_type={ph.solver_type} "
+          f"pos_iters<={ph.max_position_iteration_count} vel_iters<={ph.max_velocity_iteration_count} "
+          f"bounce_thr={ph.bounce_threshold_velocity} fric_offset_thr={ph.friction_offset_threshold} "
+          f"fric_corr_dist={ph.friction_correlation_distance}")
     ds, M = load_start_states(env)
     print(f"[plan_peg] {n_envs} Isaac envs; {M} start states in the dataset")
+    if args.scan:
+        prob = PegProblem(env, pcfg0, cfg.get("task"))
+        rows = []
+        for k in range(min(args.scan, M)):
+            put_start(env, ds, k)
+            s0 = prob.set_start(None, 0)
+            d, a = [float(x) for x in prob.alignment(s0[None, prob.o_peg:prob.o_peg + 7].to(env.device))][:2]
+            rows.append((k, d, a, bool(prob.goal_test(s0)), float(s0[9]), float(prob.heuristic(s0[None])[0])))
+        if args.scan_out:
+            np.save(args.scan_out, np.array(rows, dtype=np.float64))
+        rows.sort(key=lambda r: r[1])
+        print("idx  dist_m  angle  goal  grip  h0")
+        for r in rows[:25]:
+            print("%4d %7.3f %6.3f %5s %5.2f %6.2f" % r)
+        ng = [r for r in rows if not r[3]]
+        print("goal states: %d of %d; non-goal (closest 15 shown):" % (len(rows) - len(ng), len(rows)))
+        for r in ng[:15]:
+            print("%4d %7.3f %6.3f %5s %5.2f %6.2f" % r)
+        print("not-goal states with grip>0.5:", sum(1 for r in rows if not r[3] and r[4] > 0.5), "of", len(rows))
+        env.close()
+        return
     if args.selftest:
         put_start(env, ds, 0)
         prob = PegProblem(env, pcfg0, cfg.get("task"))
@@ -176,12 +214,16 @@ def main(env_cfg, agent_cfg):
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     records = []
-    for seed in args.seeds:
-        put_start(env, ds, seed % M)
-        pcfg = PegConfig.from_dict({**cfg.get("problem", {}), "seed": seed})
+    for i, seed in enumerate(args.seeds):
+        put_start(env, ds, (args.start_idx[i] if args.start_idx else seed) % M)
+        pcfg = PegConfig.from_dict({**cfg.get("problem", {}), "seed": seed, "log_tree": args.save_tree})
         prob = PegProblem(env, pcfg, cfg.get("task"))
         start = prob.set_start(None, 0)
-        print(f"\n=== peg seed {seed} (start state {seed % M}/{M}): h0={float(prob.heuristic(start[None])[0]):.2f}s "
+        if args.save_tree:
+            from scene_export import export_scene_meshes
+            nm = export_scene_meshes(list(prob.robot.body_names), str(out / "scene_meshes.npz"))
+            print("exported scene meshes:", nm)
+        print(f"\n=== peg seed {seed} (start state {(args.start_idx[i] if args.start_idx else seed) % M}/{M}, {args.reset_type}): h0={float(prob.heuristic(start[None])[0]):.2f}s "
               f"already_goal={prob.goal_test(start)}  edge={prob.edge_dt:.2f}s  bound={prob.max_object_step:.3f} m/edge")
         pc = dict(planner_cfg)
         if args.max_expansions is not None:
@@ -199,13 +241,41 @@ def main(env_cfg, agent_cfg):
         first = next((i for i, c in enumerate(cost_curve) if c < 1e5), None)
         rec = {"seed": seed, "success": bool(ok), "search_s": dt, "expansions": int(prof[7]),
                "preemptive": int(planner.get_preemptive_expansions()), "dyn_calls": p["dyn_calls"],
-               "dyn_rows": p["dyn_rows"], "dyn_time_s": p["dyn_time"], "bad_rows": p["bad_rows"],
+               "dyn_rows": p["dyn_rows"], "dyn_time_s": p["dyn_time"], "bad_rows": p["bad_rows"], "accel_rows": p.get("accel_rows", 0),
                "max_peg_step": p["max_peg_step"], "max_hand_step": p["max_hand_step"], "bound": prob.max_object_step, "edge_s": prob.edge_dt,
                "first_solution_expansion": None if first is None else first + 1}
         print(f"search: success={ok} in {dt:.1f}s, {rec['expansions']} expansions ({rec['preemptive']} preemptive), "
-              f"{p['dyn_rows']} edges simulated ({p['dyn_rows'] / max(p['dyn_time'], 1e-9):.0f}/s), bad rows {p['bad_rows']}; "
+              f"{p['dyn_rows']} edges simulated ({p['dyn_rows'] / max(p['dyn_time'], 1e-9):.0f}/s), bad rows {p['bad_rows']} (of which peg-accel {p.get('accel_rows', 0)}); "
               f"largest peg step {p['max_peg_step']:.3f} m, hand step {p['max_hand_step']:.3f} m vs bound {prob.max_object_step:.3f} m"
               + ("  ** BOUND VIOLATED **" if max(p["max_peg_step"], p["max_hand_step"]) > prob.max_object_step else ""))
+        if prob.flung:
+            torch.save({"states": torch.stack([f[0] for f in prob.flung]), "controls": torch.stack([f[1] for f in prob.flung]),
+                        "peg_step": torch.tensor([f[2] for f in prob.flung]), "bad": torch.tensor([f[3] for f in prob.flung]),
+                        "normal_states": torch.stack([f[0] for f in prob.normal]) if prob.normal else None,
+                        "normal_controls": torch.stack([f[1] for f in prob.normal]) if prob.normal else None,
+                        "normal_peg_step": torch.tensor([f[2] for f in prob.normal]),
+                        "start_idx": (args.start_idx[i] if args.start_idx else seed), "reset_type": args.reset_type},
+                       out / f"flung_seed{seed}.pt")
+        if args.save_tree:
+            tree = prob.tree_arrays()
+            hp = prob.hole_pose.to(prob.device)[None]
+            ha_p, ha_q = prob.hole_offset.combine(hp[:, :3], hp[:, 3:7])
+            sol = np.zeros(0, np.int64)
+            if ok:
+                path_ = planner.get_best_path()
+                st_ = torch.cat([start[None], torch.flip(path_[:, :-1], dims=[0])], 0)
+                sol = np.asarray([prob._tree_index.get(prob._key(r), -1) for r in st_[prob.T::prob.T]], np.int64)
+            np.savez_compressed(
+                out / f"peg_seed{seed}_tree.npz", **tree, solution_child_ids=sol,
+                start_feat=start[:prob.F].numpy(), start_peg=start[prob.o_peg:prob.o_peg + 7].numpy(),
+                start_bp=prob.start_bp.numpy(), body_names=np.asarray(list(prob.robot.body_names)),
+                hole_pose=prob.hole_pose.cpu().numpy(), goal_pos=ha_p[0].cpu().numpy(), goal_quat=ha_q[0].cpu().numpy(),
+                pos_thr=prob.pos_thr, rot_thr=prob.rot_thr, edge_dt=prob.edge_dt, steps_per_edge=prob.T,
+                step_dt=float(env.step_dt), seed=seed, start_idx=(args.start_idx[i] if args.start_idx else seed),
+                reset_type=args.reset_type)
+            print(f"tree: {len(tree['parent_call'])} expansions, {len(tree['child_valid'])} children -> {out / f'peg_seed{seed}_tree.npz'}")
+        if prob.diag:
+            np.save(out / f"edge_diag_seed{seed}.npy", torch.cat(prob.diag).numpy())
         if ok:
             path = planner.get_best_path()  # goal-first, last col = cost-to-come
             dense = torch.flip(path[:, :-1], dims=[0])
