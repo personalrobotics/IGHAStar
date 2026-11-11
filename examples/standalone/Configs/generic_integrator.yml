@@ -11,7 +11,6 @@ experiment_info_default:
   tolerance: [0.1, 0.1] # dedup tolerance per dimension
   bounds_lower: [0.0, 0.0] # state-space lower bounds
   bounds_upper: [10.0, 10.0] # state-space upper bounds
-  max_level: 4 # number of resolution levels
   division_factor: 2.0 # resolution shrink factor per level
   max_expansions: 50000 # search budget (passed to search())
   hysteresis: 1000 # resolution-switch hysteresis threshold

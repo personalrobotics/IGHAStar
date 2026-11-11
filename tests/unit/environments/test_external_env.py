@@ -48,7 +48,6 @@ def test_external_env_compiles_and_constructs():
             "num_controls": 1,
             "resolution": [0.5, 0.5],
             "tolerance": [0.1, 0.1],
-            "max_level": 2,
             "division_factor": 2.0,
             "max_expansions": 10,
             "hysteresis": 100,

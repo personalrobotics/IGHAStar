@@ -521,7 +521,7 @@ default_sample_goals(Env *env, std::shared_ptr<NodeT> start,
                                     float g_value, float f_value) {
     auto node = std::make_shared<NodeT>(
         pose, intermediate_poses, start, start->g + g_value, env->resolution,
-        env->tolerance, env->max_level, env->division_factor, env->timesteps,
+        env->tolerance, env->division_factor, env->timesteps,
         env->local_controllability_radius, env->time_direction);
     node->f = start->g + f_value;
     return node;

@@ -7,7 +7,6 @@ experiment_info_default:
   tolerance: [1.0, 1.0, 1.0, 1.0, 0.01, 25.0, 25.0, 25.0, 25.0, 0.25]
   # Goal region on block pose (indices 2,3,4) — agent free
   epsilon: [1.0, 1.0, 20.0, 20.0, 0.349, 1e9, 1e9, 1e9, 1e9, 1e9] # this needs to be derived from the original dino_wm paper or something.
-  max_level: 3
   division_factor: 2.0
   max_expansions: 25000  # 100% on dino-50 with res=40, radii=[200], vmax=500, eps block 20/0.349
   hysteresis: 500

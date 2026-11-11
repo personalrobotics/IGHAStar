@@ -1,0 +1,29 @@
+# 2T0W2A: two tees, no interior wall, two agents, closed box.
+# Names are {N}T{M}W{K}A. N tees, M interior segments, K agents.
+# State [20]: a0x a0y a1x a1y | t0 | t1 | a0v a1v | t0v t1v.
+# Each successor moves one agent. That agent gets the same ring as the
+# single pusher: Coulomb cone on contact, uniform off contact. The other
+# agent is commanded to hold.
+experiment_info_default:
+  resolution: [40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 0.5, 40.0, 40.0, 0.5, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 0.5, 50.0, 50.0, 0.5]
+  tolerance: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.01, 1.0, 1.0, 0.01, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 0.25, 25.0, 25.0, 0.25]
+  epsilon: [1.0e9, 1.0e9, 1.0e9, 1.0e9, 20.0, 20.0, 0.349, 20.0, 20.0, 0.349, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9]
+  division_factor: 2.0
+  max_expansions: 100000
+  hysteresis: 500
+  node_info:
+    node_type: "pusht_multi_2a"
+    n_substeps: 10
+    workspace_lo: 0.0
+    workspace_hi: 512.0
+    agent_x_hi: 512.0
+    num_tees: 2
+    num_agents: 2
+    objective: rearrange
+    max_agent_force: 150000.0
+    open_right: false
+    n_directions: 24
+    action_radii: [200.0]
+    max_agent_vel: 500.0
+    max_penetration_px: 1.0
+    dynamics: chipmunk

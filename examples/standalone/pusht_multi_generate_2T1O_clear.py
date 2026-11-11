@@ -2,8 +2,11 @@
 """Sample 2T1O_clear starts and keep those solved within the expansion limit.
 
 State [16]: ax ay t0x t0y t0a t1x t1y t1a avx avy t0vx t0vy t0w t1vx t1vy t1w.
-World tensor is the obstacle center (x, y). The goal tensor is unused.
-Search with ignore_goal_validity=True. The goal test reads node clear bits.
+World tensor is a maze: [n, then n segments of x1, y1, x2, y2].
+A row of length 17 is the old gap encoding and is still accepted.
+The goal tensor is unused. Search with ignore_goal_validity=True. A tee is
+cleared when every corner is in the exit box. The CoG is checked first.
+The bits live on the node.
 
   python examples/standalone/pusht_multi_generate_2T1O_clear.py --n 1
 """
@@ -23,6 +26,12 @@ CONFIG = os.path.join(
     BASE_DIR.parent, "examples", "standalone", "Configs", "pusht_multi_2T1O_clear.yml"
 )
 N_DIMS = 16
+MAX_WALLS = 32  # pusht_multi_physics.h kMaxWalls
+WORLD_STRIDE = 1 + 4 * MAX_WALLS
+LEGACY_STRIDE = 1 + 4 * 4
+GAP = 160.0
+BOX_LO = 5.0
+BOX_HI = 506.0
 
 
 def load_config() -> dict:
@@ -39,16 +48,70 @@ def pack_state(ax, ay, t0, t1) -> np.ndarray:
     return s
 
 
-def sample_candidate(rng: np.random.RandomState):
+def gap_wall(orient, coord, gap_lo, gap_hi):
+    """The two solid pieces of one full-span wall. The gap is the opening."""
+    g0, g1 = (float(gap_lo), float(gap_hi))
+    if g0 > g1:
+        g0, g1 = g1, g0
+    if float(orient) < 0.5:
+        pieces = (
+            ((BOX_LO, float(coord)), (g0, float(coord))),
+            ((g1, float(coord)), (BOX_HI, float(coord))),
+        )
+    else:
+        pieces = (
+            ((float(coord), BOX_LO), (float(coord), g0)),
+            ((float(coord), g1), (float(coord), BOX_HI)),
+        )
+    return [p for p in pieces if abs(p[1][0] - p[0][0]) + abs(p[1][1] - p[0][1]) >= 1.0]
+
+
+def pack_walls(segments) -> np.ndarray:
+    """segments: ((x1, y1), (x2, y2)). Unused slots stay 0."""
+    row = np.zeros(WORLD_STRIDE, dtype=np.float32)
+    n = min(len(segments), MAX_WALLS)
+    row[0] = n
+    for i, (a, b) in enumerate(segments[:n]):
+        row[1 + 4 * i : 5 + 4 * i] = (a[0], a[1], b[0], b[1])
+    return row
+
+
+def sample_maze(rng: np.random.RandomState, n_walls: int = 1) -> np.ndarray:
+    """One wall across the box. The gap is centered so both sides stay connected."""
+    del n_walls
+    orient = float(rng.randint(0, 2))
+    coord = float(rng.uniform(160.0, 360.0))
+    mid = 0.5 * (BOX_LO + BOX_HI)
+    half = 0.5 * GAP
+    return pack_walls(gap_wall(orient, coord, mid - half, mid + half))
+
+
+def wall_segments(row):
+    """Interior segments in world pixels. A length-17 row is the old gap encoding."""
+    row = np.asarray(row, dtype=np.float32).reshape(-1)
+    n = int(row[0]) if row.size else 0
+    if row.size == LEGACY_STRIDE:
+        segs = []
+        for i in range(max(0, min(n, 4))):
+            segs.extend(gap_wall(*row[1 + 4 * i : 5 + 4 * i]))
+        return segs
+    n = min(max(0, n), max(0, (row.size - 1) // 4))
+    segs = []
+    for i in range(n):
+        x1, y1, x2, y2 = (float(v) for v in row[1 + 4 * i : 5 + 4 * i])
+        segs.append(((x1, y1), (x2, y2)))
+    return segs
+
+
+def sample_candidate(rng: np.random.RandomState, n_walls: int = 0):
     agent = rng.uniform(40.0, 470.0, size=2)
     tees = []
     for _ in range(2):
         xy = rng.uniform(90.0, 400.0, size=2)
         ang = rng.uniform(0.0, 2.0 * np.pi)
         tees.append(np.array([xy[0], xy[1], ang], dtype=np.float32))
-    obs = rng.uniform(60.0, 450.0, size=2).astype(np.float32)
     state = pack_state(agent[0], agent[1], tees[0], tees[1])
-    return state, obs
+    return state, sample_maze(rng, n_walls)
 
 
 def _tee_polys(x: float, y: float, ang: float):
@@ -82,8 +145,6 @@ def render_clear_video(
     # World x is 0..700 so the exit strip is on the frame. y is 0..512, up.
     # Width is a multiple of 16 so the mp4 encoder does not rescale the frame.
     W, H = 704, 512
-    ox, oy = float(obstacle_xy[0]), float(obstacle_xy[1])
-    half = 15.0
 
     def pix(x, y):
         return (float(x), H - float(y))
@@ -100,10 +161,8 @@ def render_clear_video(
             ((5, 506), (506, 506)),
         ):
             dr.line([pix(*a), pix(*b)], fill=(40, 40, 40), width=4)
-        dr.rectangle(
-            [pix(ox - half, oy + half), pix(ox + half, oy - half)],
-            fill=(90, 90, 90),
-        )
+        for a, b in wall_segments(obstacle_xy):
+            dr.line([pix(*a), pix(*b)], fill=(90, 90, 90), width=6)
         colors = ((70, 130, 180), (210, 120, 40))
         for tee, color in ((row[2:5], colors[0]), (row[5:8], colors[1])):
             for poly in _tee_polys(float(tee[0]), float(tee[1]), float(tee[2])):
@@ -129,16 +188,39 @@ def cost_expansion(planner):
     return first, cost
 
 
-def self_check(planner) -> None:
-    """One separated start is valid. One tee on the obstacle is not."""
-    world = torch.tensor([400.0, 400.0], dtype=torch.float32)
+def self_check(planner, check_exit: bool = True) -> None:
+    """One separated start is valid. One tee sitting on a wall piece is not.
+
+    check_exit is the clear task: a tee fully in the exit box is already solved,
+    and a tee whose CoG is in the box but a corner is not is still a legal start.
+    Rearrange closes the right wall and does not use that test.
+    """
+    world = torch.from_numpy(pack_walls(gap_wall(1.0, 400.0, 220.0, 380.0)))
     free = pack_state(80.0, 256.0, (150.0, 150.0, 0.0), (150.0, 320.0, 0.0))
-    bad = pack_state(80.0, 256.0, (400.0, 400.0, 0.0), (150.0, 320.0, 0.0))
+    bad = pack_state(80.0, 256.0, (400.0, 100.0, 0.0), (150.0, 320.0, 0.0))
     states = torch.from_numpy(np.stack([free, bad]))
     mask = planner.check_validity_batched(states, world)
     ok = mask.detach().cpu().numpy().astype(bool)
     if not (ok[0] and not ok[1]):
         raise SystemExit(f"validity self-check failed: mask={ok.tolist()}")
+    legacy = np.zeros(LEGACY_STRIDE, dtype=np.float32)
+    legacy[0] = 1
+    legacy[1:5] = (1.0, 400.0, 220.0, 380.0)
+    legacy_mask = planner.check_validity_batched(states, torch.from_numpy(legacy))
+    legacy_ok = legacy_mask.detach().cpu().numpy().astype(bool)
+    if not (legacy_ok[0] and not legacy_ok[1]):
+        raise SystemExit(f"legacy wall self-check failed: mask={legacy_ok.tolist()}")
+    if check_exit:
+        # Angle 0, body (600, 200): every corner is in x[512, 700], y[0, 512].
+        # Body (512, 200): CoG is on the exit edge, the bar corner is left of it.
+        whole = pack_state(80.0, 256.0, (600.0, 200.0, 0.0), (150.0, 320.0, 0.0))
+        partial = pack_state(80.0, 256.0, (512.0, 200.0, 0.0), (150.0, 320.0, 0.0))
+        exit_mask = planner.check_validity_batched(
+            torch.from_numpy(np.stack([whole, partial])), world
+        )
+        exit_ok = exit_mask.detach().cpu().numpy().astype(bool)
+        if exit_ok[0] or not exit_ok[1]:
+            raise SystemExit(f"exit self-check failed: mask={exit_ok.tolist()}")
     print("validity self-check passed")
 
 
@@ -150,6 +232,12 @@ def main() -> None:
         type=int,
         default=40,
         help="collision-free starts to plan, then stop",
+    )
+    parser.add_argument(
+        "--n-walls",
+        type=int,
+        default=1,
+        help="Unused. The maze is one wall with a centered gap.",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -186,7 +274,7 @@ def main() -> None:
         worlds = []
         draw_ids = []
         for _ in range(batch):
-            state, obs = sample_candidate(rng)
+            state, obs = sample_candidate(rng, args.n_walls)
             draws += 1
             states.append(state)
             worlds.append(obs)
@@ -242,12 +330,12 @@ def main() -> None:
     np.savez(
         args.out,
         starts=np.stack(starts) if starts else np.zeros((0, N_DIMS), np.float32),
-        obstacles=np.stack(obstacles) if obstacles else np.zeros((0, 2), np.float32),
+        obstacles=np.stack(obstacles) if obstacles else np.zeros((0, WORLD_STRIDE), np.float32),
         seeds=np.asarray(seeds, dtype=np.int64),
         paths=np.array(paths, dtype=object),
         cost_exp=np.array(cost_exps, dtype=object),
         first_sol_expansions=np.asarray(first_sols, dtype=np.int64),
-        problem_class=np.array("2T1O_clear"),
+        problem_class=np.array("2T1W_clear"),
         max_expansions=np.array(limit),
     )
     print(f"wrote {len(starts)} problems to {args.out}")

@@ -242,7 +242,6 @@ If no test case is specified, the default start/goal from the configuration file
 - `resolution`: Starting resolution used for discretization
 - `epsilon`: Goal region tolerance [ate, cte, heading, vel] - along-track error, cross-track error, heading tolerance, velocity tolerance
 - `tolerance`: Minimum separation between vertices (your perception/map resolution should be at least this)
-- `max_level`: Maximum level to which the system can go (used to cache hash values)
 - `division_factor`: Factor by which the resolution increases every level
 - `max_expansions`: Maximum number of node expansions allowed
 - `hysteresis`: Hysteresis threshold for IGHA*-H algorithm

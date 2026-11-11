@@ -61,7 +61,6 @@ Set these under `experiment_info_default` (see `examples/standalone/Configs/gene
 | `resolution` | Start grid size per dim (length `state_dim`) |
 | `tolerance` | Dedup tolerance per dim |
 | `bounds_lower` / `bounds_upper` | State bounds (length `state_dim`). Children outside the box are dropped in successor generation (in addition to `validity_fn`). Omit both to leave the box unbounded. Length must equal `state_dim` (same for `resolution`, `tolerance`, and optional `LCR`). |
-| `max_level` | Number of resolution levels |
 | `division_factor` | Resolution shrink factor per level |
 | `max_expansions` | Search budget |
 | `hysteresis` | Resolution-switch threshold |

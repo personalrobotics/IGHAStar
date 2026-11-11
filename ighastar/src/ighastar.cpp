@@ -4,6 +4,7 @@
 #include <deque>
 #include <fstream>
 #include <memory>
+#include <exception>
 #include <mutex>
 #include <queue>
 #include <random>
@@ -109,6 +110,7 @@ public:
   int Q_v_size;
   int max_level_profile;
   std::vector<int> expansion_list;
+  std::vector<int> level_list; // level the search moved to at each switch (parallel to expansion_list)
   std::vector<float> cost_exp_list;
 
   // Preemptive expansion: optionally batch GPU successor calls for several Q_v
@@ -124,6 +126,36 @@ public:
   int max_preemptive = 0;
   std::deque<std::shared_ptr<Node>> unexpanded_stash;
   long preemptive_expansions = 0;
+  // Which stash vertices a preemptive batch takes. Default (fifo): the oldest discovered first. best_f: the lowest
+  // f first, which are the vertices the search is about to pop, and vertices that are not active are dropped
+  // (they cannot be popped until they are re-activated). Set with preemptive_expansion: {policy: best_f}.
+  bool stash_best_first = false;
+  std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>,
+                      NodePtrCompare>
+      stash_pq;
+  long preemptive_hits = 0; // preemptively expanded vertices the search went on to pop
+  size_t stash_size() const {
+    return stash_best_first ? stash_pq.size() : unexpanded_stash.size();
+  }
+  bool stash_empty() const { return stash_size() == 0; }
+  void stash_push(const std::shared_ptr<Node> &n) {
+    if (stash_best_first) {
+      stash_pq.push(n);
+    } else {
+      unexpanded_stash.push_back(n);
+    }
+  }
+  std::shared_ptr<Node> stash_pop() {
+    std::shared_ptr<Node> n;
+    if (stash_best_first) {
+      n = stash_pq.top();
+      stash_pq.pop();
+    } else {
+      n = unexpanded_stash.front();
+      unexpanded_stash.pop_front();
+    }
+    return n;
+  }
   // Nodes holding preemptively cached successors. Each child keeps its parent
   // alive (`Node::parent`) while the parent keeps the child (`cached_succ`), so
   // a cache that is never consumed is a reference cycle: these are cleared on
@@ -139,6 +171,9 @@ public:
     }
     preexpanded_nodes.clear();
     unexpanded_stash.clear();
+    stash_pq = std::priority_queue<std::shared_ptr<Node>,
+                                   std::vector<std::shared_ptr<Node>>,
+                                   NodePtrCompare>();
   }
 
   IGHAStar(const py::dict &config, bool debug_ = false,
@@ -161,6 +196,16 @@ public:
       min_preemptive = pe_config.contains("min_preemptive")
                            ? pe_config["min_preemptive"].cast<int>()
                            : max_preemptive;
+      if (pe_config.contains("policy")) {
+        const std::string policy = pe_config["policy"].cast<std::string>();
+        if (policy == "best_f") {
+          stash_best_first = true;
+        } else if (policy != "fifo") {
+          throw std::invalid_argument(
+              "preemptive_expansion.policy must be fifo or best_f, got " +
+              policy);
+        }
+      }
     }
     if (preemptive_enabled && max_preemptive > 0) {
       // Clamp the gating threshold into [1, max_preemptive].
@@ -214,10 +259,12 @@ public:
     switches = 0;
     max_level_profile = 0;
     expansion_list.clear();
+    level_list.clear();
     cost_exp_list.clear();
     // preemptive expansion reset:
     release_preemptive_caches();
     preemptive_expansions = 0;
+    preemptive_hits = 0;
   }
 
   // activate method for HA*M
@@ -465,7 +512,7 @@ public:
         if (preemptive_enabled) {
           // Both active and inactive newly-discovered vertices are eligible for
           // preemptive expansion in a later iteration.
-          unexpanded_stash.push_back(neighbor);
+          stash_push(neighbor);
         }
       }
     }
@@ -487,8 +534,7 @@ public:
     // with only a handful of nodes would underutilize the GPU, so below that
     // threshold we defer: a cache hit returns immediately with no GPU work, and
     // a cache miss expands only v.
-    bool do_preempt =
-        static_cast<int>(unexpanded_stash.size()) >= min_preemptive;
+    bool do_preempt = static_cast<int>(stash_size()) >= min_preemptive;
 
     if (!v_needs_expand && !do_preempt) {
       // Cache hit while the stash is still filling: serve the cached successors
@@ -496,6 +542,7 @@ public:
       std::vector<std::shared_ptr<Node>> v_successors =
           std::move(v->cached_succ);
       v->cached_succ.clear();
+      preemptive_hits++;
       return v_successors;
     }
 
@@ -508,16 +555,29 @@ public:
     // only when the stash is full enough to make a batched launch worthwhile.
     while (do_preempt &&
            static_cast<int>(preempt_nodes.size()) < max_preemptive &&
-           !unexpanded_stash.empty()) {
-      std::shared_ptr<Node> p = unexpanded_stash.front();
-      unexpanded_stash.pop_front();
+           !stash_empty()) {
+      std::shared_ptr<Node> p = stash_pop();
       // Skip: v (already handled above), already-expanded vertices, and
-      // vertices no longer promising (would be pruned anyway).
-      if (p == v || p->preexpanded || p->f >= Omega) {
+      // vertices no longer promising (would be pruned anyway). Best-first
+      // also skips inactive vertices: the search cannot pop them yet.
+      if (p == v || p->preexpanded || p->f >= Omega ||
+          (stash_best_first && !p->active)) {
         continue;
       }
       preempt_nodes.push_back(p);
       batch.push_back(p);
+    }
+
+    // Best-first drops vertices it cannot use, so the gate above (which counts the whole stash) can leave a
+    // batch smaller than min_preemptive. A batch that small would underutilize the GPU: put the vertices back and
+    // expand only v this time.
+    if (stash_best_first && !preempt_nodes.empty() &&
+        static_cast<int>(preempt_nodes.size()) < min_preemptive) {
+      for (auto &p : preempt_nodes) {
+        stash_pq.push(p);
+      }
+      batch.resize(v_needs_expand ? 1 : 0);
+      preempt_nodes.clear();
     }
 
     std::vector<std::shared_ptr<Node>> v_successors;
@@ -544,6 +604,7 @@ public:
       // Cache hit: consume and release the cached successors.
       v_successors = std::move(v->cached_succ);
       v->cached_succ.clear();
+      preemptive_hits++;
     }
     return v_successors;
   }
@@ -671,6 +732,7 @@ public:
       Q_v_size += Q_v.size();
       switches++;
       expansion_list.push_back(expansion_counter);
+      level_list.push_back(level);
       if (Q_v.empty() && inactive_Q_v.empty()) {
         cost_exp_list.push_back(Omega);
         break;
@@ -766,6 +828,8 @@ public:
 
   // Number of vertices expanded preemptively (cached) during the last search.
   long get_preemptive_expansions() { return preemptive_expansions; }
+  long get_preemptive_hits() { return preemptive_hits; }
+  std::vector<int> get_level_history() { return level_list; }
 
   // Export Seen ∪ Q_v ∪ inactive_Q_v as a Python dict for viz / ML.
   py::dict export_search_tree() {
@@ -786,6 +850,10 @@ public:
   std::atomic<int> total_expansions{0};
   std::atomic<bool> search_complete{false};
   std::atomic<bool> forward_finished{false};
+  // First exception thrown inside a search thread; search() rethrows it after both threads join (an exception that
+  // escapes a std::thread would call std::terminate).
+  std::exception_ptr worker_error;
+  std::mutex worker_error_mutex;
   std::atomic<bool> backward_finished{false};
 
   // LCR_table data structures for near-meet detection (protected by LCR_mutex)
@@ -1075,6 +1143,30 @@ public:
   // Worker function for one search direction
   // Structure mirrors IGHAStar::search() with added synchronization and
   // near-meet detection
+  // Runs search_worker. If it throws, record the error and release the other thread: it may be waiting at the
+  // expansion barrier, and both loops stop once search_complete is set.
+  void search_worker_guarded(IGHAStar *search, IGHAStar *other_search,
+                             std::shared_ptr<Node> start_node,
+                             std::shared_ptr<Node> goal_node,
+                             std::shared_ptr<Node> other_start_node,
+                             int expansion_limit, int hysteresis_threshold,
+                             bool is_forward, std::ostream &log_stream) {
+    try {
+      search_worker(search, other_search, start_node, goal_node, other_start_node, expansion_limit,
+                    hysteresis_threshold, is_forward, log_stream);
+    } catch (...) {
+      {
+        std::lock_guard<std::mutex> lock(worker_error_mutex);
+        if (!worker_error)
+          worker_error = std::current_exception();
+      }
+      search_complete.store(true);
+      (is_forward ? forward_finished : backward_finished).store(true);
+      if (!(is_forward ? backward_finished : forward_finished).load())
+        expansion_barrier->arrive_and_notify();
+    }
+  }
+
   void search_worker(IGHAStar *search, IGHAStar *other_search,
                      std::shared_ptr<Node> start_node,
                      std::shared_ptr<Node> goal_node,
@@ -1303,7 +1395,7 @@ public:
             if (search->preemptive_enabled) {
               // Newly discovered vertex becomes eligible for preemptive
               // expansion in a later iteration of this search direction.
-              search->unexpanded_stash.push_back(neighbor);
+              search->stash_push(neighbor);
             }
             if (debug) {
               log_stream << "inserted node into Q_v and updated G" << std::endl;
@@ -1450,6 +1542,7 @@ public:
     shared_Omega.store(1e5f);
     total_expansions.store(0);
     search_complete.store(false);
+    worker_error = nullptr;
     forward_finished.store(false);
     backward_finished.store(false);
     best_path.clear();
@@ -1550,12 +1643,12 @@ public:
     }
     // Launch parallel search threads with log streams
     std::thread forward_thread(
-        &BiIGHAStar::search_worker, this, forward_search, backward_search,
+        &BiIGHAStar::search_worker_guarded, this, forward_search, backward_search,
         forward_start, forward_goal, backward_start, expansion_limit,
         hysteresis_threshold, true, std::ref(forward_log));
 
     std::thread backward_thread(
-        &BiIGHAStar::search_worker, this, backward_search, forward_search,
+        &BiIGHAStar::search_worker_guarded, this, backward_search, forward_search,
         backward_start, backward_goal, forward_start, expansion_limit,
         hysteresis_threshold, false, std::ref(backward_log));
     end_time = std::chrono::high_resolution_clock::now();
@@ -1588,6 +1681,11 @@ public:
     // Wait for both threads to complete
     forward_thread.join();
     backward_thread.join();
+    if (worker_error) {
+      auto error = worker_error;
+      worker_error = nullptr;
+      std::rethrow_exception(error);
+    }
 
     // Close log files
     forward_log.close();
@@ -1750,7 +1848,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("get_profiler_info", &IGHAStar::get_profiler_info)
       .def("get_preemptive_expansions",
            &IGHAStar::get_preemptive_expansions)
+      .def("get_preemptive_hits", &IGHAStar::get_preemptive_hits)
+      .def("get_level_history", &IGHAStar::get_level_history)
       .def("export_search_tree", &IGHAStar::export_search_tree);
+
+#ifdef IGHASTAR_HAS_PUSHT_MULTI_STEP
+  m.def("step", &pusht_multi_step, py::arg("state"), py::arg("world"),
+        py::arg("target"), py::arg("n_substeps") = 10,
+        py::arg("close_right") = true, py::arg("max_agent_vel") = 500.0,
+        "Step the multi-tee Chipmunk world. target is one xy per agent.");
+#endif
 
   py::class_<BiIGHAStar>(m, "BiIGHAStar", py::module_local())
       .def(py::init<const py::dict &, bool>(), py::arg("config"),

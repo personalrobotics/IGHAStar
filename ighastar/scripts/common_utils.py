@@ -226,6 +226,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
         "pusht_qs_cuda",
         "pusht_qs",
         "pusht_multi",
+        "pusht_multi_2a",
     ):
         raise NotImplementedError(
             "PushT backward dynamics are not implemented; use bidirectional=False."
@@ -257,10 +258,17 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
         return kernel.IGHAStar(configs, False)
 
     # PushT / multi-T: Chipmunk CPU env (header + vendored Chipmunk sources).
-    if env_name in ("pusht", "pusht_multi"):
+    if env_name in ("pusht", "pusht_multi", "pusht_multi_2a"):
         env_header = "pusht.h" if env_name == "pusht" else "pusht_multi.h"
-        ext_name = (
-            "ighastar_pusht_v2" if env_name == "pusht" else "ighastar_pusht_multi"
+        agents = 2 if env_name in ("pusht_multi_2a",) else 1
+        if env_name == "pusht":
+            ext_name = "ighastar_pusht_v2"
+        elif agents == 1:
+            ext_name = "ighastar_pusht_multi"
+        else:
+            ext_name = f"ighastar_pusht_multi_a{agents}"
+        agent_flag = (
+            [] if env_name == "pusht" else [f"-DPUSHT_MULTI_AGENTS={agents}"]
         )
         chipmunk_root = (
             pathlib.Path(os.environ["PUSHT_CHIPMUNK_DIR"])
@@ -290,6 +298,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
                 "-DNDEBUG",
                 "-DCP_USE_DOUBLES=1",
                 env_header_flag(env_header),
+                *agent_flag,
                 *hash_cflags,
             ],
             extra_ldflags=["-fopenmp", "-lm"],

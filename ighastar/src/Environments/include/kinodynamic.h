@@ -8,6 +8,7 @@
 #include <random>
 #include <string>
 #include <torch/extension.h>
+#include "lazy_index.h"
 
 using namespace std;
 
@@ -50,7 +51,7 @@ public:
   bool active;
   int rank, level;
   size_t hash;
-  std::vector<size_t> index;
+  LazyIndex<n_dims, calc_hash> index;
   size_t LCR_index;
   std::shared_ptr<Node> parent;
   int time_direction;
@@ -66,7 +67,7 @@ public:
   // Constructor
   Node(const float *pose_in, const float *intermediate_poses_,
        std::shared_ptr<Node> parent_in, float g_in, const float *resolution_,
-       float *tolerance, int max_level, float division_factor, int timesteps,
+       float *tolerance, float division_factor, int timesteps,
        const float *LCR_, int time_direction_ = 1,
        const float *intermediate_controls_ = nullptr)
       : g(g_in), f(0), parent(parent_in), active(true), rank(0), level(0),
@@ -102,16 +103,7 @@ public:
     LCR_index = calc_hash(pose, LCR_);
 
     hash = calc_hash(pose, tolerance);
-    float resolution[n_dims];
-    for (int i = 0; i < n_dims; i++) {
-      resolution[i] = resolution_[i];
-    }
-    for (int i = 0; i < max_level; i++) {
-      index.push_back(calc_hash(pose, resolution));
-      for (int j = 0; j < n_dims; j++) {
-        resolution[j] = resolution[j] / division_factor;
-      }
-    }
+    index.init(pose, resolution_, division_factor);
   }
 
   // Destructor to clean up intermediate_poses
@@ -178,7 +170,6 @@ public:
   NearMeet2PBVP near_meet_;
   sampling::GoalSamplingConfig goal_sampling;
   float tolerance[n_dims];
-  int max_level;
   int timesteps;
   int time_direction;
   Environment(const py::dict &config, int time_direction_ = 1)
@@ -190,7 +181,6 @@ public:
     auto node_info = info["node_info"].cast<py::dict>();
     // Top-level fields
     map_res = node_info["map_res"].cast<float>();
-    max_level = info["max_level"].cast<int>();
     division_factor = info["division_factor"].cast<float>();
 
     set_map_config(node_info);
@@ -560,7 +550,7 @@ public:
   // Creates a new Node with the given pose
   std::shared_ptr<Node> create_Node(float *pose) {
     return std::make_shared<Node>(pose, nullptr, nullptr, 0, resolution,
-                                  tolerance, max_level, division_factor,
+                                  tolerance, division_factor,
                                   timesteps, local_controllability_radius,
                                   time_direction);
   }
@@ -811,8 +801,7 @@ public:
         // Create node
         auto node = std::make_shared<Node>(
             sampled_pose, intermediate_poses, start_node,
-            start_node->g + g_value, resolution, tolerance, max_level,
-            division_factor, timesteps, local_controllability_radius,
+            start_node->g + g_value, resolution, tolerance, division_factor, timesteps, local_controllability_radius,
             time_direction);
 
         delete[] intermediate_poses;
@@ -879,7 +868,7 @@ public:
         }
         neighbor = std::make_shared<Node>(
             new_pose, new_intermediate_pose, node, node->g + cost[i],
-            resolution, tolerance, max_level, division_factor, timesteps,
+            resolution, tolerance, division_factor, timesteps,
             local_controllability_radius, time_direction, controls_seq);
         delete[] new_intermediate_pose;
         delete[] controls_seq;
@@ -1012,8 +1001,7 @@ public:
           }
           auto neighbor = std::make_shared<Node>(
               new_pose, new_intermediate_pose, nodes[i],
-              nodes[i]->g + cost[row], resolution, tolerance, max_level,
-              division_factor, timesteps, local_controllability_radius,
+              nodes[i]->g + cost[row], resolution, tolerance, division_factor, timesteps, local_controllability_radius,
               time_direction, controls_seq);
           delete[] new_intermediate_pose;
           delete[] controls_seq;

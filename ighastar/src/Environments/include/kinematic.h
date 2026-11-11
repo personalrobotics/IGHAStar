@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <memory>
 #include <torch/extension.h>
+#include "lazy_index.h"
 
 using namespace std;
 
@@ -51,7 +52,7 @@ public:
   size_t
       LCR_index; // Hash for local controllability radius (near-meet detection)
   int time_direction; // 1 for forward, -1 for backward
-  std::vector<size_t> index;
+  LazyIndex<hash_dims, calc_hash> index;
   std::shared_ptr<Node> parent;
   // Preemptive expansion bookkeeping: whether this node's successors have
   // already been computed (and cached) before it was popped from Q_v.
@@ -65,7 +66,7 @@ public:
   // Constructor
   Node(const float *pose_in, const float *intermediate_poses_,
        std::shared_ptr<Node> parent_in, float g_in, const float *resolution_,
-       float *tolerance, int max_level, float division_factor, int timesteps,
+       float *tolerance, float division_factor, int timesteps,
        const float *LCR_, int time_direction_ = 1,
        const float *intermediate_controls_ = nullptr)
       : intermediate_poses(nullptr), intermediate_controls(nullptr), g(g_in),
@@ -100,16 +101,7 @@ public:
     // Compute LCR_index using local_controllability_radius from config
     LCR_index = calc_hash(pose, LCR_);
     hash = calc_hash(pose, tolerance);
-    float resolution[n_dims];
-    for (int i = 0; i < n_dims; i++) {
-      resolution[i] = resolution_[i];
-    }
-    for (int i = 0; i < max_level; i++) {
-      index.push_back(calc_hash(pose, resolution));
-      for (int j = 0; j < n_dims; j++) {
-        resolution[j] = resolution[j] / division_factor;
-      }
-    }
+    index.init(pose, resolution_, division_factor);
   }
 
   // Destructor to clean up intermediate_poses
@@ -163,7 +155,6 @@ class Environment {
   cudaStream_t cuda_stream;
 
 public:
-  int max_level;
   int timesteps;
   int time_direction;
   float resolution[n_dims];
@@ -182,7 +173,6 @@ public:
     auto node_info = info["node_info"].cast<py::dict>();
     // Top-level fields
     map_res = node_info["map_res"].cast<float>();
-    max_level = info["max_level"].cast<int>();
     division_factor = info["division_factor"].cast<float>();
 
     set_resolutions(info, node_info);
@@ -434,7 +424,7 @@ public:
   // Creates a new Node with the given pose
   std::shared_ptr<Node> create_Node(float *pose) {
     return std::make_shared<Node>(pose, nullptr, nullptr, 0, resolution,
-                                  tolerance, max_level, division_factor,
+                                  tolerance, division_factor,
                                   timesteps, local_controllability_radius,
                                   time_direction);
   }
@@ -608,7 +598,7 @@ public:
         }
         neighbor = std::make_shared<Node>(
             new_pose, new_intermediate_pose, node, node->g + cost[i],
-            resolution, tolerance, max_level, division_factor, timesteps,
+            resolution, tolerance, division_factor, timesteps,
             local_controllability_radius, time_direction, controls_seq);
         delete[] new_intermediate_pose;
         delete[] controls_seq;
@@ -742,8 +732,7 @@ public:
           }
           auto neighbor = std::make_shared<Node>(
               new_pose, new_intermediate_pose, nodes[i],
-              nodes[i]->g + cost[row], resolution, tolerance, max_level,
-              division_factor, timesteps, local_controllability_radius,
+              nodes[i]->g + cost[row], resolution, tolerance, division_factor, timesteps, local_controllability_radius,
               time_direction, controls_seq);
           delete[] new_intermediate_pose;
           delete[] controls_seq;

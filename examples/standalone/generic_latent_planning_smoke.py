@@ -158,7 +158,6 @@ def main() -> None:
             "tolerance": tolerance,
             "bounds_lower": [-1e9] * LATENT_DIM,
             "bounds_upper": [1e9] * LATENT_DIM,
-            "max_level": 4,
             "division_factor": 2.0,
             "max_expansions": 20000,
             "hysteresis": 2000,
