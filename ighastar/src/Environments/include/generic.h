@@ -176,7 +176,7 @@ public:
       float h_to_goal = heuristic(pose, goal->pose);
       auto node = std::make_shared<Node>(
           pose, nullptr, start, start->g + g_value, resolution, tolerance,
-          max_level, division_factor, timesteps,
+          division_factor, timesteps,
           local_controllability_radius, time_direction);
       node->f = start->g + g_value + h_to_goal;
       std::vector<bool> valid;

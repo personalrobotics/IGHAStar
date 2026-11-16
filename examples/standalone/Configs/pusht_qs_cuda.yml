@@ -4,7 +4,6 @@ experiment_info_default:
   resolution: [40.0, 40.0, 40.0, 40.0, 0.5, 50.0, 50.0, 50.0, 50.0, 0.5]
   tolerance: [1.0, 1.0, 1.0, 1.0, 0.01, 25.0, 25.0, 25.0, 25.0, 0.25]
   epsilon: [1.0, 1.0, 20.0, 20.0, 0.349, 1e9, 1e9, 1e9, 1e9, 1e9]
-  max_level: 3
   division_factor: 2.0
   max_expansions: 25000
   hysteresis: 500

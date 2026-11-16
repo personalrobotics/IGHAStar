@@ -45,7 +45,6 @@ class EnvironmentTester:
                         5.0,
                     ],  # ate, cte, heading, vel for goal region
                     "tolerance": 0.5,
-                    "max_level": 5,
                     "division_factor": 2.0,
                     "max_expansions": 100000,
                     "hysteresis": 20000,
@@ -81,7 +80,6 @@ class EnvironmentTester:
                         5.0,
                     ],  # ate, cte, heading, vel for goal region
                     "tolerance": 0.5,
-                    "max_level": 5,
                     "division_factor": 2.0,
                     "max_expansions": 100000,
                     "hysteresis": 1000,
@@ -112,7 +110,6 @@ class EnvironmentTester:
                     "resolution": 20.0,
                     "epsilon": [20.0, 20.0],  # x, y for goal region
                     "tolerance": 0.01,
-                    "max_level": 5,
                     "division_factor": 2.0,
                     "max_expansions": 100000,
                     "hysteresis": 1000,

@@ -1,0 +1,33 @@
+# 2T1W2A clear, split agents: agent 0 in the top half (y >= 256), agent 1 in the bottom half,
+# centers at least 50 px apart. Wall is vertical, both tees start left of it.
+# State [20]: a0x a0y a1x a1y | t0 | t1 | a0v a1v | t0v t1v.
+# Each successor moves one agent on the same ring as the single pusher.
+# The other agent is commanded to hold. Clear bits stay on the node.
+experiment_info_default:
+  resolution: [40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 0.5, 40.0, 40.0, 0.5, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 0.5, 50.0, 50.0, 0.5]
+  tolerance: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.01, 1.0, 1.0, 0.01, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 0.25, 25.0, 25.0, 0.25]
+  epsilon: [1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9]
+  division_factor: 2.0
+  max_expansions: 100000
+  hysteresis: 500
+  node_info:
+    node_type: "pusht_multi_2a"
+    n_substeps: 10
+    workspace_lo: 0.0
+    workspace_hi: 512.0
+    agent_x_hi: 700.0
+    exit_x0: 512.0
+    exit_x1: 700.0
+    exit_y0: 0.0
+    exit_y1: 512.0
+    num_tees: 2
+    num_agents: 2
+    agent_y_split: 256.0
+    min_agent_separation: 50.0
+    objective: clear
+    max_agent_force: 150000.0
+    n_directions: 24
+    action_radii: [200.0]
+    max_agent_vel: 500.0
+    max_penetration_px: 1.0
+    dynamics: chipmunk

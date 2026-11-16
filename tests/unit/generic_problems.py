@@ -103,7 +103,6 @@ def make_configs(
         "tolerance": [0.1, 0.1],
         "bounds_lower": [0.0, 0.0],
         "bounds_upper": [10.0, 10.0],
-        "max_level": 4,
         "division_factor": 2.0,
         "max_expansions": 50000,
         "hysteresis": 1000,

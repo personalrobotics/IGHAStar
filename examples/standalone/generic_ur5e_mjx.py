@@ -205,7 +205,6 @@ def main() -> None:
             "tolerance": [0.05] * STATE_DIM,
             "bounds_lower": JOINT_LOWER.tolist(),
             "bounds_upper": JOINT_UPPER.tolist(),
-            "max_level": 4,
             "division_factor": 2.0,
             "max_expansions": 20000,
             "hysteresis": 2000,

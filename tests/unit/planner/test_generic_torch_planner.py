@@ -112,10 +112,11 @@ def test_repeated_search_is_deterministic(torch_result):
     assert torch.equal(r["planner"].get_best_path(), r["path"])
 
 
-def test_preemptive_matches_non_preemptive_solution():
-    """Preemptive batching must not change the solution (same best cost).
+@pytest.mark.parametrize("policy", ["fifo", "best_f"])
+def test_preemptive_matches_non_preemptive_solution(policy):
+    """Preemptive batching must not change the solution (same best cost), for either stash policy.
 
-    Expansion counts can differ (FIFO stash vs pure f-order); the returned
+    Expansion counts can differ (stash order vs pure f-order); the returned
     best-path cost must match. Also checks that preemption actually fired.
     """
     cbs = gp.callbacks()
@@ -124,12 +125,18 @@ def test_preemptive_matches_non_preemptive_solution():
         "generic", cbs, preemptive_expansion={**pe, "enabled": False}
     )
     on = solve(
-        "generic", cbs, preemptive_expansion={**pe, "enabled": True}
+        "generic", cbs, preemptive_expansion={**pe, "enabled": True, "policy": policy}
     )
     assert off["ok"] and on["ok"]
     assert off["planner"].get_preemptive_expansions() == 0
     assert on["planner"].get_preemptive_expansions() > 0
     assert abs(float(off["path"][0, -1]) - float(on["path"][0, -1])) < 1e-5
+
+
+def test_unknown_stash_policy_is_rejected():
+    with pytest.raises(ValueError, match="policy"):
+        plan("generic", gp.callbacks(),
+             preemptive_expansion={"min_preemptive": 8, "max_preemptive": 32, "enabled": True, "policy": "lifo"})
 
 
 # --------------------------------------------------------------------------
@@ -274,6 +281,22 @@ def test_bidirectional_generic_torch():
     assert 9.0 < cost < 13.0
     path = planner.get_best_path()
     assert path.shape[0] > 0
+
+
+@pytest.mark.parametrize("bidirectional", [False, True])
+def test_level_with_unhashable_cell_size_raises(bidirectional):
+    # division_factor 1e30 makes the level-1 cell size 1e-30: pose / cell size no longer fits the hash. The search must
+    # report that as an exception (not read garbage, and not abort the process from a bidirectional worker thread).
+    cbs = gp.callbacks(goal_test=gp.goal_test_never)
+    planner, configs = plan(
+        "generic_torch",
+        cbs,
+        bidirectional=bidirectional,
+        division_factor=1e30,
+        goal_sampling_config={"space_type": "R_N", "angular_dims": []},
+    )
+    with pytest.raises(RuntimeError, match="IGHA\\* level"):
+        planner.search(gp.START.clone(), gp.GOAL.clone(), torch.zeros(1), 50000, 1000, True)
 
 
 def test_bidirectional_rejects_angular_dims_outside_the_state():
