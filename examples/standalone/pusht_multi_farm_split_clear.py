@@ -96,9 +96,14 @@ def worker(args):
 def merge(args):
     keep = {k: [] for k in KEYS}
     for k in range(args.workers):
-        d = np.load(shard_path(k), allow_pickle=True)
+        path = shard_path(k)
+        if not os.path.isfile(path):
+            continue  # a worker that found nothing never writes a shard
+        d = np.load(path, allow_pickle=True)
         for key in KEYS:
             keep[key] += list(d[key])
+    if not keep["starts"]:
+        raise SystemExit("no shard files to merge")
     n = min(args.n, len(keep["starts"]))
     np.savez(
         OUT,

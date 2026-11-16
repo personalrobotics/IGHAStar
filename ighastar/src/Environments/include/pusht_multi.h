@@ -536,6 +536,14 @@ public:
         world_is_batch && world_stride > 0 &&
         static_cast<int>(world_rows.size()) == world_stride * n;
     std::vector<char> ok(n, 0);
+    // read_walls throws when a row holds more than kMaxWalls segments. An exception
+    // inside the OpenMP loop terminates the process, so parse every row here first.
+    if (per_row) {
+      for (int i = 0; i < n; i++) {
+        pusht_multi_physics::WallSpec row[pusht_multi_physics::kMaxWalls];
+        read_walls(world_rows.data() + i * world_stride, world_stride, row);
+      }
+    }
 #pragma omp parallel for schedule(static)
     for (int i = 0; i < n; i++) {
       pusht_multi_physics::WallSpec row[pusht_multi_physics::kMaxWalls];

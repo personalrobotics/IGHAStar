@@ -48,9 +48,10 @@ BASELINE = dict(res_xy=40.0, radii=(200.0,), vmax=500.0, n_directions=24, n_subs
 
 
 def tag(c):
-    s = f"ndir={c['n_directions']} nsub={c['n_substeps']} res={c['res_xy']:g}"
+    # repr round-trips, so 1.0718 and 1.07181 stay different keys.
+    s = f"ndir={c['n_directions']} nsub={c['n_substeps']} res={c['res_xy']!r}"
     if c.get("div", 2.0) != 2.0 or c.get("tol_theta", 0.01) != 0.01:
-        s += f" div={c.get('div', 2.0):.4f} tolth={c.get('tol_theta', 0.01):g}"
+        s += f" div={c.get('div', 2.0)!r} tolth={c.get('tol_theta', 0.01)!r}"
     return s
 
 
@@ -159,7 +160,7 @@ def out_path(a):
 
 def summary(a):
     rows = []
-    for k in range(10):
+    for k in range(a.workers):
         p = out_path(a).replace(".csv", f"_shard{k}.csv")
         if os.path.isfile(p):
             rows += list(csv.DictReader(open(p)))

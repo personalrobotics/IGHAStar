@@ -278,7 +278,7 @@ def main():
     starts, goals, obstacles, paths, cost_exps, first_sols, metas = [], [], [], [], [], [], []
 
     def write():
-        os.makedirs(os.path.dirname(out), exist_ok=True)
+        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
         np.savez(out, starts=np.stack(starts), goals=np.stack(goals),
                  obstacles=np.stack(obstacles), paths=np.array(paths, dtype=object),
                  cost_exp=np.array(cost_exps, dtype=object),

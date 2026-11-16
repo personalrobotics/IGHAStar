@@ -67,11 +67,15 @@ def gap_wall(orient, coord, gap_lo, gap_hi):
 
 
 def pack_walls(segments) -> np.ndarray:
-    """segments: ((x1, y1), (x2, y2)). Unused slots stay 0."""
+    """segments: ((x1, y1), (x2, y2)). Unused slots stay 0.
+
+    More than MAX_WALLS is an error. Truncating would hand the planner a shorter maze.
+    """
+    if len(segments) > MAX_WALLS:
+        raise ValueError(f"{len(segments)} wall segments, at most {MAX_WALLS}")
     row = np.zeros(WORLD_STRIDE, dtype=np.float32)
-    n = min(len(segments), MAX_WALLS)
-    row[0] = n
-    for i, (a, b) in enumerate(segments[:n]):
+    row[0] = len(segments)
+    for i, (a, b) in enumerate(segments):
         row[1 + 4 * i : 5 + 4 * i] = (a[0], a[1], b[0], b[1])
     return row
 
@@ -221,6 +225,22 @@ def self_check(planner, check_exit: bool = True) -> None:
         exit_ok = exit_mask.detach().cpu().numpy().astype(bool)
         if exit_ok[0] or not exit_ok[1]:
             raise SystemExit(f"exit self-check failed: mask={exit_ok.tolist()}")
+    # Bar corner of a tee at (256, 256) angle 0 is (316, 286). This segment sits just
+    # outside that corner (distance 2.8 > wall radius 2). A bounding box expanded by
+    # the radius still overlaps it.
+    corner = pack_walls([((318.0, 288.0), (320.0, 290.0))])
+    near = pack_state(80.0, 80.0, (256.0, 256.0, 0.0), (80.0, 200.0, 0.0))
+    near_ok = planner.check_validity_batched(
+        torch.from_numpy(near).unsqueeze(0), torch.from_numpy(corner)
+    )
+    if not bool(near_ok.detach().cpu().numpy().astype(bool)[0]):
+        raise SystemExit("corner clearance self-check failed: bounding box treated as a hit")
+    try:
+        pack_walls([((0.0, 0.0), (1.0, 0.0))] * (MAX_WALLS + 1))
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("pack_walls accepted more than MAX_WALLS segments")
     print("validity self-check passed")
 
 

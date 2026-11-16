@@ -387,25 +387,67 @@ inline bool shapes_overlap(cpShape *a, cpShape *b) {
 }
 
 // cpShapesCollide misses a segment that enters one side of a polygon and
-// leaves the other. The segment's bounds are correct, so test those.
-inline bool segment_hits_bb(cpBB bb, cpVect a, cpVect b, cpFloat radius) {
-  bb.l -= radius;
-  bb.r += radius;
-  bb.b -= radius;
-  bb.t += radius;
-  const float x0 = static_cast<float>(std::min(a.x, b.x));
-  const float x1 = static_cast<float>(std::max(a.x, b.x));
-  const float y0 = static_cast<float>(std::min(a.y, b.y));
-  const float y1 = static_cast<float>(std::max(a.y, b.y));
-  return x1 >= bb.l && x0 <= bb.r && y1 >= bb.b && y0 <= bb.t;
+// leaves the other, so overlap is tested exactly here: the capsule (segment plus
+// radius) overlaps a convex polygon when the segment crosses it or comes closer
+// than the radius. Touching is not overlap. A bounds test would reject a tee that
+// is tilted a few hundredths of a radian inside a slot with 5 px of clearance.
+inline double point_segment_dist(cpVect p, cpVect a, cpVect b) {
+  const cpVect ab = cpvsub(b, a);
+  const double len2 = cpvdot(ab, ab);
+  double t = len2 > 0.0 ? cpvdot(cpvsub(p, a), ab) / len2 : 0.0;
+  t = t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t);
+  return cpvlength(cpvsub(p, cpvadd(a, cpvmult(ab, t))));
+}
+
+inline bool segments_cross(cpVect a, cpVect b, cpVect c, cpVect d) {
+  const double d1 = cpvcross(cpvsub(b, a), cpvsub(c, a));
+  const double d2 = cpvcross(cpvsub(b, a), cpvsub(d, a));
+  const double d3 = cpvcross(cpvsub(d, c), cpvsub(a, c));
+  const double d4 = cpvcross(cpvsub(d, c), cpvsub(b, c));
+  return d1 * d2 < 0.0 && d3 * d4 < 0.0;
+}
+
+inline bool poly_hits_capsule(cpShape *poly, cpVect a, cpVect b, cpFloat radius) {
+  cpBody *body = cpShapeGetBody(poly);
+  const int n = cpPolyShapeGetCount(poly);
+  cpVect v[8];
+  // Tee quads have 4 vertices. Anything else counts as a hit so this never throws
+  // into the OpenMP validity loop.
+  if (n < 3 || n > 8)
+    return true;
+  // Wall segments sit on the static body at the origin, so their ends are world points.
+  for (int i = 0; i < n; i++)
+    v[i] = cpBodyLocalToWorld(body, cpPolyShapeGetVert(poly, i));
+  // Endpoint inside the polygon (either winding order).
+  for (const cpVect p : {a, b}) {
+    bool pos = false, neg = false;
+    for (int i = 0; i < n; i++) {
+      const double c = cpvcross(cpvsub(v[(i + 1) % n], v[i]), cpvsub(p, v[i]));
+      pos |= c > 0.0;
+      neg |= c < 0.0;
+    }
+    if (!(pos && neg))
+      return true;
+  }
+  double best = 1e30;
+  for (int i = 0; i < n; i++) {
+    const cpVect c = v[i], d = v[(i + 1) % n];
+    if (segments_cross(a, b, c, d))
+      return true;
+    best = std::min(best, point_segment_dist(a, c, d));
+    best = std::min(best, point_segment_dist(b, c, d));
+    best = std::min(best, point_segment_dist(c, a, b));
+    best = std::min(best, point_segment_dist(d, a, b));
+  }
+  return best < radius;
 }
 
 inline bool shape_hits_segment(cpShape *shape, cpShape *segment) {
   if (!shape || !segment)
     return false;
-  return segment_hits_bb(cpShapeGetBB(shape), cpSegmentShapeGetA(segment),
-                         cpSegmentShapeGetB(segment),
-                         cpSegmentShapeGetRadius(segment));
+  return poly_hits_capsule(shape, cpSegmentShapeGetA(segment),
+                           cpSegmentShapeGetB(segment),
+                           cpSegmentShapeGetRadius(segment));
 }
 
 // Start-state filter: overlapping shapes are invalid. Contact during a push
