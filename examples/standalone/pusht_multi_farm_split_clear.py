@@ -32,8 +32,19 @@ VIDEOS = os.path.join(CONTENT, "pusht_multi_2T1W2A_split_clear_farm_videos")
 KEYS = ("starts", "worlds", "seeds", "paths", "cost_exp", "first")
 
 
-def shard_path(k):
-    return OUT.replace(".npz", f"_shard{k}.npz")
+def run_id(args):
+    """Filename identity of one farm: budget plus every cell knob."""
+    radii = ",".join(repr(float(r)) for r in args.radii)
+    return (f"e{int(args.expansions)}_res{float(args.res_xy)!r}_r{radii}"
+            f"_v{float(args.vmax)!r}_d{int(args.ndir)}_s{int(args.nsub)}")
+
+
+def shard_path(args, k):
+    return OUT.replace(".npz", f"_{run_id(args)}_shard{k}.npz")
+
+
+def merged_path(args):
+    return OUT.replace(".npz", f"_{run_id(args)}.npz")
 
 
 def cell_from(args):
@@ -45,9 +56,9 @@ def total_kept(args, own):
     """Problems kept across all shards (own shard from memory, others from disk)."""
     n = len(own)
     for k in range(args.workers):
-        if k != args.shard and os.path.isfile(shard_path(k)):
+        if k != args.shard and os.path.isfile(shard_path(args, k)):
             try:
-                n += len(np.load(shard_path(k), allow_pickle=True)["starts"])
+                n += len(np.load(shard_path(args, k), allow_pickle=True)["starts"])
             except Exception:  # another worker is mid-write; count it next time
                 pass
     return n
@@ -61,8 +72,8 @@ def worker(args):
     # A respawn after a crash reseeds, so it does not redraw the start that crashed.
     rng = np.random.RandomState(1000 + args.shard + 7919 * args.attempt)
     keep = {k: [] for k in KEYS}
-    if os.path.isfile(shard_path(args.shard)):  # resume after a crash
-        old = np.load(shard_path(args.shard), allow_pickle=True)
+    if os.path.isfile(shard_path(args, args.shard)):  # resume after a crash
+        old = np.load(shard_path(args, args.shard), allow_pickle=True)
         keep = {k: list(old[k]) for k in KEYS}
     goal = torch.zeros(N_DIMS, dtype=torch.float32)
     planned = draws = 0
@@ -87,11 +98,11 @@ def worker(args):
                 n = len(keep["starts"])
                 for k, v in zip(KEYS, (s, w, 1000000 * args.attempt + 1000 * (args.shard + 1) + draws, p, cost_exp, first)):
                     keep[k].append(v)
-                render_video(p, w, os.path.join(VIDEOS, f"s{args.shard}_p{n:03d}_draw{draws}.mp4"))
+                render_video(p, w, os.path.join(VIDEOS, run_id(args), f"s{args.shard}_p{n:03d}_draw{draws}.mp4"))
                 # A crash mid-write must leave the previous checkpoint intact.
-                tmp = shard_path(args.shard) + ".tmp.npz"
+                tmp = shard_path(args, args.shard) + ".tmp.npz"
                 np.savez(tmp, **{k: np.array(v, dtype=object) for k, v in keep.items()})
-                os.replace(tmp, shard_path(args.shard))
+                os.replace(tmp, shard_path(args, args.shard))
             print(f"[shard {args.shard}] planned {planned} solved={ok} first_sol={first} "
                   f"kept={len(keep['starts'])} total={total_kept(args, keep['starts'])}/{args.n}", flush=True)
 
@@ -99,7 +110,7 @@ def worker(args):
 def merge(args):
     keep = {k: [] for k in KEYS}
     for k in range(args.workers):
-        path = shard_path(k)
+        path = shard_path(args, k)
         if not os.path.isfile(path):
             continue  # a worker that found nothing never writes a shard
         d = np.load(path, allow_pickle=True)
@@ -109,7 +120,7 @@ def merge(args):
         raise SystemExit("no shard files to merge")
     n = min(args.n, len(keep["starts"]))
     np.savez(
-        OUT,
+        merged_path(args),
         starts=np.stack(keep["starts"][:n]).astype(np.float32),
         obstacles=np.stack(keep["worlds"][:n]).astype(np.float32).reshape(n, WORLD_STRIDE),
         seeds=np.asarray(keep["seeds"][:n], dtype=np.int64),
@@ -118,9 +129,9 @@ def merge(args):
         first_sol_expansions=np.asarray(keep["first"][:n], dtype=np.int64),
         problem_class=np.array("2T1W2A_clear_split"),
         max_expansions=np.array(args.expansions),
-        cell=np.array(sweep.tag(cell_from(args))),
+        cell=np.array(run_id(args)),
     )
-    print(f"wrote {n} problems to {OUT}")
+    print(f"wrote {n} problems to {merged_path(args)}")
 
 
 def main():

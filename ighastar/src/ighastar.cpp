@@ -111,6 +111,7 @@ public:
   int max_level_profile;
   std::vector<int> expansion_list;
   std::vector<int> level_list; // level the search moved to at each switch (parallel to expansion_list)
+  int first_goal_level = -1;  // level in force when the first goal was popped, before the switch
   std::vector<float> cost_exp_list;
 
   // Preemptive expansion: optionally batch GPU successor calls for several Q_v
@@ -260,6 +261,7 @@ public:
     max_level_profile = 0;
     expansion_list.clear();
     level_list.clear();
+    first_goal_level = -1;
     cost_exp_list.clear();
     // preemptive expansion reset:
     release_preemptive_caches();
@@ -672,6 +674,10 @@ public:
         goal_reached = env->reached_goal_region(v, goal_node);
 
         if (goal_reached) {
+          // The switch below this loop moves to the next level at this same
+          // expansion count. Keep the level that actually found the goal.
+          if (first_goal_level < 0)
+            first_goal_level = level;
           SUCCESS = true;
           if (debug) {
             std::cout << "expansions: " << expansion_counter
@@ -830,6 +836,7 @@ public:
   long get_preemptive_expansions() { return preemptive_expansions; }
   long get_preemptive_hits() { return preemptive_hits; }
   std::vector<int> get_level_history() { return level_list; }
+  int get_first_goal_level() const { return first_goal_level; }
 
   // Export Seen ∪ Q_v ∪ inactive_Q_v as a Python dict for viz / ML.
   py::dict export_search_tree() {
@@ -1850,6 +1857,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
            &IGHAStar::get_preemptive_expansions)
       .def("get_preemptive_hits", &IGHAStar::get_preemptive_hits)
       .def("get_level_history", &IGHAStar::get_level_history)
+      .def("get_first_goal_level", &IGHAStar::get_first_goal_level)
       .def("export_search_tree", &IGHAStar::export_search_tree);
 
 #ifdef IGHASTAR_HAS_PUSHT_MULTI_STEP

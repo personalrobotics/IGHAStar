@@ -55,10 +55,9 @@ def main():
         shown[:n_levels] = share[:n_levels]
         shown[n_levels] = share[n_levels:].sum()
         tot += shown
-        at_first = -1
-        if first >= 0:
-            k = int(np.searchsorted(exp_list, first, side="right"))
-            at_first = 0 if k == 0 else lv[k - 1]
+        # The switch is recorded at the same expansion count as the goal, so
+        # looking the level up from that list reports the level after the switch.
+        at_first = int(planner.get_first_goal_level()) if first >= 0 else -1
         pct = shown / max(1.0, shown.sum()) * 100
         print(f"p{pi:03d}  {'yes' if ok else 'NO '}  {first:8d}  {maxlvl:4d} {switches:8d}   "
               + " ".join(f"{x:5.1f}%" for x in pct[:n_levels + 1]) + f"   {at_first:3d}   {wall:5.0f}s", flush=True)
