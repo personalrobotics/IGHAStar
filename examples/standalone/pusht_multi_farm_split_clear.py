@@ -88,7 +88,10 @@ def worker(args):
                 for k, v in zip(KEYS, (s, w, 1000000 * args.attempt + 1000 * (args.shard + 1) + draws, p, cost_exp, first)):
                     keep[k].append(v)
                 render_video(p, w, os.path.join(VIDEOS, f"s{args.shard}_p{n:03d}_draw{draws}.mp4"))
-                np.savez(shard_path(args.shard), **{k: np.array(v, dtype=object) for k, v in keep.items()})
+                # A crash mid-write must leave the previous checkpoint intact.
+                tmp = shard_path(args.shard) + ".tmp.npz"
+                np.savez(tmp, **{k: np.array(v, dtype=object) for k, v in keep.items()})
+                os.replace(tmp, shard_path(args.shard))
             print(f"[shard {args.shard}] planned {planned} solved={ok} first_sol={first} "
                   f"kept={len(keep['starts'])} total={total_kept(args, keep['starts'])}/{args.n}", flush=True)
 

@@ -35,7 +35,7 @@ def main():
     n_levels = 3  # levels shown one by one; deeper levels are pooled out of the printed columns
     print(f"budget {sweep.MAX_EXPANSIONS}; hysteresis {sweep.HYST}", flush=True)
     print("problem solved first_sol  maxlvl switches  share of expansions per level (L0 L1 L2 ...)  level@first_sol wall")
-    tot = np.zeros(n_levels + 2)
+    tot = np.zeros(n_levels + 1)  # last bin is every level past the ones printed
     for pi in ids:
         t0 = time.perf_counter()
         ok = bool(planner.search(torch.from_numpy(d["starts"][pi]), goal, torch.from_numpy(d["obstacles"][pi]),
@@ -51,12 +51,15 @@ def main():
         share = np.zeros(max(n_levels, maxlvl) + 2)
         for k in range(len(bounds) - 1):
             share[0 if k == 0 else lv[k - 1]] += max(0, bounds[k + 1] - bounds[k])
-        tot[:len(share)] += share[:len(tot)]
+        shown = np.zeros(n_levels + 1)
+        shown[:n_levels] = share[:n_levels]
+        shown[n_levels] = share[n_levels:].sum()
+        tot += shown
         at_first = -1
         if first >= 0:
             k = int(np.searchsorted(exp_list, first, side="right"))
             at_first = 0 if k == 0 else lv[k - 1]
-        pct = share / max(1, share.sum()) * 100
+        pct = shown / max(1.0, shown.sum()) * 100
         print(f"p{pi:03d}  {'yes' if ok else 'NO '}  {first:8d}  {maxlvl:4d} {switches:8d}   "
               + " ".join(f"{x:5.1f}%" for x in pct[:n_levels + 1]) + f"   {at_first:3d}   {wall:5.0f}s", flush=True)
         save[f"levels_{pi}"] = np.array(lv, dtype=np.int32)
@@ -64,8 +67,9 @@ def main():
         save[f"meta_{pi}"] = np.array([first, maxlvl, switches, terminal])
     np.savez(OUT, **save)
     pct = tot / tot.sum() * 100
-    print("\nall problems pooled, share of expansions per level: "
-          + ", ".join(f"L{i} {x:.1f}%" for i, x in enumerate(pct[:n_levels + 1])))
+    labels = [f"L{i} {x:.1f}%" for i, x in enumerate(pct[:-1])]
+    labels.append(f"L{n_levels}+ {pct[-1]:.1f}%")
+    print("\nall problems pooled, share of expansions per level: " + ", ".join(labels))
 
 
 if __name__ == "__main__":

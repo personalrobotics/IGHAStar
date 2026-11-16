@@ -17,10 +17,7 @@ import viser
 import viser.infra
 from PIL import Image, ImageDraw
 
-MAP_DIR = Path(
-    "/home/stark/catkin_ws/src/PythonRobotics/PathPlanning/IGHAStar"
-    "/Experiment_files/maps/street-png"
-)
+MAP_DIR = Path(__file__).resolve().parent / "Maps" / "street-png"
 MAP_PX = 1024
 # The map is 1024 px. Draw it 10 units across so the default camera can see it.
 SCENE = 10.0
@@ -38,9 +35,11 @@ def load_map(name: str) -> tuple[np.ndarray, np.ndarray]:
     im = Image.open(MAP_DIR / name).convert("RGB").resize((MAP_PX, MAP_PX), Image.NEAREST)
     # Viser puts the top of the texture at -Y. Flip so the file's top row is +Y,
     # which is up on the screen.
-    rgb = np.flipud(np.asarray(im))
-    wall = rgb[:, :, 0] < 10
-    return rgb, wall
+    raw = np.asarray(im)
+    # Collision uses the file's top-down pixels. Only the texture is flipped,
+    # because Viser puts the top of an image at -Y.
+    wall = raw[:, :, 0] < 10
+    return np.flipud(raw), wall
 
 
 def patched_client_root() -> Path:
@@ -267,7 +266,7 @@ def main() -> None:
             hits.append(hit)
         state["com"] = np.clip(world_to_px(hits[0]), 0, MAP_PX - 1)
         delta = hits[1] - hits[0]
-        dpx = np.array([delta[0], -delta[1]])
+        dpx = np.array([delta[0], -delta[1]]) * (MAP_PX / SCENE)
         if np.hypot(dpx[0], dpx[1]) > 4:
             state["yaw"] = float(-np.arctan2(dpx[0], dpx[1]))
         show_tee()

@@ -352,6 +352,13 @@ inline void keep_agents_out_of_walls(World &w) {
     }
     separate_agents(w);
   }
+  // The last separation can push a circle back into a wall.
+  for (int a = 0; a < kNumAgents; a++) {
+    for (int i = 0; i < w.n_walls; i++)
+      push_circle_out(w.agent[a], kAgentRadius, w.wall[i]);
+    for (int i = 0; i < w.n_cut; i++)
+      push_circle_out(w.agent[a], kAgentRadius, w.cut[i]);
+  }
   for (int a = 0; a < kNumAgents; a++)
     cpSpaceReindexShapesForBody(w.space, w.agent[a]);
 }
@@ -496,6 +503,22 @@ inline bool overlaps_forbidden(const float *s, const WallSpec *walls, int n_wall
   return false;
 }
 
+// True when the last projection left an agent in a wall or inside another agent.
+inline bool agents_unresolved(World &w) {
+  for (int a = 0; a < kNumAgents; a++) {
+    for (int i = 0; i < w.n_walls; i++)
+      if (shapes_overlap(w.agent_shape[a], w.wall[i]))
+        return true;
+    for (int i = 0; i < w.n_cut; i++)
+      if (shapes_overlap(w.agent_shape[a], w.cut[i]))
+        return true;
+    for (int b = a + 1; b < kNumAgents; b++)
+      if (shapes_overlap(w.agent_shape[a], w.agent_shape[b]))
+        return true;
+  }
+  return false;
+}
+
 inline void step_from_snapshot(const float *state_in, const float *target,
                                float *state_out, int n_substeps, float *intermediates,
                                cpFloat max_agent_vel, float *out_pen_increase,
@@ -516,15 +539,19 @@ inline void step_from_snapshot(const float *state_in, const float *target,
     clamp_body_speed(w.agent[i], max_agent_vel);
   w.max_penetration = 0.0;
   w.max_agent_force = 0.0;
+  bool stuck = false;
   for (int i = 0; i < n_substeps; ++i) {
     control_step(w, target, 1, max_agent_vel);
+    stuck = stuck || agents_unresolved(w);
     if (intermediates)
       get_state(w, intermediates + i * kStateDim);
   }
   get_state(w, state_out);
   if (out_pen_increase) {
     const cpFloat inc = w.max_penetration - pen0;
-    *out_pen_increase = static_cast<float>(inc > 0.0 ? inc : 0.0);
+    // An agent left inside a wall is not a legal edge. Penetration is the
+    // existing reject signal (rollout_valid drops anything above 1 px).
+    *out_pen_increase = stuck ? 1.0e9f : static_cast<float>(inc > 0.0 ? inc : 0.0);
   }
   if (out_peak_force)
     *out_peak_force = static_cast<float>(w.max_agent_force);

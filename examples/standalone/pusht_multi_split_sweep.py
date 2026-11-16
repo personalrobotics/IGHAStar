@@ -155,7 +155,12 @@ def worker(shard, num_shards, base, a):
 
 
 def out_path(a):
-    return OUT.replace(".csv", f"_{a.tag}.csv") if a.tag else OUT
+    # Budget is part of the name. A later run with a different budget must not
+    # resume the old rows or label them as the new budget.
+    stem = OUT[:-4]
+    if a.tag:
+        stem += f"_{a.tag}"
+    return f"{stem}_b{int(a.budget)}.csv"
 
 
 def summary(a):
@@ -178,7 +183,9 @@ def summary(a):
     farm = np.load(FARM, allow_pickle=True)
     print(f"{len(ids)} problems, budget {a.budget}, hysteresis {HYST}; baseline = {btag} (re-run)\n")
     print(f"{'cell':44s} done solved lvlerr med_first  mean_cost* vs_base(b/s/w) mean_maxlvl mean_wall  exp/s")
-    for cell in [btag] + [t for t in by if t != btag]:
+    # Baseline may still be running when --summary is called.
+    cells = ([btag] if btag in by else []) + [t for t in by if t != btag]
+    for cell in cells:
         rs = by[cell]
         s = [r for r in rs.values() if r["solved"] == "1"]
         firsts = sorted(int(r["first_sol_exp"]) for r in s)
