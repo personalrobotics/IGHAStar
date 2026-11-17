@@ -112,6 +112,9 @@ public:
   std::vector<int> expansion_list;
   std::vector<int> level_list; // level the search moved to at each switch (parallel to expansion_list)
   int first_goal_level = -1;  // level in force when the first goal was popped, before the switch
+  int expanding_level = 0;    // level of the last pop; search() switches once more on the way out
+  std::shared_ptr<Node> start_node_saved; // for the post-search goal check in search_adapter
+  std::shared_ptr<Node> goal_node_saved;
   std::vector<float> cost_exp_list;
 
   // Preemptive expansion: optionally batch GPU successor calls for several Q_v
@@ -262,6 +265,9 @@ public:
     expansion_list.clear();
     level_list.clear();
     first_goal_level = -1;
+    expanding_level = 0;
+    start_node_saved.reset();
+    goal_node_saved.reset();
     cost_exp_list.clear();
     // preemptive expansion reset:
     release_preemptive_caches();
@@ -643,6 +649,8 @@ public:
     }
     std::shared_ptr<Node> start_node = env->create_Node(start);
     std::shared_ptr<Node> goal_node = env->create_Node(goal);
+    start_node_saved = start_node;
+    goal_node_saved = goal_node;
     start_node->f = env->heuristic(start_node->pose, goal_node->pose);
 
     initialize(start_node);
@@ -665,6 +673,7 @@ public:
           break;
         }
 
+        expanding_level = level;
         std::shared_ptr<Node> v = Q_v.top();
         Q_v.pop();
         Q_v_hash.erase(v->hash);
@@ -770,6 +779,78 @@ public:
     if (debug) {
       std::cout << "Search finished" << expansion_counter << std::endl;
     }
+    // before returning, we should check vertices in Q_v (active, inactive, and preemptively expanded)
+    // for the goal test.
+    // first, insert all the preemptive vertices into Q_v
+    // second, insert all the inactive vertices into Q_v
+    // since Q_v is supposed to remain sorted, we should now end up with a sorted list of vertices to check
+    // we now keep popping from Q_v and goal checking, updating the best cost and emitting the path 
+    // until the best cost exceeds the f value of the best vertex in Q_v
+    
+    //step 1: insert all the preemptive vertices into Q_v
+    // A preemptively expanded vertex is already in Q_v or inactive_Q_v. push()
+    // keeps the heap ordered. Skip a hash that is already in Q_v.
+    // Also, we only need to run this pass if Q_v.f < Omega, so we can avoid the queue insertion if its not the
+    // Inactive vertices are not in Q_v, and one of them can have a smaller f
+    // than Q_v.top(). An empty Q_v has no top().
+    bool any_below = !Q_v.empty() && Q_v.top()->f < Omega;
+    if (!any_below) {
+      for (const auto &v : inactive_Q_v) {
+        if (v->f < Omega) {
+          any_below = true;
+          break;
+        }
+      }
+    }
+    if (!any_below)
+      return SUCCESS;
+
+    for (auto v : preexpanded_nodes) {
+      if (Seen_hash.count(v->hash) || Q_v_hash.count(v->hash))
+        continue;
+      Q_v.push(v);
+      Q_v_hash.insert(v->hash);
+    }
+    //step 2: insert all the inactive vertices into Q_v
+    for (auto v : inactive_Q_v) {
+      if (Q_v_hash.count(v->hash))
+        continue;
+      Q_v.push(v);
+      Q_v_hash.insert(v->hash);
+    }
+    //step 3: keep popping from Q_v until the best cost exceeds the f value of the best vertex in Q_v
+    // Q_v is a min-heap on f, so top() is the best vertex. Pop while that f is
+    // still below Omega; the first vertex with f >= Omega cannot improve it.
+    bool goal_reached = false;
+    while (!Q_v.empty() && goal_node_saved && Q_v.top()->f < Omega) {
+      std::shared_ptr<Node> v = Q_v.top();
+      Q_v.pop();
+      Q_v_hash.erase(v->hash);
+      Seen.insert(v);
+      Seen_hash.insert(v->hash);
+      goal_reached = env->reached_goal_region(v, goal_node_saved);
+      if (goal_reached) {
+        // The switch below this loop moves to the next level at this same
+        // expansion count. Keep the level that actually found the goal.
+        if (first_goal_level < 0)
+          first_goal_level = expanding_level;
+        SUCCESS = true;
+        if (debug) {
+          std::cout << "(post search) expansions: " << expansion_counter
+                    << " cost: " << v->g << std::endl;
+        }
+        best_path = reconstruct_path(start_node_saved, v);
+        Omega = v->g;
+        best_path_list.push_back(best_path);
+        goal_reached =
+            false; // set flag to false to continue searching for better paths
+      }        
+    }
+    // The pop loop records Omega on the next expansion. This pass has none,
+    // so the curve would otherwise stay at 1e5 after a path was returned.
+    if (SUCCESS && (cost_exp_list.empty() || cost_exp_list.back() > Omega))
+      cost_exp_list.push_back(Omega);
+
     return SUCCESS;
   }
 
@@ -1718,6 +1799,11 @@ public:
 
     search(start, goal, expansion_limit, hysteresis_threshold,
            ignore_goal_validity);
+
+    // TODO: same post-search pass as IGHAStar::search_adapter. When the search
+    // stops, goal-check vertices that were generated but not popped (active,
+    // inactive, and preemptively expanded). A bidirectional pass also has to
+    // consider near-meet pairs that were found but not yet joined.
 
     return shared_Omega.load() < 1e5f;
   }
