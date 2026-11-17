@@ -788,8 +788,6 @@ public:
     // until the best cost exceeds the f value of the best vertex in Q_v
     
     //step 1: insert all the preemptive vertices into Q_v
-    // A preemptively expanded vertex is already in Q_v or inactive_Q_v. push()
-    // keeps the heap ordered. Skip a hash that is already in Q_v.
     // Also, we only need to run this pass if Q_v.f < Omega, so we can avoid the queue insertion if its not the
     // Inactive vertices are not in Q_v, and one of them can have a smaller f
     // than Q_v.top(). An empty Q_v has no top().
@@ -802,14 +800,38 @@ public:
         }
       }
     }
+    // A child in cached_succ has not been queued. Its f can be below Omega
+    // even when every queued vertex is not, because the heuristic can drop
+    // on the step into the goal.
+    if (!any_below) {
+      for (const auto &v : preexpanded_nodes) {
+        for (const auto &child : v->cached_succ) {
+          if (child->f < Omega && Seen_hash.count(child->hash) == 0 &&
+              Q_v_hash.count(child->hash) == 0 &&
+              inactive_Q_v_hash.count(child->hash) == 0) {
+            any_below = true;
+            break;
+          }
+        }
+        if (any_below)
+          break;
+      }
+    }
     if (!any_below)
       return SUCCESS;
 
+    // preexpanded_nodes holds the parents. The children sit in cached_succ and
+    // have not been through process_successors. push() keeps the heap ordered.
     for (auto v : preexpanded_nodes) {
-      if (Seen_hash.count(v->hash) || Q_v_hash.count(v->hash))
-        continue;
-      Q_v.push(v);
-      Q_v_hash.insert(v->hash);
+      for (auto &child : v->cached_succ) {
+        if (Seen_hash.count(child->hash) || Q_v_hash.count(child->hash) ||
+            inactive_Q_v_hash.count(child->hash))
+          continue;
+        if (child->f >= Omega)
+          continue;
+        Q_v.push(child);
+        Q_v_hash.insert(child->hash);
+      }
     }
     //step 2: insert all the inactive vertices into Q_v
     for (auto v : inactive_Q_v) {
