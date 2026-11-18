@@ -144,7 +144,7 @@ Open the printed localhost URL. The GUI has play/pause, a state slider, and a li
 
 ### 4. Scrub search-tree growth in Viser
 
-After a search, `export_search_tree()` returns the nodes in Seen ∪ Q_v ∪ inactive (with discover/expand indices and intermediate poses). `viser_tree.py` is a minimal example of saving/loading that dict and drawing growth:
+After a search, `export_search_tree()` returns the nodes in Seen ∪ Q_v ∪ inactive (discover/expand indices, intermediate poses, and the action at each of those poses). `intermediate_controls[t]` is the action for `intermediate_poses[t]`; a node with no edge has `None`. `viser_tree.py` is a minimal example of saving/loading that dict and drawing growth:
 
 ```bash
 cd examples/standalone

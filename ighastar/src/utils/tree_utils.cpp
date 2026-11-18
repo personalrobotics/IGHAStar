@@ -54,6 +54,23 @@ py::dict node_to_dict(const std::shared_ptr<Node> &node, int timesteps) {
   d["time_direction"] = node->time_direction;
   d["intermediate_poses"] =
       intermediate_poses_to_list(node->intermediate_poses, timesteps);
+  // Stored controls stay in generator order. Pose rows are reversed on a
+  // backward edge, so the control row is flipped to match intermediate_poses[t].
+  if (node->intermediate_controls == nullptr || timesteps <= 0 || n_cont <= 0) {
+    d["intermediate_controls"] = py::none();
+  } else {
+    const bool backward = node->time_direction < 0;
+    py::list controls;
+    for (int t = 0; t < timesteps; ++t) {
+      const int src = backward ? timesteps - 1 - t : t;
+      py::list sample;
+      for (int c = 0; c < n_cont; ++c) {
+        sample.append(node->intermediate_controls[src * n_cont + c]);
+      }
+      controls.append(sample);
+    }
+    d["intermediate_controls"] = controls;
+  }
   if (node->intermediate_times == nullptr || timesteps <= 0) {
     d["intermediate_times"] = py::none();
   } else {
