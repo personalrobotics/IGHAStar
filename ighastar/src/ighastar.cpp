@@ -76,6 +76,30 @@ private:
   int generation;
 };
 
+// Batched goal test for the post-search pass. An Environment may provide
+// reached_goal_region_batched(nodes, goal) -> std::vector<char>; otherwise the
+// nodes are tested one at a time.
+template <typename E>
+concept HasBatchedGoalTest =
+    requires(E *e, const std::vector<std::shared_ptr<Node>> &nodes,
+             std::shared_ptr<Node> goal) {
+      { e->reached_goal_region_batched(nodes, goal) };
+    };
+
+template <typename E>
+std::vector<char> goal_test_batch(E *env,
+                                  const std::vector<std::shared_ptr<Node>> &nodes,
+                                  std::shared_ptr<Node> goal) {
+  if constexpr (HasBatchedGoalTest<E>) {
+    return env->reached_goal_region_batched(nodes, goal);
+  } else {
+    std::vector<char> out(nodes.size(), 0);
+    for (size_t i = 0; i < nodes.size(); i++)
+      out[i] = env->reached_goal_region(nodes[i], goal) ? 1 : 0;
+    return out;
+  }
+}
+
 class IGHAStar {
 public:
   std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>,
@@ -903,15 +927,29 @@ public:
     //step 3: keep popping from Q_v until the best cost exceeds the f value of the best vertex in Q_v
     // Q_v is a min-heap on f, so top() is the best vertex. Pop while that f is
     // still below Omega; the first vertex with f >= Omega cannot improve it.
-    bool goal_reached = false;
+    // The goal test runs in batches (one callback per chunk of vertices, in f
+    // order) instead of once per vertex: without a solution Omega is 1e5, so
+    // every queued vertex is tested. Within a chunk vertices are handled in f
+    // order; once Omega drops below a vertex's f, it and the rest of the chunk
+    // go back into Q_v, as the one-at-a-time loop would have left them.
+    constexpr size_t GOAL_CHUNK = 4096;
+    std::vector<std::shared_ptr<Node>> chunk;
     while (!Q_v.empty() && goal_node_saved && Q_v.top()->f < Omega) {
-      std::shared_ptr<Node> v = Q_v.top();
-      Q_v.pop();
-      Q_v_hash.erase(v->hash);
+      chunk.clear();
+      while (!Q_v.empty() && Q_v.top()->f < Omega && chunk.size() < GOAL_CHUNK) {
+        chunk.push_back(Q_v.top());
+        Q_v.pop();
+        Q_v_hash.erase(chunk.back()->hash);
+      }
+      std::vector<char> is_goal = goal_test_batch(env, chunk, goal_node_saved);
+      size_t ci = 0;
+      for (; ci < chunk.size(); ci++) {
+      std::shared_ptr<Node> v = chunk[ci];
+      if (v->f >= Omega)
+        break;
       Seen.insert(v);
       Seen_hash.insert(v->hash);
-      goal_reached = env->reached_goal_region(v, goal_node_saved);
-      if (goal_reached) {
+      if (is_goal[ci]) {
         // The switch below this loop moves to the next level at this same
         // expansion count. Keep the level that actually found the goal.
         if (first_goal_level < 0)
@@ -924,9 +962,12 @@ public:
         best_path = reconstruct_path(start_node_saved, v);
         Omega = v->g;
         best_path_list.push_back(best_path);
-        goal_reached =
-            false; // set flag to false to continue searching for better paths
-      }        
+      }
+      }
+      for (; ci < chunk.size(); ci++) {
+        Q_v.push(chunk[ci]);
+        Q_v_hash.insert(chunk[ci]->hash);
+      }
     }
     // The pop loop records Omega on the next expansion. This pass has none,
     // so the curve would otherwise stay at 1e5 after a path was returned.

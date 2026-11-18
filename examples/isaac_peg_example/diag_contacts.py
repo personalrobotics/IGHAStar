@@ -176,9 +176,9 @@ def main(env_cfg, agent_cfg):
         print(f"\nflung edges with peak peg speed > 2 m/s: {int(big.sum())}; "
               f"substep of peak force minus substep of peak speed: median {np.median(F['t_force'][big] - F['t_speed'][big]):.0f} "
               f"(negative = force spike comes first)")
-    print("\ngripper command on flung edges (+1 open, -1 close, 0 keep):",
-          {int(k): int((F['grip'] == k).sum()) for k in np.unique(F['grip'])},
-          "| baseline:", None if B is None else {int(k): int((B['grip'] == k).sum()) for k in np.unique(B['grip'])})
+    print("\ngripper command on flung edges (open = u>=0, close = u<0):",
+          {"open": int((F['grip'] >= 0).sum()), "close": int((F['grip'] < 0).sum())},
+          "| baseline:", None if B is None else {"open": int((B['grip'] >= 0).sum()), "close": int((B['grip'] < 0).sum())})
     out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(out / "contacts.npz", **{f"flung_{k}": v for k, v in F.items()},
                         **({} if B is None else {f"base_{k}": v for k, v in B.items()}),

@@ -1,6 +1,6 @@
 # IGHA* on UWLab OmniReset UR5e peg insertion (Isaac Sim). UNREVIEWED.
 planner:  # experiment_info_default
-  max_level: 4
+  max_level: 20
   division_factor: 1.148698354997035
   max_expansions: 3000
   hysteresis: 400
@@ -10,14 +10,46 @@ planner:  # experiment_info_default
     min_preemptive: 3     # (1 + max_preemptive) * num_controls(64) = number of Isaac envs
     max_preemptive: 3
 
+osc:  # arm OSC action term (RelCartesianOSCAction): tau = J^T (Kp * pose_error - Kd * ee_vel), Kd = 2 sqrt(Kp) * damping_ratio,
+  # no inertia decoupling. Values are UWLab's eval / sim-to-real gains (UR5E_ROBOTIQ_2F85_RELATIVE_OSC_EVAL, "high Kp
+  # matched to sysid friction"); the task's own soft pre-train gains are Kp 200/3, damping ratio 3/1.
+  # Each key takes one value (all 3 axes / joints) or a list of 3.
+  kp_translation: 1000.0             # N/m, x y z
+  kp_rotation: 200.0                  # Nm/rad, rx ry rz
+  damping_ratio_translation: 1.0
+  damping_ratio_rotation: 1.0
+  # Joint torque clamps in Nm, applied per joint after J^T (not task-space). UR5e rated limits:
+  torque_limit_base_joints: 150.0    # shoulder_pan, shoulder_lift, elbow
+  torque_limit_wrist_joints: 28.0    # wrist_1, wrist_2, wrist_3
+
+# Nominal sysid arm joint dynamics (armature, static/dynamic/viscous friction from the robot's metadata.yaml), as the
+# real-robot eval config applies them (randomize_arm_from_sysid_fixed, here at scale 1.0, no motor delay). The stiff gains
+# above were matched to these; without them the arm is underdamped.
+arm_sysid: true
+# Multiplies the sysid static/dynamic/viscous friction (not armature): the real UR runs with friction compensation.
+arm_friction_scale: 0.5
+# OmniReset's training domain randomization (per-env friction and mass at startup, gripper gains per reset). true = keep
+# it (every Isaac env then has different physics); false = nominal physics in all envs (needed for the CPU MuJoCo model
+# to match the GPU, and for an edge's outcome not to depend on its env slot).
+domain_randomization: false
+
 problem:  # PegConfig
+  osc_targets: absolute   # planner precomputes the edge's per-step pose targets (start + k*delta); "relative" = old re-anchoring
   steps_per_edge: 5       # policy steps (0.1 s each) per edge -> 0.5 s
   num_controls: 64
   n_peg_rows: 8           # hand toward a random point on the peg
   n_hole_rows: 8          # hand (or held peg) toward the hole
+  # Sampling range of the hand-point pose delta PER POLICY STEP (uniform in [-max, +max] per axis; one delta is held
+  # for the whole edge, so an edge commands up to 5x this). Base frame; xyz [m], rot = rotation-vector components [rad]
+  # (axis-angle, as the OSC action uses, not Euler RPY). Scalar or 3 values. Applied to the hand reference point
+  # (the gripper pinch point): a pure rotation turns the hand about that point. max_delta_xyz also sets the
+  # heuristic's hand/peg speed bound (steps_per_edge * |max_delta_xyz|).
+  max_delta_xyz: 0.02
+  max_delta_rot: 0.1
 
 task:
-  # consider this set of states: hand point states: [x,y,z, 6D rotation vector], peg states: [x,y,z, x,y,z of peg's Z axis], gripper state
-  resolution: [0.2, 0.2, 0.2, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.2, 0.2, 0.2, 0.2]
+  # hashed state, in this order (16): hand pose [x,y,z, 6D rotation = first two columns of the hand rotation matrix],
+  # peg [x,y,z, x,y,z of the peg's Z axis], gripper command
+  resolution: [0.2, 0.2, 0.2, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3,  0.2, 0.2, 0.2, 0.2, 0.2, 0.2,  0.5]
   # tolerance is 10% of the resolution
-  tolerance: [0.02, 0.02, 0.02, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.02, 0.02, 0.02, 0.02]
+  tolerance:  [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01,  0.01, 0.01, 0.01, 0.01, 0.01, 0.01,  0.01]

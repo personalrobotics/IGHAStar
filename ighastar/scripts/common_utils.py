@@ -98,6 +98,21 @@ def _find_source_dir() -> pathlib.Path:
 BASE_DIR = _find_source_dir()
 
 
+def mujoco_build_flags():
+    """(include dir, linker flags) for MuJoCo: $MUJOCO_DIR (include/, lib/) or the `mujoco` Python package."""
+    root = os.environ.get("MUJOCO_DIR")
+    if root:
+        lib_dir = pathlib.Path(root) / "lib"
+        return str(pathlib.Path(root) / "include"), [f"-L{lib_dir}", "-lmujoco", f"-Wl,-rpath,{lib_dir}"]
+    import mujoco
+
+    pkg = pathlib.Path(mujoco.__file__).resolve().parent
+    libs = sorted(pkg.glob("libmujoco.so*")) or sorted(pkg.glob("libmujoco*.dylib"))
+    if not libs:
+        raise FileNotFoundError(f"no libmujoco in {pkg}; set MUJOCO_DIR")
+    return str(pkg / "include"), [f"-L{pkg}", f"-l:{libs[-1].name}", f"-Wl,-rpath,{pkg}"]
+
+
 def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
     """
     Create an IGHA* or BiIGHA* planner based on configuration.
@@ -219,6 +234,43 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
         if bidirectional:
             return kernel.BiIGHAStar(planner_configs, False)
         return kernel.IGHAStar(planner_configs, False)
+
+    # MuJoCo CPU environment (mujoco_env.h): the expansion runs entirely in C++ (control sampling, physics, controller,
+    # validity, heuristic, goal) -- no Python during the search. node_info["env_header"] names the task header (e.g.
+    # "peg_mujoco.h"), node_info["include_dirs"] where to find it; configs["mujoco"] holds the model path and the
+    # task's parameters. Links the MuJoCo shared library of the `mujoco` Python package unless MUJOCO_DIR is set.
+    if env_name == "mujoco":
+        info = configs["experiment_info_default"]
+        state_dim = int(info["state_dim"])
+        control_dim = int(info["control_dim"])
+        hash_dims = int(info.get("hash_dims", state_dim))
+        header = str(node_info["env_header"])
+        inc = [str(p) for p in node_info.get("include_dirs", [])]
+        mj_inc, mj_ldflags = mujoco_build_flags()
+        extra_cflags = [
+            cxx_std,
+            "-O3",
+            "-march=native",
+            "-Wno-attributes",
+            env_header_flag(header),
+            "-DIGHASTAR_RELEASES_GIL",
+            f"-DN_DIMS={state_dim}",
+            f"-DN_CONT={control_dim}",
+            f"-DHASH_DIMS={hash_dims}",
+            *hash_cflags,
+        ]
+        stem = pathlib.Path(header).stem
+        kernel = _ext_load(
+            name=f"ighastar_mujoco_{stem}_{state_dim}_{control_dim}_{hash_dims}_{build_tag}_eh",
+            sources=[str(cpp_path)],
+            extra_include_paths=extra_includes + inc + [mj_inc],
+            extra_cflags=extra_cflags,
+            extra_ldflags=mj_ldflags,
+            verbose=True,
+        )
+        if bidirectional:
+            raise NotImplementedError("mujoco env: forward search only")
+        return kernel.IGHAStar(configs, False)
 
     # PushT: no backward/predecessor dynamics yet (Succ always steps +dt).
     if bidirectional and env_name in (

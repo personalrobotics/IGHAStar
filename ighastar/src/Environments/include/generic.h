@@ -21,6 +21,8 @@ class Environment : public GenericEnvironmentBase {
   py::function heuristic_fn;
   py::function goal_test_fn;
   py::object sample_goals_fn;
+  py::object goal_mask_fn; // optional batched goal test: [B, n] -> [B] (bool)
+  bool has_goal_mask = false;
 
 public:
   Environment(const py::dict &config, int time_direction_ = 1)
@@ -35,6 +37,10 @@ public:
     if (config.contains("sample_goals_fn") &&
         !config["sample_goals_fn"].is_none()) {
       sample_goals_fn = config["sample_goals_fn"].cast<py::function>();
+    }
+    if (config.contains("goal_mask_fn") && !config["goal_mask_fn"].is_none()) {
+      goal_mask_fn = config["goal_mask_fn"].cast<py::function>();
+      has_goal_mask = true;
     }
   }
 
@@ -64,6 +70,38 @@ public:
     auto state_t = torch::empty({n_dims}, torch::kFloat32);
     memcpy(state_t.data_ptr<float>(), v->pose, n_dims * sizeof(float));
     return goal_test_fn(state_t).cast<bool>();
+  }
+
+  // Goal test for many nodes in one callback (goal_mask_fn), else one by one.
+  std::vector<char>
+  reached_goal_region_batched(const std::vector<std::shared_ptr<Node>> &nodes,
+                              std::shared_ptr<Node> goal) {
+    const int B = static_cast<int>(nodes.size());
+    std::vector<char> out(B, 0);
+    if (B == 0)
+      return out;
+    if (!has_goal_mask) {
+      for (int i = 0; i < B; i++)
+        out[i] = reached_goal_region(nodes[i], goal) ? 1 : 0;
+      return out;
+    }
+    auto state_t = torch::empty({B, n_dims}, torch::kFloat32);
+    float *sp = state_t.data_ptr<float>();
+    for (int i = 0; i < B; i++)
+      memcpy(sp + static_cast<size_t>(i) * n_dims, nodes[i]->pose,
+             n_dims * sizeof(float));
+    torch::Tensor m = goal_mask_fn(state_t)
+                          .cast<torch::Tensor>()
+                          .to(torch::kCPU)
+                          .to(torch::kBool)
+                          .reshape({-1})
+                          .contiguous();
+    if (m.numel() != B)
+      throw std::runtime_error("goal_mask_fn must return one value per state");
+    const bool *mp = m.data_ptr<bool>();
+    for (int i = 0; i < B; i++)
+      out[i] = mp[i] ? 1 : 0;
+    return out;
   }
 
   // Validity of start and goal positions.

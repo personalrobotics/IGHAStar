@@ -26,6 +26,8 @@ ap.add_argument("--max-expansions", type=int, default=None)
 ap.add_argument("--num-envs", type=int, default=None, help="Isaac envs = nodes per batch * num_controls")
 ap.add_argument("--config", default=str(HERE / "config.yml"))
 ap.add_argument("--out", default=str(HERE / "out"))
+ap.add_argument("--backend", default="physx", choices=["physx", "newton"],
+                help="physics engine; newton = MuJoCo-Warp via newton_robot_usd.py (one start state per process)")
 ap.add_argument("--selftest", action="store_true")
 ap.add_argument("--reset-type", default="ObjectAnywhereEEAnywhere",
                 help="OmniReset reset dataset used for start states (e.g. ObjectPartiallyAssembledEEGrasped)")
@@ -34,7 +36,8 @@ ap.add_argument("--start-idx", type=int, nargs="+", default=None,
 ap.add_argument("--scan-out", default=None, help="with --scan: save all rows (idx, dist, angle, goal, grip, h0) as .npy")
 ap.add_argument("--save-tree", action="store_true",
                 help="log every expansion to <out>/peg_seed<k>_tree.npz (+ scene_meshes.npz) for viser_peg_tree.py; "
-                     "turns preemptive expansion off and uses num_controls envs")
+                     "(works with preemptive expansion: pre-expanded vertices that were never popped are in the tree too)")
+ap.add_argument("--tree-no-preemptive", action="store_true", help="with --save-tree: turn preemptive expansion off (old behaviour)")
 ap.add_argument("--scan", type=int, default=0, help="print alignment/grasp stats of the first N start states and exit")
 AppLauncher.add_app_launcher_args(ap)
 args, hydra_args = ap.parse_known_args()
@@ -55,7 +58,9 @@ import uwlab_tasks  # noqa: E402,F401
 import yaml  # noqa: E402
 from uwlab_tasks.utils.hydra import hydra_task_config  # noqa: E402
 
-from peg_problem import NCTRL, PegConfig, PegProblem  # noqa: E402
+import newton_robot_usd  # noqa: E402
+from peg_problem import (NCTRL, PegConfig, PegProblem, apply_arm_sysid, apply_osc_config,  # noqa: E402
+                         disable_domain_randomization)
 
 TASK = "OmniReset-Ur5eRobotiq2f85-RelCartesianOSC-State-v0"
 
@@ -89,6 +94,38 @@ def put_start(env, ds, idx):
     sc.reset_to(st, env_ids=None, is_relative=True)
     sc.write_data_to_sim()
     sc.update(env.physics_dt)
+
+
+def replay_plan(env, prob, ds, start_idx, start, states, U):
+    """Re-run a found plan edge by edge and check the goal with OmniReset's own success term. UNREVIEWED.
+
+    A: restore every planner node exactly (what the planner assumed) and compare the edge's end state with the planner's.
+    B: one continuous rollout from the start state with the same controls (no restores between edges), as a real
+       execution would run; reports the goal after every edge and at the end."""
+    print("\n=== replay of the plan (%d edges) ===" % len(U))
+    N, T = prob.N, prob.T
+    U = torch.as_tensor(U, dtype=torch.float32)
+    print("A) restore each node, apply the edge's control:")
+    for e in range(len(U)):
+        s0 = states[e * T].to(env.device)[None].repeat(N, 1)
+        out = prob.dynamics(s0.cpu(), U[e][None].repeat(N, 1))[0, -1]
+        want = states[(e + 1) * T]
+        print(f"  edge {e}: end-state |diff| feat {float((out[:prob.F] - want[:prob.F]).abs().max()):.4f} "
+              f"peg pos {float((out[prob.o_peg:prob.o_peg + 3] - want[prob.o_peg:prob.o_peg + 3]).norm()):.4f} m  "
+              f"goal(mine)={bool(prob.goal_mask(out[None])[0])}")
+    print("B) continuous rollout from the start state:")
+    put_start(env, ds, start_idx)
+    s = prob.set_start(None, 0).to(env.device)[None].repeat(N, 1)
+    for e in range(len(U)):
+        act, cmd = prob._resolve(s, U[e][None].repeat(N, 1).to(env.device))
+        for _ in range(T):
+            env.step(act)
+        own = bool(prob.prog.success[0])
+        s = prob._read_states(cmd)
+        pp = s[0, prob.o_peg:prob.o_peg + 3].cpu()
+        print(f"  edge {e}: peg pos {[round(float(x), 3) for x in pp]}  goal(mine)={bool(prob.goal_mask(s[:1].cpu())[0])}  "
+              f"OmniReset success={own}")
+    print(f"  final: goal(mine)={bool(prob.goal_mask(s[:1].cpu())[0])}  OmniReset success={bool(prob.prog.success[0])}")
 
 
 def selftest(env, prob, ds, M):
@@ -145,7 +182,7 @@ def selftest(env, prob, ds, M):
     act, cmd = prob._resolve(S1.to(env.device), U1.to(env.device))
     dbg = prob._dbg
     out = prob.dynamics(S1, U1)
-    hand0, hand1 = S1[:, 6:9], out[:, -1, 6:9]
+    hand0, hand1 = S1[:, prob.i_hand], out[:, -1, prob.i_hand]
     moved = (hand1 - hand0)
     want = dbg["delta_w"].cpu()
     cosine = torch.nn.functional.cosine_similarity(moved, want, dim=1)
@@ -164,19 +201,31 @@ def main(env_cfg, agent_cfg):
     cfg = yaml.safe_load(open(args.config))
     pcfg0 = PegConfig.from_dict(cfg.get("problem", {}))
     planner_cfg = dict(cfg["planner"])
-    if args.save_tree:
+    if args.save_tree and args.tree_no_preemptive:
         planner_cfg["preemptive_expansion"] = {**planner_cfg.get("preemptive_expansion", {}), "enabled": False}
-        print("--save-tree: preemptive expansion off (the tree log needs one parent per batch)")
+        print("--save-tree --tree-no-preemptive: preemptive expansion off")
     pre = planner_cfg.get("preemptive_expansion", {})
     n_envs = args.num_envs or pcfg0.num_controls * (1 + (int(pre.get("max_preemptive", 0)) if pre.get("enabled", True) else 0))
     env_cfg.scene.num_envs = n_envs
+    apply_osc_config(env_cfg, cfg.get("osc"))
+    if not cfg.get("domain_randomization", True):
+        print("[plan_peg] domain randomization off:", disable_domain_randomization(env_cfg))
     env_cfg.episode_length_s = 1.0e6
     env_cfg.terminations.time_out = None
     env_cfg.terminations.abnormal_robot = None
+    if args.backend == "newton":
+        if not args.start_idx or len(set(args.start_idx)) != 1:
+            raise SystemExit("--backend newton needs --start-idx with a single start state (the fixed robot base is baked into the USD)")
+        usd = newton_robot_usd.configure_newton(env_cfg, args.reset_type, args.start_idx[0], Path(args.out) / "newton_usd")
+        print("[plan_peg] Newton robot USD:", usd)
     env = gym.make(TASK, cfg=env_cfg).unwrapped
     env.reset()
+    apply_arm_sysid(env, bool(cfg.get("arm_sysid", False)), float(cfg.get("arm_friction_scale", 1.0)))
     ph = env.sim.cfg.physics
-    print(f"[plan_peg] physics: dt={env.sim.cfg.dt:.5f} decimation={env.cfg.decimation} solver_type={ph.solver_type} "
+    if args.backend == "newton":
+        print(f"[plan_peg] physics: Newton MJWarp, dt={env.sim.cfg.dt:.5f} decimation={env.cfg.decimation}, Newton collision pipeline")
+    else:
+      print(f"[plan_peg] physics: dt={env.sim.cfg.dt:.5f} decimation={env.cfg.decimation} solver_type={ph.solver_type} "
           f"pos_iters<={ph.max_position_iteration_count} vel_iters<={ph.max_velocity_iteration_count} "
           f"bounce_thr={ph.bounce_threshold_velocity} fric_offset_thr={ph.friction_offset_threshold} "
           f"fric_corr_dist={ph.friction_correlation_distance}")
@@ -189,7 +238,7 @@ def main(env_cfg, agent_cfg):
             put_start(env, ds, k)
             s0 = prob.set_start(None, 0)
             d, a = [float(x) for x in prob.alignment(s0[None, prob.o_peg:prob.o_peg + 7].to(env.device))][:2]
-            rows.append((k, d, a, bool(prob.goal_test(s0)), float(s0[9]), float(prob.heuristic(s0[None])[0])))
+            rows.append((k, d, a, bool(prob.goal_test(s0)), float(s0[prob.i_grip]), float(prob.heuristic(s0[None])[0])))
         if args.scan_out:
             np.save(args.scan_out, np.array(rows, dtype=np.float64))
         rows.sort(key=lambda r: r[1])
@@ -243,7 +292,17 @@ def main(env_cfg, agent_cfg):
                "preemptive": int(planner.get_preemptive_expansions()), "dyn_calls": p["dyn_calls"],
                "dyn_rows": p["dyn_rows"], "dyn_time_s": p["dyn_time"], "bad_rows": p["bad_rows"], "accel_rows": p.get("accel_rows", 0),
                "max_peg_step": p["max_peg_step"], "max_hand_step": p["max_hand_step"], "bound": prob.max_object_step, "edge_s": prob.edge_dt,
-               "first_solution_expansion": None if first is None else first + 1}
+               "first_solution_expansion": None if first is None else first + 1,
+               "avg_succ_us": float(prof[0]), "preemptive_hits": int(planner.get_preemptive_hits()),
+               **prob.closest_summary()}
+        cl = prob.closest
+        print(f"closest peg approach (valid edge end states): distance {cl['dist'][0] * 1e3:.1f} mm (angle {cl['dist'][1]:.3f} rad, call {cl['dist'][2]}); "
+              f"within angle thr {prob.rot_thr:.3f} rad: {cl['dist_in_angle'][0] * 1e3:.1f} mm (call {cl['dist_in_angle'][2]}); "
+              f"smallest angle {cl['angle'][1]:.3f} rad at {cl['angle'][0] * 1e3:.1f} mm; goal thr {prob.pos_thr * 1e3:.1f} mm / {prob.rot_thr:.3f} rad")
+        np.savez_compressed(out / f"closest_seed{seed}.npz", best_dist_per_call=np.asarray(prob.closest_curve, np.float32),
+                            **{f"state_{k}": v.numpy() for k, v in prob.closest_state.items()},
+                            feature_names=np.asarray(prob.feature_names), o_peg=prob.o_peg, record=json.dumps(rec))
+        print(f"avg_succ={rec['avg_succ_us']:.0f} us, preemptive hits {rec['preemptive_hits']} of {rec['preemptive']} preemptive")
         print(f"search: success={ok} in {dt:.1f}s, {rec['expansions']} expansions ({rec['preemptive']} preemptive), "
               f"{p['dyn_rows']} edges simulated ({p['dyn_rows'] / max(p['dyn_time'], 1e-9):.0f}/s), bad rows {p['bad_rows']} (of which peg-accel {p.get('accel_rows', 0)}); "
               f"largest peg step {p['max_peg_step']:.3f} m, hand step {p['max_hand_step']:.3f} m vs bound {prob.max_object_step:.3f} m"
@@ -267,13 +326,15 @@ def main(env_cfg, agent_cfg):
                 sol = np.asarray([prob._tree_index.get(prob._key(r), -1) for r in st_[prob.T::prob.T]], np.int64)
             np.savez_compressed(
                 out / f"peg_seed{seed}_tree.npz", **tree, solution_child_ids=sol,
-                start_feat=start[:prob.F].numpy(), start_peg=start[prob.o_peg:prob.o_peg + 7].numpy(),
+                start_feat=start[:prob.F].numpy(), feature_names=np.asarray(prob.feature_names), start_peg=start[prob.o_peg:prob.o_peg + 7].numpy(),
                 start_bp=prob.start_bp.numpy(), body_names=np.asarray(list(prob.robot.body_names)),
                 hole_pose=prob.hole_pose.cpu().numpy(), goal_pos=ha_p[0].cpu().numpy(), goal_quat=ha_q[0].cpu().numpy(),
                 pos_thr=prob.pos_thr, rot_thr=prob.rot_thr, edge_dt=prob.edge_dt, steps_per_edge=prob.T,
                 step_dt=float(env.step_dt), seed=seed, start_idx=(args.start_idx[i] if args.start_idx else seed),
                 reset_type=args.reset_type)
             print(f"tree: {len(tree['parent_call'])} expansions, {len(tree['child_valid'])} children -> {out / f'peg_seed{seed}_tree.npz'}")
+            if ok and (sol >= 0).all():
+                replay_plan(env, prob, ds, (args.start_idx[i] if args.start_idx else seed) % M, start, st_, tree["child_u"][sol])
         if prob.diag:
             np.save(out / f"edge_diag_seed{seed}.npy", torch.cat(prob.diag).numpy())
         if ok:

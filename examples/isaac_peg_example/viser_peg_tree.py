@@ -69,6 +69,11 @@ def main() -> None:
     cvalid, ch, ccost = z["child_valid"].astype(bool), z["child_h"], z["child_cost"]
     sol = z["solution_child_ids"]
     start_bp, start_peg = z["start_bp"], z["start_peg"]
+    if "feature_names" in z.files:  # locate hand / peg columns by name (layout changed with the 6D hand pose)
+        fn = [str(n) for n in z["feature_names"]]
+        HAND, PEG = slice(fn.index("hand_x"), fn.index("hand_x") + 3), slice(fn.index("peg_x"), fn.index("peg_x") + 3)
+    else:  # old 10-feature trees: peg 0:3, axis 3:6, hand 6:9, grip
+        HAND, PEG = slice(6, 9), slice(0, 3)
     E, C = len(pcall), len(cpar)
     ccall = pcall[cpar]
     print(f"peg seed {int(z['seed'])} (start state {int(z['start_idx'])}, {z['reset_type']}): {E} expansions, "
@@ -126,9 +131,9 @@ def main() -> None:
         pts = np.concatenate([p0, cf[:, :, sl]], 1)  # [C,T+1,3]
         return np.stack([pts[:, :-1], pts[:, 1:]], 2)  # [C,T,2,3]
 
-    hand_segs = edge_points(slice(6, 9))
-    peg_segs = edge_points(slice(0, 3))
-    peg_moved = ok_edge & (np.linalg.norm(cf[:, -1, 0:3] - pf[cpar][:, 0:3], axis=1) > 0.003)
+    hand_segs = edge_points(HAND)
+    peg_segs = edge_points(PEG)
+    peg_moved = ok_edge & (np.linalg.norm(cf[:, -1, PEG] - pf[cpar][:, PEG], axis=1) > 0.003)
     order_rgb = viridis(ccall / max(E, 1))
     child_up = pcid[cpar]
 
@@ -183,9 +188,10 @@ def main() -> None:
         k = int(s_node.value)
         set_pose(*node_pose(int(pcid[k])))
         f = pf[k]
-        d = np.linalg.norm(f[6:9] - f[0:3])
-        node_md.content = (f"expansion {k}: peg ({f[0]:.3f}, {f[1]:.3f}, {f[2]:.3f}), hand ({f[6]:.3f}, {f[7]:.3f}, {f[8]:.3f})  \n"
-                           f"|hand - peg| = {d * 100:.1f} cm, |peg - goal| = {np.linalg.norm(f[0:3] - gp) * 100:.1f} cm")
+        fp, fh = f[PEG], f[HAND]
+        d = np.linalg.norm(fh - fp)
+        node_md.content = (f"expansion {k}: peg ({fp[0]:.3f}, {fp[1]:.3f}, {fp[2]:.3f}), hand ({fh[0]:.3f}, {fh[1]:.3f}, {fh[2]:.3f})  \n"
+                           f"|hand - peg| = {d * 100:.1f} cm, |peg - goal| = {np.linalg.norm(fp - gp) * 100:.1f} cm")
 
     def pick_branch() -> int:
         v = np.nonzero(cvalid & ok_edge)[0]
@@ -195,18 +201,18 @@ def main() -> None:
         if name == "lowest h":
             return int(v[np.argmin(ch[v])])
         if name == "most peg motion":
-            mv = np.linalg.norm(cf[v, -1, 0:3] - start_peg[:3], axis=1)
+            mv = np.linalg.norm(cf[v, -1, PEG] - start_peg[:3], axis=1)
             return int(v[np.argmax(mv)])
         if name == "deepest":
             ex = v[np.isin(v, pcid)] if np.isin(v, pcid).any() else v
             return int(max(ex, key=lambda c: len(branch(int(c)))))
-        dist = np.linalg.norm(cf[v, -1, 6:9] - cf[v, -1, 0:3], axis=1)
+        dist = np.linalg.norm(cf[v, -1, HAND] - cf[v, -1, PEG], axis=1)
         return int(v[np.argmin(dist)])
 
     def draw_branch(ids):
         pts = []
         for cid in ids:
-            seq = np.concatenate([pf[cpar[cid]][6:9][None], cf[cid, :, 6:9]], 0)
+            seq = np.concatenate([pf[cpar[cid]][HAND][None], cf[cid, :, HAND]], 0)
             pts.append(np.stack([seq[:-1], seq[1:]], 1))
         if pts:
             server.scene.add_line_segments("/branch", np.concatenate(pts), (0, 0, 0), thickness=0.006)
