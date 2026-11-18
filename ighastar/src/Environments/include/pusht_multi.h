@@ -39,6 +39,69 @@ inline size_t calc_hash(float *pose, const float *resolution) {
 #include "node.h"
 #include "trajectory_export.h"
 
+// A stored trajectory matches this query when its goal is within tolerance
+// and, if a map was saved with it, that map is the one loaded now. An empty
+// stored goal is a library from before stamps existed, and it is kept.
+// Start is not part of the match: another start of the same slot still applies.
+inline bool traj_matches_problem(const float *goal, const float *tolerance,
+                                const std::vector<int> &angular,
+                                const std::vector<float> &stored_goal,
+                                const std::vector<float> &stored_world,
+                                const std::vector<float> &world) {
+  if (goal == nullptr ||
+      static_cast<int>(stored_goal.size()) != n_dims) {
+    return true;
+  }
+  NearMeet2PBVP probe;
+  probe.n_dims = n_dims;
+  probe.angular_dims = angular;
+  if (!probe.within_tolerance(stored_goal.data(), goal, tolerance)) {
+    return false;
+  }
+  if (stored_world.empty()) {
+    return true;
+  }
+  if (stored_world.size() != world.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < world.size(); ++i) {
+    if (stored_world[i] != world[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Passing every collected trajectory must still return each one that was
+// generated for this goal and this map, and must drop a different goal or wall.
+inline bool traj_filter_self_check() {
+  std::vector<float> goal_a(n_dims, 0.f);
+  std::vector<float> goal_b = goal_a;
+  goal_b[0] = 10.f;
+  std::vector<float> world_a = {1.f, 0.f, 0.f, 1.f, 0.f};
+  std::vector<float> world_b = {1.f, 2.f, 0.f, 1.f, 0.f};
+  std::vector<float> tol(n_dims, 1e-3f);
+  const std::vector<int> angular = {4};
+  std::vector<float> goal_wrap = goal_a;
+  goal_wrap[4] = 6.f;
+  const std::vector<std::vector<float>> goals = {goal_a, goal_a, goal_b,
+                                                  goal_a, goal_wrap};
+  const std::vector<std::vector<float>> worlds = {world_a, world_a, world_b,
+                                                   world_b, world_a};
+  std::vector<uint8_t> keep(goals.size(), 0);
+  for (size_t i = 0; i < goals.size(); ++i) {
+    keep[i] = traj_matches_problem(goal_a.data(), tol.data(), angular, goals[i],
+                                   worlds[i], world_a)
+                  ? 1
+                  : 0;
+  }
+  std::vector<float> loose = tol;
+  loose[4] = 0.3f;
+  const bool wrapped = traj_matches_problem(goal_a.data(), loose.data(), angular,
+                                             goal_wrap, world_a, world_a);
+  return keep[0] && keep[1] && !keep[2] && !keep[3] && !keep[4] && wrapped;
+}
+
 class Environment {
   int n_succ;
   int n_substeps;
@@ -130,6 +193,9 @@ public:
         config, n_dims, local_controllability_radius);
     near_meet_.load(config, n_dims, local_controllability_radius,
                     goal_sampling.angular_dims);
+    if (!traj_filter_self_check()) {
+      throw std::runtime_error("trajectory filter self-check failed");
+    }
   }
 
   virtual ~Environment() {
@@ -342,6 +408,42 @@ public:
     return heuristic(pose1, pose2);
   }
 
+  void copy_active_world(std::vector<float> &out) const {
+    out.clear();
+    if (world_rows.empty() || world_stride <= 0) {
+      return;
+    }
+    int n = world_stride;
+    if (n > static_cast<int>(world_rows.size())) {
+      n = static_cast<int>(world_rows.size());
+    }
+    out.assign(world_rows.data(), world_rows.data() + n);
+  }
+
+  // Goal pose and the wall row. A different start of the same slot stays in.
+  void filter_trajectories(const std::vector<std::vector<float>> &stored_goals,
+                           const std::vector<std::vector<float>> &stored_worlds,
+                           const float *start, const float *goal,
+                           std::vector<uint8_t> &keep) const {
+    (void)start;
+    std::vector<float> world;
+    copy_active_world(world);
+    const std::vector<float> no_world;
+    const int n = static_cast<int>(stored_goals.size());
+    if (static_cast<int>(keep.size()) != n) {
+      keep.assign(n, 1);
+    }
+    for (int i = 0; i < n; ++i) {
+      const std::vector<float> &stored_world =
+          i < static_cast<int>(stored_worlds.size()) ? stored_worlds[i]
+                                                     : no_world;
+      keep[i] = traj_matches_problem(goal, tolerance, near_meet_.angular_dims,
+                                     stored_goals[i], stored_world, world)
+                    ? 1
+                    : 0;
+    }
+  }
+
   void solve_2pBVP(
       const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
           &pairs,
@@ -359,13 +461,14 @@ public:
       std::vector<std::vector<float>> &trajectories) {
     near_meet_.mpc_solve(
         pairs, valid, trajectories, n_cont, timesteps,
-        [this](const float *parent_pose, const float *controls, int, int,
+        [this](const float *source_pose, const float *controls, int, int,
                float *final_pose) {
           std::vector<float> inter(static_cast<size_t>(timesteps) * n_dims);
           float pen_inc = 0.f;
           float peak_force = 0.f;
+          // One held target. The solver repeats it across the control rows.
           pusht_multi_physics::step_from_snapshot(
-              parent_pose, controls, final_pose, n_substeps, inter.data(),
+              source_pose, controls, final_pose, n_substeps, inter.data(),
               max_agent_vel, &pen_inc, &peak_force, walls_, n_walls_,
               close_right);
           return rollout_valid(final_pose, inter.data(), pen_inc, peak_force);
@@ -373,7 +476,47 @@ public:
         [this](const float *a, const float *b) {
           return heuristic(const_cast<float *>(a), const_cast<float *>(b));
         },
-        tolerance);
+        tolerance, true);
+  }
+
+  // The edge the search attaches: the winning held target, rolled out from the
+  // source vertex. An empty control list is the parentless exact-state meet.
+  MeetEdge realize_meet(const std::shared_ptr<Node> &source,
+                        const std::shared_ptr<Node> &target,
+                        const std::vector<float> &controls) const {
+    MeetEdge edge;
+    if (!source || !target) {
+      return edge;
+    }
+    if (controls.empty()) {
+      edge.ok = true;
+      edge.arrival = source->time;
+      return edge;
+    }
+    if (timesteps <= 0 ||
+        static_cast<int>(controls.size()) != timesteps * n_cont) {
+      return edge;
+    }
+    std::vector<float> inter(static_cast<size_t>(timesteps) * n_dims);
+    float final_pose[n_dims];
+    float pen_inc = 0.f;
+    float peak_force = 0.f;
+    pusht_multi_physics::step_from_snapshot(
+        source->pose, controls.data(), final_pose, n_substeps, inter.data(),
+        max_agent_vel, &pen_inc, &peak_force, walls_, n_walls_, close_right);
+    if (!rollout_valid(final_pose, inter.data(), pen_inc, peak_force) ||
+        !near_meet_.within_tolerance(final_pose, target->pose, tolerance)) {
+      return edge;
+    }
+    edge.poses = std::move(inter);
+    edge.controls = controls;
+    edge.cost = edge_cost;
+    edge.times.resize(timesteps);
+    fill_substep_times(edge.times.data(), source->time,
+                       static_cast<float>(pusht_multi_physics::kDt), timesteps);
+    edge.arrival = edge.times.back();
+    edge.ok = true;
+    return edge;
   }
 
   // Default calls sampling::sample_goal_region. Override to replace the sampler.
@@ -677,6 +820,12 @@ public:
     return controls_tensor_from_edges(node_list, timesteps);
   }
 };
+
+#define IGHASTAR_REALIZE_MEET(env, src, tgt, conn) \
+  (env)->realize_meet((src), (tgt), (conn))
+#define IGHASTAR_RESTORE_NODE(env, node) \
+  (env)->stamp_cleared((node), (node).parent.get(), (node).intermediate_poses)
+#define IGHASTAR_STAMP_WORLD(env, dest) (env)->copy_active_world(dest)
 
 // Open-loop Chipmunk step. target is one xy per agent.
 // Returns [state, penetration increase, peak agent force].

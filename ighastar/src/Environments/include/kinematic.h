@@ -386,6 +386,8 @@ public:
     return heuristic(pose1, pose2);
   }
 
+  IGHASTAR_FILTER_TRAJECTORIES_ALL
+
   void solve_2pBVP(
       const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
           &pairs,

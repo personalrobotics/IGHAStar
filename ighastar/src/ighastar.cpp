@@ -680,6 +680,7 @@ public:
     std::shared_ptr<Node> goal_node = env->create_Node(goal);
     start_node_saved = start_node;
     goal_node_saved = goal_node;
+    tree_utils::select_trajectories(trajectory_library, env, start, goal);
     start_node->f = env->heuristic(start_node->pose, goal_node->pose);
 
     initialize(start_node);
@@ -2021,8 +2022,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("export_search_tree", &IGHAStar::export_search_tree)
       .def("record_solution_trajectory",
            [](IGHAStar &self) {
+             const float *goal_pose = self.goal_node_saved
+                                         ? self.goal_node_saved->pose
+                                         : nullptr;
              tree_utils::record_solution(self.trajectory_library, self.best_path,
-                                         self.Seen, self.Q_v, self.inactive_Q_v);
+                                         self.Seen, self.Q_v, self.inactive_Q_v,
+                                         goal_pose, self.env);
            })
       .def("export_trajectory_library",
            [](IGHAStar &self) {

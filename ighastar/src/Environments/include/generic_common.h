@@ -13,6 +13,10 @@
 // core unchanged.
 #pragma once
 
+// A generic rollout length is learned at expansion time. Import adopts the
+// length stored with the library instead of the config hint.
+#define IGHASTAR_LIBRARY_TIMESTEPS_FROM_EXPORT
+
 #include "solve_2pbvp.h"
 
 #include <boost/functional/hash.hpp>
@@ -200,6 +204,8 @@ public:
     }
     return std::sqrt(s);
   }
+
+  IGHASTAR_FILTER_TRAJECTORIES_ALL
 
   // Generic envs do not need device-side batch buffers.
   void ensure_batch_capacity(int max_batch) { (void)max_batch; }

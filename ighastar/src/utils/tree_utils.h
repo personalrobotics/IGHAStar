@@ -37,13 +37,19 @@ py::dict export_search_tree(
 struct Trajectory {
   std::vector<std::shared_ptr<Node>> path;
   std::vector<std::shared_ptr<Node>> children;
+  // Problem that produced this trajectory. goal is the query goal. world is
+  // the environment map, empty when the environment does not stamp one.
+  std::vector<float> goal;
+  std::vector<float> world;
 };
 
 // Trajectories plus a used-flag and an LCR index of path vertices. The index is
 // built at import and when a solution is recorded. reset clears only the flags.
+// applicable is the current query's filter (1 = eligible). Empty means unfiltered.
 struct Library {
   std::vector<Trajectory> trajs;
   std::vector<uint8_t> used;
+  std::vector<uint8_t> applicable;
   igha::unordered_map<size_t, std::vector<std::pair<int, int>>> lcr;
 };
 
@@ -70,7 +76,13 @@ void record_solution(
     std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>,
                         NodePtrCompare>
         Q_v,
-    const igha::unordered_set<std::shared_ptr<Node>> &inactive_Q_v);
+    const igha::unordered_set<std::shared_ptr<Node>> &inactive_Q_v,
+    const float *goal_pose, Environment *env);
+
+// Ask the environment which stored trajectories belong to this start, goal,
+// and the map currently loaded on env. Writes library.applicable.
+void select_trajectories(Library &library, Environment *env, const float *start,
+                         const float *goal);
 
 py::list export_library(const Library &library, int timesteps);
 

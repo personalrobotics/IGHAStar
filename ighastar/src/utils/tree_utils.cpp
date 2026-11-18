@@ -11,6 +11,8 @@
 
 #include <pybind11/numpy.h>
 
+#include "utils/sampling_utils.h"
+
 namespace tree_utils {
 
 namespace {
@@ -245,7 +247,37 @@ std::shared_ptr<Node> rebuild_vertex(const float *pose, float g, float f,
       /*time_direction_=*/1, controls, times, time_in, time_is_set);
   node->time_direction = time_direction;
   node->f = f;
+#ifdef IGHASTAR_RESTORE_NODE
+  IGHASTAR_RESTORE_NODE(env, *node);
+#endif
   return node;
+}
+
+MeetEdge geometric_meet_edge(Environment *env, const std::shared_ptr<Node> &source,
+                            const std::shared_ptr<Node> &target) {
+  MeetEdge edge;
+  if (!env || !source || !target) {
+    return edge;
+  }
+  // A geometric shortcut has no duration. g still pays the near-meet distance.
+  // The clock stays on the source so the suffix can be rebased onto this query.
+  edge.ok = true;
+  edge.cost = env->compute_near_meet_distance(source->pose, target->pose);
+  edge.arrival = source->time;
+  const int steps = env->timesteps;
+  if (steps <= 0) {
+    return edge;
+  }
+  edge.poses.resize(static_cast<size_t>(steps) * n_dims);
+  edge.times.assign(steps, source->time);
+  for (int t = 0; t < steps; ++t) {
+    const float alpha =
+        static_cast<float>(t + 1) / static_cast<float>(steps);
+    sampling::interpolate_pose(source->pose, target->pose, alpha, n_dims,
+                               env->near_meet_.angular_dims,
+                               edge.poses.data() + static_cast<size_t>(t) * n_dims);
+  }
+  return edge;
 }
 
 } // namespace
@@ -302,6 +334,13 @@ py::dict export_trajectory(const Trajectory &traj, int timesteps) {
   out["timesteps"] = timesteps;
   pack_side(out, "path", traj.path, path_index, timesteps, false);
   pack_side(out, "child", traj.children, path_index, timesteps, true);
+  if (static_cast<int>(traj.goal.size()) == n_dims) {
+    out["goal_pose"] = copy_array<float>(traj.goal, {n_dims});
+  }
+  if (!traj.world.empty()) {
+    out["world"] = copy_array<float>(
+        traj.world, {static_cast<py::ssize_t>(traj.world.size())});
+  }
   return out;
 }
 
@@ -325,11 +364,25 @@ void reset_library(Library &library) {
 }
 
 Library import_trajectories(const py::list &items, Environment *env) {
-  const int inter_n = env->timesteps > 0 ? env->timesteps * n_dims : 0;
-  const int ctrl_n = env->timesteps > 0 ? env->timesteps * n_cont : 0;
   Library library;
   for (py::handle item : items) {
     py::dict d = item.cast<py::dict>();
+    if (d.contains("timesteps")) {
+      const int saved = d["timesteps"].cast<int>();
+#ifdef IGHASTAR_LIBRARY_TIMESTEPS_FROM_EXPORT
+      if (saved < 0) {
+        throw std::invalid_argument("trajectory timesteps must be non-negative");
+      }
+      env->timesteps = saved;
+#else
+      if (saved != env->timesteps) {
+        throw std::invalid_argument(
+            "trajectory timesteps do not match this environment");
+      }
+#endif
+    }
+    const int inter_n = env->timesteps > 0 ? env->timesteps * n_dims : 0;
+    const int ctrl_n = env->timesteps > 0 ? env->timesteps * n_cont : 0;
     auto pose = field_f(d, "path_pose");
     auto g = field_f(d, "path_g");
     auto f = field_f(d, "path_f");
@@ -526,6 +579,17 @@ Library import_trajectories(const py::list &items, Environment *env) {
           env, times, child_clock_base ? child_clock_base[i] : 0.f,
           child_clock_base != nullptr));
     }
+    if (d.contains("goal_pose")) {
+      auto goal_pose = field_f(d, "goal_pose");
+      if (goal_pose.size() != n_dims) {
+        throw std::invalid_argument("goal_pose must have length n_dims");
+      }
+      traj.goal.assign(goal_pose.data(), goal_pose.data() + n_dims);
+    }
+    if (d.contains("world")) {
+      auto world = field_f(d, "world");
+      traj.world.assign(world.data(), world.data() + world.size());
+    }
     library.trajs.push_back(std::move(traj));
   }
   index_library(library);
@@ -539,14 +603,42 @@ void record_solution(
     std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>,
                         NodePtrCompare>
         Q_v,
-    const igha::unordered_set<std::shared_ptr<Node>> &inactive_Q_v) {
+    const igha::unordered_set<std::shared_ptr<Node>> &inactive_Q_v,
+    const float *goal_pose, Environment *env) {
   if (path.empty()) {
     return;
   }
   library.trajs.push_back(
       capture_trajectory(path, Seen, std::move(Q_v), inactive_Q_v));
+  auto &traj = library.trajs.back();
+  if (goal_pose != nullptr) {
+    traj.goal.assign(goal_pose, goal_pose + n_dims);
+  }
+#ifdef IGHASTAR_STAMP_WORLD
+  if (env != nullptr) {
+    IGHASTAR_STAMP_WORLD(env, traj.world);
+  }
+#else
+  (void)env;
+#endif
   index_path(library, static_cast<int>(library.trajs.size()) - 1);
   library.used.push_back(0);
+}
+
+void select_trajectories(Library &library, Environment *env, const float *start,
+                         const float *goal) {
+  const int n = static_cast<int>(library.trajs.size());
+  std::vector<std::vector<float>> goals(n);
+  std::vector<std::vector<float>> worlds(n);
+  for (int i = 0; i < n; ++i) {
+    goals[i] = library.trajs[i].goal;
+    worlds[i] = library.trajs[i].world;
+  }
+  std::vector<uint8_t> keep(n, 1);
+  if (env != nullptr) {
+    env->filter_trajectories(goals, worlds, start, goal, keep);
+  }
+  library.applicable = std::move(keep);
 }
 
 py::list export_library(const Library &library, int timesteps) {
@@ -634,6 +726,11 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
         library.used[traj]) {
       continue;
     }
+    if (!library.applicable.empty() &&
+        (traj >= static_cast<int>(library.applicable.size()) ||
+         !library.applicable[traj])) {
+      continue;
+    }
     const auto &path = library.trajs[traj].path;
     if (path.empty() || idx < 0 || idx >= static_cast<int>(path.size())) {
       continue;
@@ -649,34 +746,68 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
   std::vector<bool> valid;
   std::vector<std::vector<float>> connections;
   env->solve_2pBVP(pairs, valid, connections);
-  igha::unordered_map<int, std::pair<int, float>> best;
+  struct Best {
+    int idx;
+    float spliced;
+    int pair;
+  };
+  igha::unordered_map<int, Best> best;
   for (size_t n = 0; n < cands.size(); ++n) {
     if (n >= valid.size() || !valid[n]) {
       continue;
     }
     auto it = best.find(cands[n].traj);
-    if (it == best.end() || cands[n].spliced < it->second.second) {
-      best[cands[n].traj] = {cands[n].idx, cands[n].spliced};
+    if (it == best.end() || cands[n].spliced < it->second.spliced) {
+      best[cands[n].traj] = Best{cands[n].idx, cands[n].spliced,
+                                 static_cast<int>(n)};
     }
   }
   for (const auto &kv : best) {
     const int traj = kv.first;
-    const int k = kv.second.first;
-    library.used[traj] = 1;
+    const int k = kv.second.idx;
     const auto &path = library.trajs[traj].path;
-    float dist = env->compute_near_meet_distance(u->pose, path[k]->pose);
-    float g_meet = u->g + dist;
-    float g_old_meet = path[k]->g;
+    const std::vector<float> &conn =
+        connections[static_cast<size_t>(kv.second.pair)];
+#ifdef IGHASTAR_REALIZE_MEET
+    MeetEdge edge = IGHASTAR_REALIZE_MEET(env, u, path[k], conn);
+#else
+    (void)conn;
+    MeetEdge edge = geometric_meet_edge(env, u, path[k]);
+#endif
+    if (!edge.ok) {
+      continue;
+    }
+    library.used[traj] = 1;
+    const float g_meet = u->g + edge.cost;
+    const float g_old_meet = path[k]->g;
+    const float offset = edge.arrival - path[k]->time;
     std::vector<std::shared_ptr<Node>> copies(static_cast<size_t>(k) + 1);
     for (int i = k; i >= 0; --i) {
-      float g_new = g_meet + (path[i]->g - g_old_meet);
-      float h = env->heuristic(path[i]->pose, goal->pose);
-      std::shared_ptr<Node> parent =
+      const float g_new = g_meet + (path[i]->g - g_old_meet);
+      const float h = env->heuristic(path[i]->pose, goal->pose);
+      const std::shared_ptr<Node> parent =
           (i == k) ? u : copies[static_cast<size_t>(i) + 1];
-      auto copy = rebuild_vertex(
-          path[i]->pose, g_new, g_new + h, path[i]->time_direction,
-          path[i]->intermediate_poses, path[i]->intermediate_controls, parent,
-          env, path[i]->intermediate_times, path[i]->time, true);
+      std::vector<float> shifted;
+      const float *times = nullptr;
+      const float *poses = path[i]->intermediate_poses;
+      const float *ctrls = path[i]->intermediate_controls;
+      float arrival = path[i]->time + offset;
+      if (i == k) {
+        poses = edge.poses.empty() ? nullptr : edge.poses.data();
+        ctrls = edge.controls.empty() ? nullptr : edge.controls.data();
+        times = edge.times.empty() ? nullptr : edge.times.data();
+        arrival = edge.arrival;
+      } else if (path[i]->intermediate_times != nullptr && env->timesteps > 0) {
+        shifted.resize(env->timesteps);
+        for (int t = 0; t < env->timesteps; ++t) {
+          shifted[static_cast<size_t>(t)] =
+              path[i]->intermediate_times[t] + offset;
+        }
+        times = shifted.data();
+      }
+      auto copy = rebuild_vertex(path[i]->pose, g_new, g_new + h,
+                                 path[i]->time_direction, poses, ctrls, parent,
+                                 env, times, arrival, true);
       copy->expand_index = 0;
       copies[static_cast<size_t>(i)] = copy;
       out.push_back(copy);
@@ -692,14 +823,24 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
       if (parent_on_suffix < 0) {
         continue;
       }
-      float g_new = copies[static_cast<size_t>(parent_on_suffix)]->g +
-                    (child->g - path[parent_on_suffix]->g);
-      float h = env->heuristic(child->pose, goal->pose);
+      const float g_new = copies[static_cast<size_t>(parent_on_suffix)]->g +
+                          (child->g - path[parent_on_suffix]->g);
+      const float h = env->heuristic(child->pose, goal->pose);
+      std::vector<float> shifted;
+      const float *times = nullptr;
+      if (child->intermediate_times != nullptr && env->timesteps > 0) {
+        shifted.resize(env->timesteps);
+        for (int t = 0; t < env->timesteps; ++t) {
+          shifted[static_cast<size_t>(t)] =
+              child->intermediate_times[t] + offset;
+        }
+        times = shifted.data();
+      }
       auto copy = rebuild_vertex(
           child->pose, g_new, g_new + h, child->time_direction,
           child->intermediate_poses, child->intermediate_controls,
-          copies[static_cast<size_t>(parent_on_suffix)], env,
-          child->intermediate_times, child->time, true);
+          copies[static_cast<size_t>(parent_on_suffix)], env, times,
+          child->time + offset, true);
       copy->expand_index = -1;
       out.push_back(copy);
     }
