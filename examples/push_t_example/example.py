@@ -52,8 +52,8 @@ def in_goal(state, goal, epsilon) -> bool:
 
 
 def path_index(path, t_now) -> int:
-    # First row whose stamped sim time is at or after t_now. g is one substep per row.
-    i = int(np.searchsorted(path[:, -1], t_now, side="left"))
+    # First row whose clock is at or after t_now. Column -2 is time, -1 is g.
+    i = int(np.searchsorted(path[:, -2], t_now, side="left"))
     return min(i, len(path) - 1)
 
 
@@ -156,7 +156,7 @@ def main():
                 print(f"goal at step {step}")
                 break
             # Open loop plays the whole tape. Past the last stamp, wait. Do not repeat the last command.
-            if args.open_loop and (planner.path is None or t_world > planner.path[-1, -1]):
+            if args.open_loop and (planner.path is None or t_world > planner.path[-1, -2]):
                 planner.set_query(state, goal, t_world)
                 planner.update()
                 time.sleep(0.01)
@@ -172,7 +172,7 @@ def main():
                 print(f"path len={len(p)} block {p[0,2:5]} -> {p[-1,2:5]}")
             if args.open_loop:
                 # First row strictly after t_world, so an edge boundary takes the next action.
-                i = int(np.searchsorted(planner.path[:, -1], t_world, side="right"))
+                i = int(np.searchsorted(planner.path[:, -2], t_world, side="right"))
                 last_action = planner.controls[min(i, len(planner.controls) - 1)]
             else:
                 ref = ref_window(planner.path, t_world, mppi_cfg["TIMESTEPS"], n_sub)

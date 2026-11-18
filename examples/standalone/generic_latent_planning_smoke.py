@@ -182,7 +182,7 @@ def main() -> None:
     info = planner.get_profiler_info()
     print(f"success={ok} expansions={info[7]} preempt={planner.get_preemptive_expansions()}")
     if ok:
-        path = planner.get_best_path().numpy()  # rows in PCA basis (64-D) + g
+        path = planner.get_best_path().numpy()  # PCA state, then time, then g
         print(f"latent plan: {path.shape[0]} states, cost {path[0, -1]:.3f}")
         # Map the planned latents back to raw space and show the active dims.
         zpath = torch.from_numpy(path[::-1, :LATENT_DIM].copy())  # start->goal

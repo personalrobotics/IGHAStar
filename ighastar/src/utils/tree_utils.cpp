@@ -45,12 +45,22 @@ py::dict node_to_dict(const std::shared_ptr<Node> &node, int timesteps) {
   }
   d["pose"] = pose_to_list(node->pose);
   d["g"] = node->g;
+  d["time"] = node->time;
   d["f"] = node->f;
   d["discover_index"] = node->discover_index;
   d["expand_index"] = node->expand_index;
   d["time_direction"] = node->time_direction;
   d["intermediate_poses"] =
       intermediate_poses_to_list(node->intermediate_poses, timesteps);
+  if (node->intermediate_times == nullptr || timesteps <= 0) {
+    d["intermediate_times"] = py::none();
+  } else {
+    py::list times;
+    for (int t = 0; t < timesteps; ++t) {
+      times.append(node->intermediate_times[t]);
+    }
+    d["intermediate_times"] = times;
+  }
   return d;
 }
 
@@ -122,9 +132,12 @@ void append_vertex(const std::shared_ptr<Node> &node, int parent_index,
                    std::vector<float> &f, std::vector<int> &time_direction,
                    std::vector<int> &parent, std::vector<float> &inter,
                    std::vector<uint8_t> &has_inter, std::vector<float> &controls,
-                   std::vector<uint8_t> &has_controls) {
+                   std::vector<uint8_t> &has_controls, std::vector<float> &clock,
+                   std::vector<float> &inter_times,
+                   std::vector<uint8_t> &has_times) {
   pose.insert(pose.end(), node->pose, node->pose + n_dims);
   g.push_back(node->g);
+  clock.push_back(node->time);
   f.push_back(node->f);
   time_direction.push_back(node->time_direction);
   parent.push_back(parent_index);
@@ -146,6 +159,14 @@ void append_vertex(const std::shared_ptr<Node> &node, int parent_index,
     has_controls.push_back(0);
     controls.insert(controls.end(), ctrl_n, 0.f);
   }
+  if (node->intermediate_times != nullptr && timesteps > 0) {
+    has_times.push_back(1);
+    inter_times.insert(inter_times.end(), node->intermediate_times,
+                       node->intermediate_times + timesteps);
+  } else {
+    has_times.push_back(0);
+    inter_times.insert(inter_times.end(), timesteps > 0 ? timesteps : 0, 0.f);
+  }
 }
 
 void pack_side(py::dict &out, const char *prefix,
@@ -154,9 +175,9 @@ void pack_side(py::dict &out, const char *prefix,
                int timesteps, bool require_parent) {
   const std::string p(prefix);
   const int n = static_cast<int>(nodes.size());
-  std::vector<float> pose, g, f, inter, controls;
+  std::vector<float> pose, g, f, inter, controls, clock, inter_times;
   std::vector<int> time_direction, parent;
-  std::vector<uint8_t> has_inter, has_controls;
+  std::vector<uint8_t> has_inter, has_controls, has_times;
   pose.reserve(static_cast<size_t>(n) * n_dims);
   const int inter_n = timesteps > 0 ? timesteps * n_dims : 0;
   const int ctrl_n = timesteps > 0 ? timesteps * n_cont : 0;
@@ -174,15 +195,22 @@ void pack_side(py::dict &out, const char *prefix,
       throw std::invalid_argument("child parent is not on the trajectory");
     }
     append_vertex(node, parent_index, timesteps, pose, g, f, time_direction,
-                  parent, inter, has_inter, controls, has_controls);
+                  parent, inter, has_inter, controls, has_controls, clock,
+                  inter_times, has_times);
   }
   out[py::str(p + "_pose")] = copy_array<float>(pose, {n, n_dims});
   out[py::str(p + "_g")] = copy_array<float>(g, {n});
+  out[py::str(p + "_time")] = copy_array<float>(clock, {n});
   out[py::str(p + "_f")] = copy_array<float>(f, {n});
   out[py::str(p + "_time_direction")] = copy_array<int>(time_direction, {n});
   out[py::str(p + "_parent_index")] = copy_array<int>(parent, {n});
   out[py::str(p + "_has_intermediates")] = copy_array<uint8_t>(has_inter, {n});
   out[py::str(p + "_has_controls")] = copy_array<uint8_t>(has_controls, {n});
+  out[py::str(p + "_has_times")] = copy_array<uint8_t>(has_times, {n});
+  if (timesteps > 0) {
+    out[py::str(p + "_intermediate_times")] =
+        copy_array<float>(inter_times, {n, timesteps});
+  }
   if (inter_n > 0) {
     out[py::str(p + "_intermediate_poses")] =
         copy_array<float>(inter, {n, timesteps, n_dims});
@@ -204,14 +232,17 @@ std::shared_ptr<Node> rebuild_vertex(const float *pose, float g, float f,
                                      int time_direction, const float *inter,
                                      const float *controls,
                                      const std::shared_ptr<Node> &parent,
-                                     Environment *env) {
+                                     Environment *env, const float *times,
+                                     float time_in, bool time_is_set) {
   // Pass time_direction +1 so the constructor copies the stored buffers.
   // The saved time_direction is written after, or a backward node would be
-  // reversed a second time.
+  // reversed a second time. time_is_set keeps the stored arrival: the buffer
+  // is already in stored order, so its last sample is not the arrival on a
+  // backward edge.
   auto node = std::make_shared<Node>(
       pose, inter, parent, g, env->resolution, env->tolerance,
       env->division_factor, env->timesteps, env->local_controllability_radius,
-      /*time_direction_=*/1, controls);
+      /*time_direction_=*/1, controls, times, time_in, time_is_set);
   node->time_direction = time_direction;
   node->f = f;
   return node;
@@ -336,6 +367,27 @@ Library import_trajectories(const py::list &items, Environment *env) {
       }
       ctrl_base = controls.data();
     }
+    FArr clock, step_times;
+    U8Arr has_times;
+    const float *clock_base = nullptr;
+    const float *step_base = nullptr;
+    if (d.contains("path_time")) {
+      clock = field_f(d, "path_time");
+      if (clock.size() != n) {
+        throw std::invalid_argument("path_time length must match path_pose");
+      }
+      clock_base = clock.data();
+    }
+    if (d.contains("path_intermediate_times") && env->timesteps > 0) {
+      step_times = field_f(d, "path_intermediate_times");
+      has_times = field_u8(d, "path_has_times");
+      if (step_times.ndim() != 2 || step_times.shape(0) != n ||
+          step_times.shape(1) != env->timesteps || has_times.size() != n) {
+        throw std::invalid_argument(
+            "path_intermediate_times must have shape [N, timesteps]");
+      }
+      step_base = step_times.data();
+    }
     std::vector<int> parent_index(n);
     int root = -1;
     for (int i = 0; i < n; ++i) {
@@ -381,10 +433,14 @@ Library import_trajectories(const py::list &items, Environment *env) {
           (ctrl_base != nullptr && has_controls.data()[next])
               ? ctrl_base + static_cast<size_t>(next) * ctrl_n
               : nullptr;
+      const float *times =
+          (step_base != nullptr && has_times.data()[next])
+              ? step_base + static_cast<size_t>(next) * env->timesteps
+              : nullptr;
       traj.path[next] = rebuild_vertex(
           pose.data() + static_cast<size_t>(next) * n_dims, g.data()[next],
           f.data()[next], time_direction.data()[next], inter, controls, parent,
-          env);
+          env, times, clock_base ? clock_base[next] : 0.f, clock_base != nullptr);
       built[next] = 1;
     }
     auto child_pose = field_f(d, "child_pose");
@@ -424,6 +480,28 @@ Library import_trajectories(const py::list &items, Environment *env) {
       }
       child_ctrl_base = child_controls.data();
     }
+    FArr child_clock, child_step_times;
+    U8Arr child_has_times;
+    const float *child_clock_base = nullptr;
+    const float *child_step_base = nullptr;
+    if (d.contains("child_time")) {
+      child_clock = field_f(d, "child_time");
+      if (child_clock.size() != nc) {
+        throw std::invalid_argument("child_time length must match child_pose");
+      }
+      child_clock_base = child_clock.data();
+    }
+    if (d.contains("child_intermediate_times") && env->timesteps > 0) {
+      child_step_times = field_f(d, "child_intermediate_times");
+      child_has_times = field_u8(d, "child_has_times");
+      if (child_step_times.ndim() != 2 || child_step_times.shape(0) != nc ||
+          child_step_times.shape(1) != env->timesteps ||
+          child_has_times.size() != nc) {
+        throw std::invalid_argument(
+            "child_intermediate_times must have shape [N, timesteps]");
+      }
+      child_step_base = child_step_times.data();
+    }
     traj.children.reserve(nc);
     for (int i = 0; i < nc; ++i) {
       const int p = child_parent.data()[i];
@@ -438,10 +516,15 @@ Library import_trajectories(const py::list &items, Environment *env) {
           (child_ctrl_base != nullptr && child_has_controls.data()[i])
               ? child_ctrl_base + static_cast<size_t>(i) * ctrl_n
               : nullptr;
+      const float *times =
+          (child_step_base != nullptr && child_has_times.data()[i])
+              ? child_step_base + static_cast<size_t>(i) * env->timesteps
+              : nullptr;
       traj.children.push_back(rebuild_vertex(
           child_pose.data() + static_cast<size_t>(i) * n_dims, child_g.data()[i],
           child_f.data()[i], child_time.data()[i], inter, controls, traj.path[p],
-          env));
+          env, times, child_clock_base ? child_clock_base[i] : 0.f,
+          child_clock_base != nullptr));
     }
     library.trajs.push_back(std::move(traj));
   }
@@ -593,7 +676,7 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
       auto copy = rebuild_vertex(
           path[i]->pose, g_new, g_new + h, path[i]->time_direction,
           path[i]->intermediate_poses, path[i]->intermediate_controls, parent,
-          env);
+          env, path[i]->intermediate_times, path[i]->time, true);
       copy->expand_index = 0;
       copies[static_cast<size_t>(i)] = copy;
       out.push_back(copy);
@@ -615,7 +698,8 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
       auto copy = rebuild_vertex(
           child->pose, g_new, g_new + h, child->time_direction,
           child->intermediate_poses, child->intermediate_controls,
-          copies[static_cast<size_t>(parent_on_suffix)], env);
+          copies[static_cast<size_t>(parent_on_suffix)], env,
+          child->intermediate_times, child->time, true);
       copy->expand_index = -1;
       out.push_back(copy);
     }

@@ -18,68 +18,9 @@ size_t calc_hash(float *pose, const float *resolution) {
   return hash_val;
 }
 
-struct Node {
-public:
-  float pose[n_dims];
-  float *intermediate_poses; // Not used in simple env, but needed for interface
-                             // compatibility
-  float g, f;
-  bool active;
-  int rank, level;
-  size_t hash;
-  size_t
-      LCR_index; // Hash for local controllability radius (near-meet detection)
-  int time_direction; // 1 for forward, -1 for backward
-  LazyIndex<n_dims, calc_hash> index;
-  std::shared_ptr<Node> parent;
-  // Preemptive expansion bookkeeping: whether this node's successors have
-  // already been computed (and cached) before it was popped from Q_v.
-  bool preexpanded = false;
-  std::vector<std::shared_ptr<Node>> cached_succ;
-  // Expansion bookkeeping for tree export / visualization.
-  int discover_index = -1;
-  int expand_index = -1;
-  float control[n_cont] = {};
-  float *intermediate_controls = nullptr;
-
-  // Constructor matching kinodynamic pattern (intermediate_poses ignored for
-  // simple env)
-  Node(const float *pose_in, const float *intermediate_poses_,
-       std::shared_ptr<Node> parent_in, float g_in, const float *resolution_,
-       const float *tolerance, float division_factor,
-       int timesteps, const float *LCR_, int time_direction_ = 1,
-       const float *intermediate_controls_ = nullptr)
-      : intermediate_poses(nullptr), intermediate_controls(nullptr), g(g_in),
-        f(0), parent(parent_in), active(true), rank(0), level(0),
-        time_direction(time_direction_) {
-    for (int i = 0; i < n_dims; i++) {
-      pose[i] = pose_in[i];
-    }
-    hash = calc_hash(pose, tolerance);
-    // Compute LCR_index using local_controllability_radius
-    LCR_index = calc_hash(pose, LCR_);
-    index.init(pose, resolution_, division_factor);
-    if (parent_in != nullptr && intermediate_controls_ != nullptr) {
-      intermediate_controls = new float[timesteps * n_cont];
-      memcpy(intermediate_controls, intermediate_controls_,
-             timesteps * n_cont * sizeof(float));
-      memcpy(control, intermediate_controls_, n_cont * sizeof(float));
-    }
-  }
-
-  ~Node() {
-    if (intermediate_controls) {
-      delete[] intermediate_controls;
-    }
-  }
-};
-
-struct NodePtrCompare {
-  bool operator()(const std::shared_ptr<Node> &a,
-                  const std::shared_ptr<Node> &b) const {
-    return a->f > b->f; // min-heap: smaller f has higher priority
-  }
-};
+constexpr int hash_dims = n_dims;
+#include "node.h"
+#include "trajectory_export.h"
 
 class Environment {
   int map_size_px, n_succ;
@@ -343,43 +284,11 @@ public:
 
   torch::Tensor convert_node_list_to_path_tensor(
       std::vector<std::shared_ptr<Node>> node_list) {
-    if (node_list.empty()) {
-      return torch::zeros({0, n_dims + 1},
-                          torch::TensorOptions().dtype(torch::kFloat32));
-    }
-
-    int path_length = node_list.size();
-    auto path_tensor =
-        torch::zeros({path_length, n_dims + 1},
-                     torch::TensorOptions().dtype(torch::kFloat32));
-    for (int i = 0; i < path_length; i++) {
-      for (int d = 0; d < n_dims; d++) {
-        path_tensor[i][d] = node_list[i]->pose[d];
-      }
-      path_tensor[i][n_dims] = node_list[i]->g * node_list[i]->time_direction;
-    }
-    return path_tensor;
+    return path_tensor_from_nodes(node_list);
   }
 
   torch::Tensor convert_node_list_to_controls_tensor(
       std::vector<std::shared_ptr<Node>> node_list) {
-    if (node_list.empty()) {
-      return torch::zeros({0, n_cont},
-                          torch::TensorOptions().dtype(torch::kFloat32));
-    }
-    int path_length = node_list.size();
-    auto controls_tensor =
-        torch::zeros({path_length, n_cont},
-                     torch::TensorOptions().dtype(torch::kFloat32));
-    for (int i = 0; i < path_length; i++) {
-      for (int d = 0; d < n_cont; d++) {
-        if (node_list[i]->intermediate_controls != nullptr) {
-          controls_tensor[i][d] = node_list[i]->intermediate_controls[d];
-        } else {
-          controls_tensor[i][d] = node_list[i]->control[d];
-        }
-      }
-    }
-    return controls_tensor;
+    return controls_tensor_from_nodes(node_list);
   }
 };

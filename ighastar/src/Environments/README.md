@@ -14,14 +14,19 @@ Four paths exist:
 ```
 Environments/
 ├── include/           # Header files (.h)
+│   ├── node.h             # Node and NodePtrCompare, included by every env
+│   ├── trajectory_export.h # path and control tensors for get_best_path
+│   ├── lazy_index.h
 │   ├── kinematic.h
 │   ├── kinematic_cpu.h
 │   ├── kinodynamic.h
 │   ├── kinodynamic_cpu.h
 │   ├── simple.h
 │   ├── pusht.h            # PushT (Chipmunk CPU)
+│   ├── pusht_multi.h
+│   ├── pusht_qs_cuda.h
 │   ├── pusht_physics.h
-│   ├── generic_common.h   # Node + shared logic of the generic envs
+│   ├── generic_common.h   # shared logic of the generic envs (includes node.h)
 │   ├── generic.h          # Python callbacks (py::function)
 │   └── generic_torch.h    # AOTInductor-compiled torch callbacks
 ├── src/               # Source files (.cpp, .cu)
@@ -150,7 +155,14 @@ elevation representation only and rejects 4D tensors.
   torch::Tensor convert_node_list_to_path_tensor(std::vector<std::shared_ptr<Node>> node_list);
   ```
   Converts a list of nodes (the path) to a PyTorch tensor for output/visualization.
-  The tensor should have shape `[path_length, n_dims + 1]`, where the last column contains `g * time_direction` to indicate search direction.
+  The tensor has shape `[path_length, n_dims + 2]`. Column `n_dims` is the clock of that sample. The last column is `g * time_direction`. Solution cost stays `path[0, -1]`.
+
+**convert_node_list_to_controls_tensor**
+  ```cpp
+  torch::Tensor convert_node_list_to_controls_tensor(
+      std::vector<std::shared_ptr<Node>> node_list);
+  ```
+  Controls for the same rows as the path tensor. `get_best_path_with_controls` calls this. Both writers live in `trajectory_export.h`. On a backward edge the stored poses are reversed and the controls are not; the control read undoes that so each control row matches its path row.
 
 ### **Required Members**
 - `int time_direction;` - Direction of search: `1` for forward, `-1` for backward.
@@ -158,52 +170,44 @@ elevation representation only and rejects 4D tensors.
 - `float local_controllability_radius[n_dims];` - Local controllability radius for each dimension.
 - `float resolution[n_dims];` - Resolution for each dimension.
 - `float tolerance[n_dims];` - Tolerance for each dimension.
+- `float division_factor;` - How much finer each search level is. `Node` reads it when building `index`.
 
 ## Node Structure Requirements
 
-Your environment must define a `Node` struct or class with the following members and methods:
+Do not define `Node` in the environment header. Define `n_dims`, `n_cont`, `hash_dims`, and `calc_hash(float *, const float *)`, then `#include "node.h"`. That header provides `Node` and `NodePtrCompare`. `simple` and `kinodynamic.h` set `hash_dims` equal to `n_dims`. `pusht_multi` defines `NODE_NFLAGS` as its tee count before the include, which adds `bool cleared[NFlags]`. Every other environment leaves `NODE_NFLAGS` at 0, so that array is absent.
 
-### **Required Members**
+`node.h` stores:
+
 - `float pose[n_dims];` // State vector (e.g., [x, y, ...])
-- `float *intermediate_poses;` // (Optional) Intermediate states between parent and this node
+- `float *intermediate_poses;` // States between the parent and this node, `timesteps * n_dims`. Reversed when `time_direction` is `-1`.
+- `float *intermediate_times;` // Clock of each of those states, `timesteps` values, reversed with the poses. Written when the edge is integrated (`fill_substep_times`). Null on a geometric edge.
+- `float *intermediate_controls;` // Controls for that edge, `timesteps * n_cont`. `control[n_cont]` holds the first sample.
 - `float g, f;` // Cost-to-come and total cost
+- `float time;` // Arrival clock of this node. Set from the last generated substep. If no substep times were passed, it stays equal to `g`.
 - `bool active;` // Whether the node is active in the search
 - `int rank, level;` // Rank and resolution level
 - `size_t hash;` // Hash value for fast lookup
 - `size_t LCR_index;` // Index for local controllability radius table (used in bidirectional search)
 - `int time_direction;` // Direction of search: `1` for forward, `-1` for backward
-- `index;` // Multi-resolution cell hashes: `index[l]` is the hash at level `l`, for any `l` the search reaches. Use `LazyIndex<hash_dims, calc_hash>` from `Environments/include/lazy_index.h`, which computes a level the first time it is read. A fixed-size vector would be read out of range once the search goes deeper than its length.
-- `std::shared_ptr<Node> parent;` // Pointer to parent node
+- `LazyIndex<hash_dims, calc_hash> index;` // `index[l]` is the hash at level `l`, computed the first time that level is read.
+- `std::shared_ptr<Node> parent;`
+- `bool preexpanded;` and `std::vector<std::shared_ptr<Node>> cached_succ;` // Successor cache
+- `int discover_index, expand_index;` // `-1` until the search sets them
 
-### **Required Methods**
-- **Constructor**
-  ```cpp
-  Node(const float *pose_in, const float *intermediate_poses_,
-       std::shared_ptr<Node> parent_in, float g_in,
-       const float *resolution_, float *tolerance,
-       float division_factor, int timesteps,
-       const float *LCR_, int time_direction_ = 1);
-  ```
-  Initializes a node with the given state, parent, and other parameters.
-
-- **Destructor**
-  ```cpp
-  ~Node();
-  ```
-  Frees any dynamically allocated memory (e.g., `intermediate_poses`).
-
-## Node Comparison
-
-You must also define a comparison functor for use in priority queues:
+The constructor is:
 
 ```cpp
-struct NodePtrCompare {
-    bool operator()(const std::shared_ptr<Node> &a,
-                    const std::shared_ptr<Node> &b) const {
-        return a->f > b->f; // min-heap: smaller f has higher priority
-    }
-};
+Node(const float *pose_in, const float *intermediate_poses_,
+     std::shared_ptr<Node> parent_in, float g_in,
+     const float *resolution_, const float *tolerance,
+     float division_factor, int timesteps, const float *LCR_,
+     int time_direction_ = 1,
+     const float *intermediate_controls_ = nullptr);
 ```
+
+The destructor frees `intermediate_poses` and `intermediate_controls`.
+
+`NodePtrCompare` orders the open set as a min-heap on `f` (`a->f > b->f`). It is in `node.h`.
 
 ## Example
 
@@ -224,14 +228,14 @@ not shell environment variables.
 
 Built-in headers under `Environments/include/`: `simple.h`, `kinematic.h` /
 `kinematic_cpu.h`, `kinodynamic.h` / `kinodynamic_cpu.h`, `generic.h`,
-`generic_torch.h`, `pusht.h`, `pusht_qs_cuda.h`.
+`generic_torch.h`, `pusht.h`, `pusht_multi.h`, `pusht_qs_cuda.h`.
 
-An out-of-tree header must provide the same things a built-in one does: an
-`Environment` class with the interface above, a `Node` struct and
-`NodePtrCompare`. The simplest way is to build on `generic_common.h`, as
-`generic.h` and `generic_torch.h` do. `generic_common.h` takes dimensions from
-`N_DIMS`, `N_CONT` and `HASH_DIMS`. The constructor receives the whole config
-dict passed to `IGHAStar(config, debug)`.
+An out-of-tree header must provide an `Environment` class with the interface
+above. It gets `Node` and `NodePtrCompare` by including `node.h` after
+`n_dims`, `n_cont`, `hash_dims`, and `calc_hash`. The generic environments do
+that inside `generic_common.h`, which `generic.h` and `generic_torch.h` include.
+`generic_common.h` takes dimensions from `N_DIMS`, `N_CONT` and `HASH_DIMS`.
+The constructor receives the whole config dict passed to `IGHAStar(config, debug)`.
 
 `create_planner` only builds the built-in `node_type`s, so build an out-of-tree
 env yourself:

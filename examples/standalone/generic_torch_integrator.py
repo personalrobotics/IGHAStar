@@ -114,8 +114,8 @@ def solve(planner, configs, repeats: int):
     """Run the search `repeats` times from a fixed start.
 
     Returns:
-        (success, expansions, path, best_time_s); path is a numpy array of states
-        with the cost-so-far in the last column, or None if the search failed.
+        (success, expansions, path, best_time_s); path is [T, state + 2]
+        with the clock at -2 and g at -1, or None if the search failed.
     """
     info = configs["experiment_info_default"]
     start = torch.tensor([1.0, 1.0], dtype=torch.float32)
@@ -162,7 +162,10 @@ def main() -> None:
         raise RuntimeError("generic_torch_integrator: search failed")
     print(f"  path: {path.shape[0]} states, solution cost {path[0, -1]:.3f}")
     for i in range(0, path.shape[0], max(1, path.shape[0] // 10)):
-        print(f"  state {i}: {np.round(path[i, :-1], 3)}  g={path[i, -1]:.3f}")
+        print(
+            f"  state {i}: {np.round(path[i, :-2], 3)}  "
+            f"t={path[i, -2]:.3f}  g={path[i, -1]:.3f}"
+        )
 
     if args.skip_generic:
         return

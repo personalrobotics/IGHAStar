@@ -258,8 +258,8 @@ def ensure_traj(si: int, gi: int, start: np.ndarray, goal: np.ndarray, planner) 
     if already_at_goal(start, goal):
         # One-pose traj at start.
         pose = np.asarray(start, dtype=np.float32).reshape(1, -1)
-        # path format [T, 11] with g in last col
-        row = np.zeros((1, 11), dtype=np.float32)
+        # path format [T, 12]: state, time, g
+        row = np.zeros((1, 12), dtype=np.float32)
         row[0, :10] = pose[0, :10]
         np.save(path, row)
         return row

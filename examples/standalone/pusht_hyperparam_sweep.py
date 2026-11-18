@@ -12,7 +12,7 @@ Outputs under Content/standalone/ by default:
   pusht_dino_problems.npz     — fixed problem set
   pusht_sweep_results.csv     — one row per (config × problem)
   pusht_sweep_traj/           — success paths only:
-    res{R}_radii{tag}_vmax{V}/p{idx:03d}.npy   # [T, 11] start→goal, last col = g
+    res{R}_radii{tag}_vmax{V}/p{idx:03d}.npy   # [T, 12] start→goal, col -2 = time, last col = g
 """
 from __future__ import annotations
 

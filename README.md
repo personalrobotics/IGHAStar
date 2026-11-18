@@ -221,6 +221,8 @@ python3 generic_torch_integrator.py    # generic_torch; also runs generic and pr
 
 On the integrator example, `generic_torch` gives the same expansions, path and cost as `generic` and searches about 9x faster on CPU. See [GENERIC.md](ighastar/src/Environments/GENERIC.md#generic_torch-compiled-torch-callbacks) for the constraints, randomness, CUDA and caching.
 
+`get_best_path()` returns `[T, state_dim + 2]`, goal-first. Column `-2` is the clock of each sample. The last column is `g` times the search direction, and the solution cost is `path[0, -1]`.
+
 For detailed configuration and usage instructions, see [examples/standalone/README.md](examples/standalone/README.md).
 For a custom environment in Python (dynamics, cost, validity, heuristic, goal test as callbacks), see [ighastar/Environments/GENERIC.md](ighastar/src/Environments/GENERIC.md).
 For a custom C++ Environment (`Succ` and related methods), including one that lives in your own project (`IGHASTAR_ENV_HEADER`), see [ighastar/Environments/README.md](ighastar/src/Environments/README.md).

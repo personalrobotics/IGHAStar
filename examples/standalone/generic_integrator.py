@@ -112,12 +112,13 @@ def main() -> None:
     if not success:
         raise RuntimeError("generic_integrator: search failed")
     path = planner.get_best_path().numpy()
-    # Path is returned goal-first -> start-last; the last column is g
-    # (cost-from-start), so the solution cost is the goal node's g = path[0].
+    # Goal-first. Column -2 is the clock, the last column is g.
     print(f"path: {path.shape[0]} states, solution cost {path[0, -1]:.3f}")
-    # Print a few waypoints
     for i in range(0, path.shape[0], max(1, path.shape[0] // 10)):
-        print(f"  state {i}: {np.round(path[i, :-1], 3)}  g={path[i, -1]:.3f}")
+        print(
+            f"  state {i}: {np.round(path[i, :-2], 3)}  "
+            f"t={path[i, -2]:.3f}  g={path[i, -1]:.3f}"
+        )
 
 
 if __name__ == "__main__":

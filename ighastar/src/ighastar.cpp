@@ -1887,13 +1887,13 @@ public:
       // if(debug){
       std::cout << "Best path is not found, returning empty path" << std::endl;
       // }
-      return torch::zeros({0, n_dims + 1},
+      return torch::zeros({0, n_dims + 2},
                           torch::TensorOptions().dtype(torch::kFloat32));
     }
     if (debug) {
       if (best_path_list.empty()) {
         std::cerr << "ERROR: best_path_list is empty!" << std::endl;
-        return torch::zeros({0, n_dims + 1},
+        return torch::zeros({0, n_dims + 2},
                             torch::TensorOptions().dtype(torch::kFloat32));
       }
       std::cout << "Getting best path from best_path_list, size: "
@@ -1923,7 +1923,7 @@ public:
 
   std::tuple<torch::Tensor, torch::Tensor> get_best_path_with_controls() {
     if (shared_Omega.load() > 1000.0f) {
-      return {torch::zeros({0, n_dims + 1},
+      return {torch::zeros({0, n_dims + 2},
                            torch::TensorOptions().dtype(torch::kFloat32)),
               torch::zeros({0, n_cont},
                            torch::TensorOptions().dtype(torch::kFloat32))};
