@@ -322,7 +322,7 @@ def main(env_cfg, agent_cfg):
             sol = np.zeros(0, np.int64)
             if ok:
                 path_ = planner.get_best_path()
-                st_ = torch.cat([start[None], torch.flip(path_[:, :-1], dims=[0])], 0)
+                st_ = torch.cat([start[None], torch.flip(path_[:, :start.shape[0]], dims=[0])], 0)
                 sol = np.asarray([prob._tree_index.get(prob._key(r), -1) for r in st_[prob.T::prob.T]], np.int64)
             np.savez_compressed(
                 out / f"peg_seed{seed}_tree.npz", **tree, solution_child_ids=sol,
@@ -338,8 +338,8 @@ def main(env_cfg, agent_cfg):
         if prob.diag:
             np.save(out / f"edge_diag_seed{seed}.npy", torch.cat(prob.diag).numpy())
         if ok:
-            path = planner.get_best_path()  # goal-first, last col = cost-to-come
-            dense = torch.flip(path[:, :-1], dims=[0])
+            path = planner.get_best_path()  # goal-first rows: [state (n_dims), time, cost-to-come]
+            dense = torch.flip(path[:, :start.shape[0]], dims=[0])
             states = torch.cat([start[None], dense], 0)
             E = (states.shape[0] - 1) // prob.T
             print(f"first solution at expansion {rec['first_solution_expansion']}; plan = {E} edges = {E * prob.edge_dt:.1f}s")

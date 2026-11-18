@@ -64,6 +64,6 @@ if args.out:
     out.mkdir(parents=True, exist_ok=True)
     if ok:
         path = planner.get_best_path()
-        states = torch.cat([start[None], torch.flip(path[:, :-1], dims=[0])], 0)
+        states = torch.cat([start[None], torch.flip(path[:, :start.shape[0]], dims=[0])], 0)  # path rows: [state, time, cost]
         np.savez_compressed(out / "plan.npz", states=states.numpy(), record=json.dumps(rec))
     (out / "record.json").write_text(json.dumps(rec, indent=1))

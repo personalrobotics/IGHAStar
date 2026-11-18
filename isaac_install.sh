@@ -149,7 +149,7 @@ Isaac Sim asks you to accept its EULA on the first run (or set OMNI_KIT_ACCEPT_E
 
 Peg example ($EXAMPLE):
     # GPU planner on Isaac (PhysX default, or --backend newton)
-    python plan_peg.py --start-idx 3261
+    python plan_peg.py --backend newton --reset-type ObjectPartiallyAssembledEEGrasped --start-idx 3261
     # all-C++ CPU planner: build the MuJoCo model once per start state, then search
     cpu_model/build_cpu_model.sh <model_dir> 3261
     python plan_peg_cpp.py --consts <model_dir>/cpp_problem.npz --model <model_dir>/static_scene.mjb --out <plan_dir>
