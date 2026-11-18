@@ -407,17 +407,30 @@ public:
     mpc_solve(pairs, valid, trajectories);
   }
 
-  // Default: geometric interpolation. Override for a dynamics-aware MPC.
+  // Shooting MPC: warmstart is the edge into u, rollout is the same
+  // step_from_snapshot call Succ uses. A pair with no valid sample is not a near-meet.
   virtual void mpc_solve(
       const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
           &pairs,
       std::vector<bool> &valid,
       std::vector<std::vector<float>> &trajectories) {
     near_meet_.mpc_solve(
-        pairs, valid, trajectories,
-        [this](const std::vector<float *> &states, std::vector<bool> &results) {
-          check_validity_batched(states, results);
-        });
+        pairs, valid, trajectories, n_cont, timesteps,
+        [this](const float *parent_pose, const float *controls, int, int,
+               float *final_pose) {
+          std::vector<float> inter(static_cast<size_t>(timesteps) * n_dims);
+          float pen_inc = 0.f;
+          float peak_force = 0.f;
+          pusht_multi_physics::step_from_snapshot(
+              parent_pose, controls, final_pose, n_substeps, inter.data(),
+              max_agent_vel, &pen_inc, &peak_force, walls_, n_walls_,
+              close_right);
+          return rollout_valid(final_pose, inter.data(), pen_inc, peak_force);
+        },
+        [this](const float *a, const float *b) {
+          return heuristic(const_cast<float *>(a), const_cast<float *>(b));
+        },
+        tolerance);
   }
 
   // Default calls sampling::sample_goal_region. Override to replace the sampler.

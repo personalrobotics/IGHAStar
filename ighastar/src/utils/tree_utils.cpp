@@ -3,6 +3,7 @@
 // not re-include environment headers or duplicate symbols like calc_hash.
 // Do not compile this file as a separate translation unit.
 
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -273,11 +274,29 @@ py::dict export_trajectory(const Trajectory &traj, int timesteps) {
   return out;
 }
 
-std::vector<Trajectory> import_trajectories(const py::list &items,
-                                            Environment *env) {
+void index_path(Library &library, int traj_id) {
+  const auto &path = library.trajs[traj_id].path;
+  for (int i = 0; i < static_cast<int>(path.size()); ++i) {
+    library.lcr[path[i]->LCR_index].push_back({traj_id, i});
+  }
+}
+
+void index_library(Library &library) {
+  library.lcr.clear();
+  library.used.assign(library.trajs.size(), 0);
+  for (int t = 0; t < static_cast<int>(library.trajs.size()); ++t) {
+    index_path(library, t);
+  }
+}
+
+void reset_library(Library &library) {
+  std::fill(library.used.begin(), library.used.end(), 0);
+}
+
+Library import_trajectories(const py::list &items, Environment *env) {
   const int inter_n = env->timesteps > 0 ? env->timesteps * n_dims : 0;
   const int ctrl_n = env->timesteps > 0 ? env->timesteps * n_cont : 0;
-  std::vector<Trajectory> library;
+  Library library;
   for (py::handle item : items) {
     py::dict d = item.cast<py::dict>();
     auto pose = field_f(d, "path_pose");
@@ -424,13 +443,14 @@ std::vector<Trajectory> import_trajectories(const py::list &items,
           child_f.data()[i], child_time.data()[i], inter, controls, traj.path[p],
           env));
     }
-    library.push_back(std::move(traj));
+    library.trajs.push_back(std::move(traj));
   }
+  index_library(library);
   return library;
 }
 
 void record_solution(
-    std::vector<Trajectory> &library,
+    Library &library,
     const std::vector<std::shared_ptr<Node>> &path,
     const igha::unordered_set<std::shared_ptr<Node>> &Seen,
     std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>,
@@ -440,22 +460,25 @@ void record_solution(
   if (path.empty()) {
     return;
   }
-  library.push_back(capture_trajectory(path, Seen, std::move(Q_v), inactive_Q_v));
+  library.trajs.push_back(
+      capture_trajectory(path, Seen, std::move(Q_v), inactive_Q_v));
+  index_path(library, static_cast<int>(library.trajs.size()) - 1);
+  library.used.push_back(0);
 }
 
-py::list export_library(const std::vector<Trajectory> &library, int timesteps) {
+py::list export_library(const Library &library, int timesteps) {
   py::list out;
-  for (const auto &traj : library) {
+  for (const auto &traj : library.trajs) {
     out.append(export_trajectory(traj, timesteps));
   }
   return out;
 }
 
-bool library_links_ok(const std::vector<Trajectory> &library) {
-  if (library.empty()) {
+bool library_links_ok(const Library &library) {
+  if (library.trajs.empty()) {
     return false;
   }
-  for (const auto &traj : library) {
+  for (const auto &traj : library.trajs) {
     if (traj.path.empty()) {
       return false;
     }
@@ -498,6 +521,106 @@ bool library_links_ok(const std::vector<Trajectory> &library) {
     }
   }
   return true;
+}
+
+std::vector<std::shared_ptr<Node>>
+attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
+                 const std::shared_ptr<Node> &goal, Environment *env) {
+  std::vector<std::shared_ptr<Node>> out;
+  if (!u || !goal || !env || library.trajs.empty()) {
+    return out;
+  }
+  auto found = library.lcr.find(u->LCR_index);
+  if (found == library.lcr.end()) {
+    return out;
+  }
+  // Every LCR hit goes into one solve. A failed connection must not hide
+  // another vertex of the same trajectory; the valid hit with the smallest
+  // spliced cost is the meet. A failed connection leaves the trajectory unused.
+  struct Cand {
+    int traj;
+    int idx;
+    float spliced;
+  };
+  std::vector<Cand> cands;
+  std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>> pairs;
+  for (const auto &hit : found->second) {
+    const int traj = hit.first;
+    const int idx = hit.second;
+    if (traj < 0 || traj >= static_cast<int>(library.used.size()) ||
+        library.used[traj]) {
+      continue;
+    }
+    const auto &path = library.trajs[traj].path;
+    if (path.empty() || idx < 0 || idx >= static_cast<int>(path.size())) {
+      continue;
+    }
+    float dist = env->compute_near_meet_distance(u->pose, path[idx]->pose);
+    cands.push_back(
+        {traj, idx, u->g + dist + (path[0]->g - path[idx]->g)});
+    pairs.emplace_back(u, path[idx]);
+  }
+  if (cands.empty()) {
+    return out;
+  }
+  std::vector<bool> valid;
+  std::vector<std::vector<float>> connections;
+  env->solve_2pBVP(pairs, valid, connections);
+  igha::unordered_map<int, std::pair<int, float>> best;
+  for (size_t n = 0; n < cands.size(); ++n) {
+    if (n >= valid.size() || !valid[n]) {
+      continue;
+    }
+    auto it = best.find(cands[n].traj);
+    if (it == best.end() || cands[n].spliced < it->second.second) {
+      best[cands[n].traj] = {cands[n].idx, cands[n].spliced};
+    }
+  }
+  for (const auto &kv : best) {
+    const int traj = kv.first;
+    const int k = kv.second.first;
+    library.used[traj] = 1;
+    const auto &path = library.trajs[traj].path;
+    float dist = env->compute_near_meet_distance(u->pose, path[k]->pose);
+    float g_meet = u->g + dist;
+    float g_old_meet = path[k]->g;
+    std::vector<std::shared_ptr<Node>> copies(static_cast<size_t>(k) + 1);
+    for (int i = k; i >= 0; --i) {
+      float g_new = g_meet + (path[i]->g - g_old_meet);
+      float h = env->heuristic(path[i]->pose, goal->pose);
+      std::shared_ptr<Node> parent =
+          (i == k) ? u : copies[static_cast<size_t>(i) + 1];
+      auto copy = rebuild_vertex(
+          path[i]->pose, g_new, g_new + h, path[i]->time_direction,
+          path[i]->intermediate_poses, path[i]->intermediate_controls, parent,
+          env);
+      copy->expand_index = 0;
+      copies[static_cast<size_t>(i)] = copy;
+      out.push_back(copy);
+    }
+    for (const auto &child : library.trajs[traj].children) {
+      int parent_on_suffix = -1;
+      for (int i = 0; i <= k; ++i) {
+        if (path[i] == child->parent) {
+          parent_on_suffix = i;
+          break;
+        }
+      }
+      if (parent_on_suffix < 0) {
+        continue;
+      }
+      float g_new = copies[static_cast<size_t>(parent_on_suffix)]->g +
+                    (child->g - path[parent_on_suffix]->g);
+      float h = env->heuristic(child->pose, goal->pose);
+      auto copy = rebuild_vertex(
+          child->pose, g_new, g_new + h, child->time_direction,
+          child->intermediate_poses, child->intermediate_controls,
+          copies[static_cast<size_t>(parent_on_suffix)], env);
+      copy->expand_index = -1;
+      out.push_back(copy);
+    }
+  }
+  return out;
 }
 
 } // namespace tree_utils

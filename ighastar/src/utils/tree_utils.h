@@ -3,8 +3,10 @@
 // Requires Node, NodePtrCompare, and n_dims to already be defined (include the
 // active environment header before this file).
 
+#include <cstdint>
 #include <memory>
 #include <queue>
+#include <utility>
 #include <vector>
 
 class Environment;
@@ -37,6 +39,16 @@ struct Trajectory {
   std::vector<std::shared_ptr<Node>> children;
 };
 
+// Trajectories plus a used-flag and an LCR index of path vertices. The index is
+// built at import and when a solution is recorded. reset clears only the flags.
+struct Library {
+  std::vector<Trajectory> trajs;
+  std::vector<uint8_t> used;
+  igha::unordered_map<size_t, std::vector<std::pair<int, int>>> lcr;
+};
+
+void reset_library(Library &library);
+
 Trajectory capture_trajectory(
     const std::vector<std::shared_ptr<Node>> &path,
     const igha::unordered_set<std::shared_ptr<Node>> &Seen,
@@ -49,11 +61,10 @@ Trajectory capture_trajectory(
 // that dominates load and export.
 py::dict export_trajectory(const Trajectory &traj, int timesteps);
 
-std::vector<Trajectory> import_trajectories(const py::list &items,
-                                            Environment *env);
+Library import_trajectories(const py::list &items, Environment *env);
 
 void record_solution(
-    std::vector<Trajectory> &library,
+    Library &library,
     const std::vector<std::shared_ptr<Node>> &path,
     const igha::unordered_set<std::shared_ptr<Node>> &Seen,
     std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>,
@@ -61,8 +72,14 @@ void record_solution(
         Q_v,
     const igha::unordered_set<std::shared_ptr<Node>> &inactive_Q_v);
 
-py::list export_library(const std::vector<Trajectory> &library, int timesteps);
+py::list export_library(const Library &library, int timesteps);
 
-bool library_links_ok(const std::vector<Trajectory> &library);
+bool library_links_ok(const Library &library);
+
+// Copies of the goal-side suffix of each unused trajectory that near-meets u.
+// One LCR lookup, then one solve_2pBVP. Library nodes are not modified.
+std::vector<std::shared_ptr<Node>>
+attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
+                 const std::shared_ptr<Node> &goal, Environment *env);
 
 } // namespace tree_utils
