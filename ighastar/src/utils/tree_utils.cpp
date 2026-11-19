@@ -681,11 +681,17 @@ int buffer_steps(int stored, int live) {
   return stored > 0 ? stored : live;
 }
 
+// A stored length of 0 is a legacy trajectory with no recorded length.
+bool rollout_compatible(int stored, int live) {
+  return stored <= 0 || stored == live;
+}
+
 bool library_reuse_self_check() {
   return reused_expand_index(true, false) == -1 &&
          reused_expand_index(true, true) == 0 &&
          reused_expand_index(false, false) == 0 && buffer_steps(1, 10) == 1 &&
-         buffer_steps(0, 10) == 10;
+         buffer_steps(0, 10) == 10 && rollout_compatible(0, 10) &&
+         rollout_compatible(10, 10) && !rollout_compatible(1, 10);
 }
 
 py::list export_library(const Library &library, int timesteps) {
@@ -780,6 +786,11 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
     if (!library.applicable.empty() &&
         (traj >= static_cast<int>(library.applicable.size()) ||
          !library.applicable[traj])) {
+      continue;
+    }
+    // Playback and the tree export read every edge at the live rollout length.
+    // A different stored length would read past, or truncate, those buffers.
+    if (!rollout_compatible(library.trajs[traj].steps, env->timesteps)) {
       continue;
     }
     const auto &path = library.trajs[traj].path;
