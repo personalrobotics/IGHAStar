@@ -2,6 +2,8 @@
 
 QS or Chipmunk IGHA* plans; MPPI tracks the path in gym-pusht, or `--open-loop` plays the planner actions.
 
+`get_best_path()` is goal-first. After the planner flips it to start → goal, column `-2` is the clock (shifted by the query time) and the last column is `g`. Playback indexes the clock, not `g`.
+
 ## Dependencies
 
 | Need | Where |

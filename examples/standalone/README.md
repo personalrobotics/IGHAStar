@@ -114,7 +114,7 @@ python3 example.py --config Configs/kinodynamic_example.yml --test-case case1 --
 
 For live 3D ESDF queries instead (slower; useful for debugging), set `map_type: "esdf"`.
 
-Without `--viser`, the usual matplotlib plot is still shown, and the path is also saved under `Content/standalone/` as `*_path.npy` for later replay.
+Without `--viser`, the usual matplotlib plot is still shown, and the path is also saved under `Content/standalone/` as `*_path.npy` for later replay. That array is goal-first with shape `[T, n_dims + 2]`. Column `-2` is the clock of each sample. The last column is `g * time_direction` (positive on a forward edge, negative on a backward edge). Solution cost is `path[0, -1]`.
 
 Switch back to the elevation pipeline at any time by setting `map_type: "elevation"` (or removing the key); existing configs keep working.
 
@@ -144,7 +144,7 @@ Open the printed localhost URL. The GUI has play/pause, a state slider, and a li
 
 ### 4. Scrub search-tree growth in Viser
 
-After a search, `export_search_tree()` returns the nodes in Seen ∪ Q_v ∪ inactive (with discover/expand indices and intermediate poses). `viser_tree.py` is a minimal example of saving/loading that dict and drawing growth:
+After a search, `export_search_tree()` returns the nodes in Seen ∪ Q_v ∪ inactive (discover/expand indices, intermediate poses, and the action at each of those poses). `intermediate_controls[t]` is the action for `intermediate_poses[t]`; a node with no edge has `None`. `viser_tree.py` is a minimal example of saving/loading that dict and drawing growth:
 
 ```bash
 cd examples/standalone

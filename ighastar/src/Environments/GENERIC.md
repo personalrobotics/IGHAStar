@@ -104,7 +104,7 @@ ok = planner.search(
     start, goal, world, info["max_expansions"], info["hysteresis"], True
 )
 if ok:
-    path = planner.get_best_path()  # [path_len, state_dim + 1], last column is g
+    path = planner.get_best_path()  # [path_len, state_dim + 2]; [:, -2] time, [:, -1] g
 ```
 
 Run the full point-mass demo:
@@ -115,8 +115,9 @@ python3 examples/standalone/generic_integrator.py
 
 ## Path output
 
-- `get_best_path()` returns `[path_len, state_dim + 1]`. The last column is `g`.
+- `get_best_path()` returns `[path_len, state_dim + 2]`. Column `-2` is the clock. The last column is `g`.
 - Rows are **goal-first**, start-last. Solution cost is `path[0, -1]`.
+- The generic callbacks do not return a clock. Those edges leave `intermediate_times` empty, so the time column walks `parent.time` to `node.time`. That arrival is still `g` until a rollout stores its own step times.
 - `get_best_path_with_controls()` also returns the control sequence along that path.
 
 ## Batching rules

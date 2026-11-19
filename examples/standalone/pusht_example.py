@@ -46,7 +46,7 @@ def load_snapshot_gym(core, state: np.ndarray) -> None:
 
 
 def render_path_video(path_sg: np.ndarray, out_mp4: str, fps: int = 20) -> None:
-    """path_sg: start→goal dense states [T, 10+] (last col may be g)."""
+    """path_sg: start→goal [T, 12]. Columns 0:10 are the state, -2 is time, -1 is g."""
     import gymnasium as gym
     import gym_pusht  # noqa: F401
     import imageio.v2 as imageio

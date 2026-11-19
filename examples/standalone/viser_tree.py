@@ -98,7 +98,7 @@ def plan_and_export(
     *_, cost_exp_list = planner.get_profiler_info()
     found_at = first_solution_expansion(cost_exp_list)
     if success and found_at >= 0:
-        # get_best_path() is goal-first dense intermediates (x, y, ..., g).
+        # get_best_path() is goal-first (x, y, ..., time, g).
         path = np.asarray(planner.get_best_path(), dtype=np.float32)
         tree["solution_path"] = path
         tree["solution_found_at"] = found_at

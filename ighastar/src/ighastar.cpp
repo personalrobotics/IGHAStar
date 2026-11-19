@@ -95,6 +95,7 @@ public:
   int hysteresis_threshold;
   std::vector<std::shared_ptr<Node>> best_path;
   std::vector<std::vector<std::shared_ptr<Node>>> best_path_list;
+  tree_utils::Library trajectory_library;
   float Omega;
   Environment *env;
   bool debug;
@@ -268,6 +269,7 @@ public:
     expanding_level = 0;
     start_node_saved.reset();
     goal_node_saved.reset();
+    tree_utils::reset_library(trajectory_library);
     cost_exp_list.clear();
     // preemptive expansion reset:
     release_preemptive_caches();
@@ -504,23 +506,50 @@ public:
       bool tolerance_check = Q_v_hash.count(neighbor->hash) == 0 &&
                              Seen_hash.count(neighbor->hash) == 0 &&
                              inactive_Q_v_hash.count(neighbor->hash) == 0;
-      if (tolerance_check) {
-        neighbor->discover_index = expansion_counter;
-        // approximate dominance check:
-        if (neighbor->g < get_G(level, neighbor->index[level])) {
-          GUpdate(neighbor);
-          neighbor->active = true;
-          Q_v.push(neighbor);
-          Q_v_hash.insert(neighbor->hash);
-        } else {
-          neighbor->active = false;
-          inactive_Q_v.insert(neighbor);
-          inactive_Q_v_hash.insert(neighbor->hash);
+      // Adding E-graph extension:
+      // check if the neighbor has an expand_idx > -1 -- if so, it has already been expanded and we don't need to expand it again
+      // we can add it to the Seen set and just do a goal test right here, emit path if it satisfies goal, and update Omega
+      if (neighbor->expand_index > -1) {
+        // A library vertex is considered even when its hash is already in the
+        // search. The copied suffix is a different path to that state.
+        // add neighbor to the Seen set and Seen_hash set
+        Seen.insert(neighbor);
+        Seen_hash.insert(neighbor->hash);
+        if (goal_node_saved &&
+            env->reached_goal_region(neighbor, goal_node_saved) &&
+            neighbor->g < Omega) {
+          if (first_goal_level < 0)
+            first_goal_level = expanding_level;
+          SUCCESS = true;
+          if (debug) {
+            std::cout << "expansions: " << expansion_counter
+                      << " cost: " << neighbor->g << std::endl;
+          }
+          best_path = reconstruct_path(neighbor, neighbor);
+          Omega = neighbor->g;
+          best_path_list.push_back(best_path);
         }
-        if (preemptive_enabled) {
-          // Both active and inactive newly-discovered vertices are eligible for
-          // preemptive expansion in a later iteration.
-          stash_push(neighbor);
+      }
+      else {
+        // tolerance check:
+        if (tolerance_check) {
+          neighbor->discover_index = expansion_counter;
+          // approximate dominance check:
+          if (neighbor->g < get_G(level, neighbor->index[level])) {
+            GUpdate(neighbor);
+            neighbor->active = true;
+            Q_v.push(neighbor);
+            Q_v_hash.insert(neighbor->hash);
+          } else {
+            neighbor->active = false;
+            inactive_Q_v.insert(neighbor);
+            inactive_Q_v_hash.insert(neighbor->hash);
+          }
+          if (preemptive_enabled) {
+            // Both active and inactive newly-discovered vertices are eligible for
+            // preemptive expansion in a later iteration.
+            stash_push(neighbor);
+          }
         }
       }
     }
@@ -651,6 +680,7 @@ public:
     std::shared_ptr<Node> goal_node = env->create_Node(goal);
     start_node_saved = start_node;
     goal_node_saved = goal_node;
+    tree_utils::select_trajectories(trajectory_library, env, start, goal);
     start_node->f = env->heuristic(start_node->pose, goal_node->pose);
 
     initialize(start_node);
@@ -725,6 +755,29 @@ public:
 
         start_time = std::chrono::high_resolution_clock::now();
         // get successors:
+        // Adding E-graph extension.
+        // Step 1: get the TrajSet from Trajlib that satisfies the nearmeet between v and some traj from the trajectory library
+        // Here, we use the env->solve_2pBVP(pairs, connection_valid, trajectories) to find all the trajectories from traj set which have 
+        // at least 1 vertex satisfying the nearmeet. 
+        // within this function, once you find the nearmeeting vertex from a trajectory, the set of vertices you return for that trajectory
+        // is the nearmeeting one, and every child (you don't return the parent vertices since we can't go backwards in time)
+        // importantly, you are not modifying the original set of trajectories; you are simply returning a new set
+        // otherwise we will end up pruning the trajlib itself, and end up with an empty trajlib.
+        // Note that can use the same trajlib for multiple search queries; as a result, there needs to be a "reset" function that we can
+        // call at the beginning of a fresh search query -- this prevents needing to reload the same trajlib for each search query.
+        // step 2 is removing the nearmeet vertices from the trajlib -- this does not mean actual removal, just marking of the trajectories as 
+        // "used" -- this may be done in a multiprocessing manner. At the reset call, we should reset the trajlib to its original state -- we can use multiprocessing to reset the trajlib in a parallel manner
+        // step 2 is not necessarily done in ighastar.cpp -- this can be done within the same function that finds the nearmeeting vertices
+        //  -- this function should return the nearmeeting vertices and the trajectories that were used to find them.
+        // we then add those nearmeeting vertices to the neighbors list. 
+        // we can use the expand_idx to specify whether something has been expanded or not -- every vertex "on the trajectory" (not the child vertices)
+        // is marked expanded using the expand_idx.
+        // we goal test all vertices that have an expand_idx > -1 from the neighbors list; v is NOT going to be in the neighbors list
+        if (!trajectory_library.trajs.empty()) {
+          auto extra = tree_utils::attach_nearmeets(trajectory_library, v,
+                                                    goal_node, env);
+          neighbors.insert(neighbors.end(), extra.begin(), extra.end());
+        }
         process_successors(v, neighbors);
         end_time = std::chrono::high_resolution_clock::now();
         g_update_time +=
@@ -1835,13 +1888,13 @@ public:
       // if(debug){
       std::cout << "Best path is not found, returning empty path" << std::endl;
       // }
-      return torch::zeros({0, n_dims + 1},
+      return torch::zeros({0, n_dims + 2},
                           torch::TensorOptions().dtype(torch::kFloat32));
     }
     if (debug) {
       if (best_path_list.empty()) {
         std::cerr << "ERROR: best_path_list is empty!" << std::endl;
-        return torch::zeros({0, n_dims + 1},
+        return torch::zeros({0, n_dims + 2},
                             torch::TensorOptions().dtype(torch::kFloat32));
       }
       std::cout << "Getting best path from best_path_list, size: "
@@ -1871,7 +1924,7 @@ public:
 
   std::tuple<torch::Tensor, torch::Tensor> get_best_path_with_controls() {
     if (shared_Omega.load() > 1000.0f) {
-      return {torch::zeros({0, n_dims + 1},
+      return {torch::zeros({0, n_dims + 2},
                            torch::TensorOptions().dtype(torch::kFloat32)),
               torch::zeros({0, n_cont},
                            torch::TensorOptions().dtype(torch::kFloat32))};
@@ -1966,7 +2019,29 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("get_preemptive_hits", &IGHAStar::get_preemptive_hits)
       .def("get_level_history", &IGHAStar::get_level_history)
       .def("get_first_goal_level", &IGHAStar::get_first_goal_level)
-      .def("export_search_tree", &IGHAStar::export_search_tree);
+      .def("export_search_tree", &IGHAStar::export_search_tree)
+      .def("record_solution_trajectory",
+           [](IGHAStar &self) {
+             const float *goal_pose = self.goal_node_saved
+                                         ? self.goal_node_saved->pose
+                                         : nullptr;
+             tree_utils::record_solution(self.trajectory_library, self.best_path,
+                                         self.Seen, self.Q_v, self.inactive_Q_v,
+                                         goal_pose, self.env);
+           })
+      .def("export_trajectory_library",
+           [](IGHAStar &self) {
+             return tree_utils::export_library(self.trajectory_library,
+                                               self.env->timesteps);
+           })
+      .def("import_trajectory_library",
+           [](IGHAStar &self, const py::list &items) {
+             self.trajectory_library =
+                 tree_utils::import_trajectories(items, self.env);
+           })
+      .def("trajectory_library_links_ok", [](const IGHAStar &self) {
+        return tree_utils::library_links_ok(self.trajectory_library);
+      });
 
 #ifdef IGHASTAR_HAS_PUSHT_MULTI_STEP
   m.def("step", &pusht_multi_step, py::arg("state"), py::arg("world"),

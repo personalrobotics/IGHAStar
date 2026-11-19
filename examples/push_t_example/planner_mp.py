@@ -55,7 +55,7 @@ class PushTPlannerMP:
                     path_t, ctrl_t = planner.get_best_path_with_controls()
                     path = np.flip(path_t.numpy(), axis=0)
                     controls = np.flip(ctrl_t.numpy(), axis=0)
-                    path[:, -1] += float(t_world)
+                    path[:, -2] += float(t_world)
                     result_queue.put((True, True, path, controls, expansions))
                 else:
                     result_queue.put((False, True, None, None, expansions))

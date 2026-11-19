@@ -7,7 +7,9 @@ height compared directly.  The terrain heights and the vehicle attitude are
 computed here with a NumPy mirror of get_footprint_z() in kinodynamic.cu, which
 doubles as a check that the GPU query is behaving.
 
-Expects a trajectory as returned by ``get_best_path()``, i.e. goal-first.
+Expects a trajectory as returned by ``get_best_path()``: goal-first,
+``[T, n_dims + 2]`` with the clock at column ``-2`` and ``g`` at ``-1``.
+Replay reads x, y, yaw, and speed from the state columns.
 
     python3 viser_replay.py -c Configs/kinodynamic_example.yml \
         --path ../../Content/standalone/race-2_kinodynamic_esdf_IGHAStar_path.npy

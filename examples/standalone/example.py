@@ -161,8 +161,8 @@ def main(
         # Create visualization
         show_map(plt, bitmap, node_type, node_info=node_info)
 
-        # Check for direction info (last column) to color by search direction
-        # Positive = forward search (green), Negative = backward search (purple)
+        # Last column is g * time_direction. Positive = forward (green),
+        # negative = backward (purple). The column before it is the clock.
         direction = path[:, -1]
 
         # Plot path segments colored by direction

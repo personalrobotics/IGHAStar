@@ -40,85 +40,8 @@ size_t calc_hash(float *pose, const float *resolution) {
   return hash_val;
 }
 
-struct Node {
-public:
-  float pose[n_dims];
-  float *intermediate_poses;
-  float g, f;
-  bool active;
-  int rank, level;
-  size_t hash;
-  size_t
-      LCR_index; // Hash for local controllability radius (near-meet detection)
-  int time_direction; // 1 for forward, -1 for backward
-  LazyIndex<hash_dims, calc_hash> index;
-  std::shared_ptr<Node> parent;
-  // Preemptive expansion bookkeeping: whether this node's successors have
-  // already been computed (and cached) before it was popped from Q_v.
-  bool preexpanded = false;
-  std::vector<std::shared_ptr<Node>> cached_succ;
-  // Expansion bookkeeping for tree export / visualization.
-  int discover_index = -1;
-  int expand_index = -1;
-  float control[n_cont] = {};
-  float *intermediate_controls = nullptr;
-
-  // Constructor
-  Node(const float *pose_in, const float *intermediate_poses_,
-       std::shared_ptr<Node> parent_in, float g_in, const float *resolution_,
-       float *tolerance, float division_factor, int timesteps,
-       const float *LCR_, int time_direction_ = 1,
-       const float *intermediate_controls_ = nullptr)
-      : intermediate_poses(nullptr), intermediate_controls(nullptr), g(g_in),
-        f(0), parent(parent_in), active(true), rank(0), level(0),
-        time_direction(time_direction_) {
-    for (int i = 0; i < n_dims; i++) {
-      pose[i] = pose_in[i];
-    }
-    if (parent_in != nullptr && intermediate_poses_ != nullptr) {
-      intermediate_poses = new float[timesteps * n_dims];
-      if (time_direction_ == -1) {
-        // Reverse the sequence for backward search
-        for (int t = 0; t < timesteps; t++) {
-          int src_index = (timesteps - 1 - t) * n_dims;
-          int dst_index = t * n_dims;
-          memcpy(&intermediate_poses[dst_index],
-                 &intermediate_poses_[src_index], n_dims * sizeof(float));
-        }
-      } else {
-        memcpy(intermediate_poses, intermediate_poses_,
-               timesteps * n_dims * sizeof(float));
-      }
-    }
-    if (parent_in != nullptr && intermediate_controls_ != nullptr) {
-      intermediate_controls = new float[timesteps * n_cont];
-      memcpy(intermediate_controls, intermediate_controls_,
-             timesteps * n_cont * sizeof(float));
-      memcpy(control, intermediate_controls_, n_cont * sizeof(float));
-    }
-    hash = calc_hash(pose, tolerance);
-    // Compute LCR_index using local_controllability_radius
-    LCR_index = calc_hash(pose, LCR_);
-    index.init(pose, resolution_, division_factor);
-  }
-
-  // Destructor to clean up intermediate_poses
-  ~Node() {
-    if (intermediate_poses) {
-      delete[] intermediate_poses;
-    }
-    if (intermediate_controls) {
-      delete[] intermediate_controls;
-    }
-  }
-};
-
-struct NodePtrCompare {
-  bool operator()(const std::shared_ptr<Node> &a,
-                  const std::shared_ptr<Node> &b) const {
-    return a->f > b->f; // min-heap: smaller f has higher priority
-  }
-};
+#include "node.h"
+#include "trajectory_export.h"
 
 class Environment {
   int map_size_px, threads, blocks, n_succ, patch_length_px, patch_width_px;
@@ -136,6 +59,7 @@ public:
   float tolerance[n_dims];
   float local_controllability_radius[n_dims];
   NearMeet2PBVP near_meet_;
+#define IGHASTAR_MEET_ANGULAR_DIMS(env) ((env)->near_meet_.angular_dims)
   sampling::GoalSamplingConfig goal_sampling;
   float division_factor;
 
@@ -309,6 +233,8 @@ public:
     return heuristic(pose1, pose2);
   }
 
+  IGHASTAR_FILTER_TRAJECTORIES_ALL
+
   void solve_2pBVP(
       const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
           &pairs,
@@ -437,6 +363,8 @@ public:
         max_vel, min_vel, RI, max_vert_acc, max_theta, gear_switch_time,
         patch_length_px, patch_width_px, blocks, threads, controls);
 
+    std::vector<float> substep_times(timesteps);
+    fill_substep_times(substep_times.data(), node->time, dt, timesteps);
     for (int i = 0; i < n_succ; i++) {
       if (valid[i]) {
         memcpy(new_pose, &state[i * n_dims], n_dims * sizeof(float));
@@ -453,7 +381,8 @@ public:
         neighbor = std::make_shared<Node>(
             new_pose, new_intermediate_pose, node, node->g + cost[i],
             resolution, tolerance, division_factor, timesteps,
-            local_controllability_radius, time_direction, controls_seq);
+            local_controllability_radius, time_direction, controls_seq,
+            substep_times.data());
         delete[] new_intermediate_pose;
         delete[] controls_seq;
         f = neighbor->g + heuristic(neighbor->pose, goal->pose);
@@ -484,92 +413,11 @@ public:
 
   torch::Tensor convert_node_list_to_path_tensor(
       std::vector<std::shared_ptr<Node>> node_list) {
-    if (node_list.empty()) {
-      return torch::zeros({0, n_dims + 1},
-                          torch::TensorOptions().dtype(torch::kFloat32));
-    }
-
-    // First pass: build extended list with all states we want to include
-    struct PathState {
-      float pose[n_dims];
-      float g;
-    };
-    std::vector<PathState> extended_path;
-    for (size_t i = 0; i < node_list.size(); i++) {
-      if (node_list[i]->parent == nullptr) {
-        // Start node (no intermediate poses): skip it
-        continue;
-      } else {
-        // Node with parent: add intermediate poses (in reverse order as stored).
-        // g increases linearly parent.g → node.g over substeps.
-        const float g0 = node_list[i]->parent->g;
-        const float g1 = node_list[i]->g;
-        const float td = static_cast<float>(node_list[i]->time_direction);
-        for (int j = 0; j < timesteps; j++) {
-          const int k = timesteps - j - 1;
-          int intermediate_index = k * n_dims;
-          PathState state;
-          for (int d = 0; d < n_dims; d++) {
-            state.pose[d] =
-                node_list[i]->intermediate_poses[intermediate_index + d];
-          }
-          // Backward Node stores intermediates reversed; map k → chrono fraction.
-          const float alpha =
-              static_cast<float>(td < 0.f ? timesteps - k : k + 1) /
-              static_cast<float>(timesteps);
-          state.g = (g0 + alpha * (g1 - g0)) * td;
-          extended_path.push_back(state);
-        }
-      }
-    }
-
-    // Second pass: create tensor of exact size and populate it
-    int tensor_size = extended_path.size();
-    auto path_tensor =
-        torch::zeros({tensor_size, n_dims + 1},
-                     torch::TensorOptions().dtype(torch::kFloat32));
-
-    for (size_t i = 0; i < extended_path.size(); i++) {
-      for (int d = 0; d < n_dims; d++) {
-        path_tensor[i][d] = extended_path[i].pose[d];
-      }
-      path_tensor[i][n_dims] = extended_path[i].g;
-    }
-
-    return path_tensor;
+    return path_tensor_from_edges(node_list, timesteps);
   }
 
   torch::Tensor convert_node_list_to_controls_tensor(
       std::vector<std::shared_ptr<Node>> node_list) {
-    if (node_list.empty()) {
-      return torch::zeros({0, n_cont},
-                          torch::TensorOptions().dtype(torch::kFloat32));
-    }
-    int n = 0;
-    for (size_t i = 0; i < node_list.size(); i++) {
-      if (node_list[i]->parent != nullptr) {
-        n += timesteps;
-      }
-    }
-    auto controls_tensor =
-        torch::zeros({n, n_cont}, torch::TensorOptions().dtype(torch::kFloat32));
-    int r = 0;
-    for (size_t i = 0; i < node_list.size(); i++) {
-      if (node_list[i]->parent == nullptr) {
-        continue;
-      }
-      for (int j = 0; j < timesteps; j++) {
-        for (int d = 0; d < n_cont; d++) {
-          if (node_list[i]->intermediate_controls != nullptr) {
-            controls_tensor[r][d] =
-                node_list[i]->intermediate_controls[j * n_cont + d];
-          } else {
-            controls_tensor[r][d] = node_list[i]->control[d];
-          }
-        }
-        r++;
-      }
-    }
-    return controls_tensor;
+    return controls_tensor_from_edges(node_list, timesteps);
   }
 };
