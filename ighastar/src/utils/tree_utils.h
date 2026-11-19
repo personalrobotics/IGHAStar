@@ -41,6 +41,8 @@ struct Trajectory {
   // the environment map, empty when the environment does not stamp one.
   std::vector<float> goal;
   std::vector<float> world;
+  // Length of the stored edge buffers. 0 means the env's current timesteps.
+  int steps = 0;
 };
 
 // Trajectories plus a used-flag and an LCR index of path vertices. The index is

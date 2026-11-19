@@ -251,8 +251,9 @@ std::shared_ptr<Node> rebuild_vertex(const float *pose, float g, float f,
                                      int time_direction, const float *inter,
                                      const float *controls,
                                      const std::shared_ptr<Node> &parent,
-                                     Environment *env, const float *times,
-                                     float time_in, bool time_is_set) {
+                                     Environment *env, int steps,
+                                     const float *times, float time_in,
+                                     bool time_is_set) {
   // Pass time_direction +1 so the constructor copies the stored buffers.
   // The saved time_direction is written after, or a backward node would be
   // reversed a second time. time_is_set keeps the stored arrival: the buffer
@@ -260,7 +261,7 @@ std::shared_ptr<Node> rebuild_vertex(const float *pose, float g, float f,
   // backward edge.
   auto node = std::make_shared<Node>(
       pose, inter, parent, g, env->resolution, env->tolerance,
-      env->division_factor, env->timesteps, env->local_controllability_radius,
+      env->division_factor, steps, env->local_controllability_radius,
       /*time_direction_=*/1, controls, times, time_in, time_is_set);
   node->time_direction = time_direction;
   node->f = f;
@@ -287,11 +288,17 @@ MeetEdge geometric_meet_edge(Environment *env, const std::shared_ptr<Node> &sour
   }
   edge.poses.resize(static_cast<size_t>(steps) * n_dims);
   edge.times.assign(steps, source->time);
+#ifdef IGHASTAR_MEET_ANGULAR_DIMS
+  const std::vector<int> &angular = IGHASTAR_MEET_ANGULAR_DIMS(env);
+#else
+  static const std::vector<int> angular;
+  (void)env;
+#endif
   for (int t = 0; t < steps; ++t) {
     const float alpha =
         static_cast<float>(t + 1) / static_cast<float>(steps);
     sampling::interpolate_pose(source->pose, target->pose, alpha, n_dims,
-                               env->near_meet_.angular_dims,
+                               angular,
                                edge.poses.data() + static_cast<size_t>(t) * n_dims);
   }
   return edge;
@@ -384,13 +391,16 @@ Library import_trajectories(const py::list &items, Environment *env) {
   Library library;
   for (py::handle item : items) {
     py::dict d = item.cast<py::dict>();
+    int steps = env->timesteps;
     if (d.contains("timesteps")) {
       const int saved = d["timesteps"].cast<int>();
 #ifdef IGHASTAR_LIBRARY_TIMESTEPS_FROM_EXPORT
       if (saved < 0) {
         throw std::invalid_argument("trajectory timesteps must be non-negative");
       }
-      env->timesteps = saved;
+      // Keep this item's length. Do not write it onto env->timesteps: a later
+      // item, or Succ, would then make the previous buffers look longer.
+      steps = saved;
 #else
       if (saved != env->timesteps) {
         throw std::invalid_argument(
@@ -398,8 +408,8 @@ Library import_trajectories(const py::list &items, Environment *env) {
       }
 #endif
     }
-    const int inter_n = env->timesteps > 0 ? env->timesteps * n_dims : 0;
-    const int ctrl_n = env->timesteps > 0 ? env->timesteps * n_cont : 0;
+    const int inter_n = steps > 0 ? steps * n_dims : 0;
+    const int ctrl_n = steps > 0 ? steps * n_cont : 0;
     auto pose = field_f(d, "path_pose");
     auto g = field_f(d, "path_g");
     auto f = field_f(d, "path_f");
@@ -421,7 +431,7 @@ Library import_trajectories(const py::list &items, Environment *env) {
     const float *ctrl_base = nullptr;
     if (inter_n > 0) {
       inter = field_f(d, "path_intermediate_poses");
-      if (inter.ndim() != 3 || inter.shape(0) != n || inter.shape(1) != env->timesteps ||
+      if (inter.ndim() != 3 || inter.shape(0) != n || inter.shape(1) != steps ||
           inter.shape(2) != n_dims) {
         throw std::invalid_argument(
             "path_intermediate_poses must have shape [N, timesteps, n_dims]");
@@ -448,11 +458,11 @@ Library import_trajectories(const py::list &items, Environment *env) {
       }
       clock_base = clock.data();
     }
-    if (d.contains("path_intermediate_times") && env->timesteps > 0) {
+    if (d.contains("path_intermediate_times") && steps > 0) {
       step_times = field_f(d, "path_intermediate_times");
       has_times = field_u8(d, "path_has_times");
       if (step_times.ndim() != 2 || step_times.shape(0) != n ||
-          step_times.shape(1) != env->timesteps || has_times.size() != n) {
+          step_times.shape(1) != steps || has_times.size() != n) {
         throw std::invalid_argument(
             "path_intermediate_times must have shape [N, timesteps]");
       }
@@ -505,12 +515,13 @@ Library import_trajectories(const py::list &items, Environment *env) {
               : nullptr;
       const float *times =
           (step_base != nullptr && has_times.data()[next])
-              ? step_base + static_cast<size_t>(next) * env->timesteps
+              ? step_base + static_cast<size_t>(next) * steps
               : nullptr;
       traj.path[next] = rebuild_vertex(
           pose.data() + static_cast<size_t>(next) * n_dims, g.data()[next],
           f.data()[next], time_direction.data()[next], inter, controls, parent,
-          env, times, clock_base ? clock_base[next] : 0.f, clock_base != nullptr);
+          env, steps, times, clock_base ? clock_base[next] : 0.f,
+          clock_base != nullptr);
       built[next] = 1;
     }
     auto child_pose = field_f(d, "child_pose");
@@ -535,7 +546,7 @@ Library import_trajectories(const py::list &items, Environment *env) {
     if (inter_n > 0) {
       child_inter = field_f(d, "child_intermediate_poses");
       if (child_inter.ndim() != 3 || child_inter.shape(0) != nc ||
-          child_inter.shape(1) != env->timesteps || child_inter.shape(2) != n_dims) {
+          child_inter.shape(1) != steps || child_inter.shape(2) != n_dims) {
         throw std::invalid_argument(
             "child_intermediate_poses must have shape [N, timesteps, n_dims]");
       }
@@ -561,11 +572,11 @@ Library import_trajectories(const py::list &items, Environment *env) {
       }
       child_clock_base = child_clock.data();
     }
-    if (d.contains("child_intermediate_times") && env->timesteps > 0) {
+    if (d.contains("child_intermediate_times") && steps > 0) {
       child_step_times = field_f(d, "child_intermediate_times");
       child_has_times = field_u8(d, "child_has_times");
       if (child_step_times.ndim() != 2 || child_step_times.shape(0) != nc ||
-          child_step_times.shape(1) != env->timesteps ||
+          child_step_times.shape(1) != steps ||
           child_has_times.size() != nc) {
         throw std::invalid_argument(
             "child_intermediate_times must have shape [N, timesteps]");
@@ -588,12 +599,12 @@ Library import_trajectories(const py::list &items, Environment *env) {
               : nullptr;
       const float *times =
           (child_step_base != nullptr && child_has_times.data()[i])
-              ? child_step_base + static_cast<size_t>(i) * env->timesteps
+              ? child_step_base + static_cast<size_t>(i) * steps
               : nullptr;
       traj.children.push_back(rebuild_vertex(
           child_pose.data() + static_cast<size_t>(i) * n_dims, child_g.data()[i],
           child_f.data()[i], child_time.data()[i], inter, controls, traj.path[p],
-          env, times, child_clock_base ? child_clock_base[i] : 0.f,
+          env, steps, times, child_clock_base ? child_clock_base[i] : 0.f,
           child_clock_base != nullptr));
     }
     if (d.contains("goal_pose")) {
@@ -607,6 +618,7 @@ Library import_trajectories(const py::list &items, Environment *env) {
       auto world = field_f(d, "world");
       traj.world.assign(world.data(), world.data() + world.size());
     }
+    traj.steps = steps;
     library.trajs.push_back(std::move(traj));
   }
   index_library(library);
@@ -638,6 +650,9 @@ void record_solution(
 #else
   (void)env;
 #endif
+  if (env != nullptr) {
+    traj.steps = env->timesteps;
+  }
   index_path(library, static_cast<int>(library.trajs.size()) - 1);
   library.used.push_back(0);
 }
@@ -658,10 +673,26 @@ void select_trajectories(Library &library, Environment *env, const float *start,
   library.applicable = std::move(keep);
 }
 
+int reused_expand_index(bool saved_terminal, bool in_goal) {
+  return (saved_terminal && !in_goal) ? -1 : 0;
+}
+
+int buffer_steps(int stored, int live) {
+  return stored > 0 ? stored : live;
+}
+
+bool library_reuse_self_check() {
+  return reused_expand_index(true, false) == -1 &&
+         reused_expand_index(true, true) == 0 &&
+         reused_expand_index(false, false) == 0 && buffer_steps(1, 10) == 1 &&
+         buffer_steps(0, 10) == 10;
+}
+
 py::list export_library(const Library &library, int timesteps) {
   py::list out;
   for (const auto &traj : library.trajs) {
-    out.append(export_trajectory(traj, timesteps));
+    const int steps = buffer_steps(traj.steps, timesteps);
+    out.append(export_trajectory(traj, steps));
   }
   return out;
 }
@@ -719,6 +750,9 @@ std::vector<std::shared_ptr<Node>>
 attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
                  const std::shared_ptr<Node> &goal, Environment *env) {
   std::vector<std::shared_ptr<Node>> out;
+  if (!library_reuse_self_check()) {
+    throw std::logic_error("library reuse self-check failed");
+  }
   if (!u || !goal || !env || library.trajs.empty()) {
     return out;
   }
@@ -795,6 +829,7 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
       continue;
     }
     library.used[traj] = 1;
+    const int stored = buffer_steps(library.trajs[traj].steps, env->timesteps);
     const float g_meet = u->g + edge.cost;
     const float g_old_meet = path[k]->g;
     const float offset = edge.arrival - path[k]->time;
@@ -814,18 +849,24 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
         ctrls = edge.controls.empty() ? nullptr : edge.controls.data();
         times = edge.times.empty() ? nullptr : edge.times.data();
         arrival = edge.arrival;
-      } else if (path[i]->intermediate_times != nullptr && env->timesteps > 0) {
-        shifted.resize(env->timesteps);
-        for (int t = 0; t < env->timesteps; ++t) {
+      } else if (path[i]->intermediate_times != nullptr && stored > 0) {
+        shifted.resize(stored);
+        for (int t = 0; t < stored; ++t) {
           shifted[static_cast<size_t>(t)] =
               path[i]->intermediate_times[t] + offset;
         }
         times = shifted.data();
       }
+      // The meeting edge was just built at the live rollout length. Suffix
+      // nodes keep the length they were stored with.
+      const int node_steps = (i == k) ? env->timesteps : stored;
       auto copy = rebuild_vertex(path[i]->pose, g_new, g_new + h,
                                  path[i]->time_direction, poses, ctrls, parent,
-                                 env, times, arrival, true);
-      copy->expand_index = 0;
+                                 env, node_steps, times, arrival, true);
+      // path[0] is the saved terminal. Leave it expandable when this query's
+      // goal is somewhere else, so the search can continue through it.
+      copy->expand_index = reused_expand_index(
+          i == 0, env->reached_goal_region(copy, goal));
       copies[static_cast<size_t>(i)] = copy;
       out.push_back(copy);
     }
@@ -845,9 +886,9 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
       const float h = env->heuristic(child->pose, goal->pose);
       std::vector<float> shifted;
       const float *times = nullptr;
-      if (child->intermediate_times != nullptr && env->timesteps > 0) {
-        shifted.resize(env->timesteps);
-        for (int t = 0; t < env->timesteps; ++t) {
+      if (child->intermediate_times != nullptr && stored > 0) {
+        shifted.resize(stored);
+        for (int t = 0; t < stored; ++t) {
           shifted[static_cast<size_t>(t)] =
               child->intermediate_times[t] + offset;
         }
@@ -856,7 +897,7 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
       auto copy = rebuild_vertex(
           child->pose, g_new, g_new + h, child->time_direction,
           child->intermediate_poses, child->intermediate_controls,
-          copies[static_cast<size_t>(parent_on_suffix)], env, times,
+          copies[static_cast<size_t>(parent_on_suffix)], env, stored, times,
           child->time + offset, true);
       copy->expand_index = -1;
       out.push_back(copy);

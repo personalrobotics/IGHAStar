@@ -91,6 +91,7 @@ public:
   float resolution[n_dims], epsilon[n_dims], division_factor;
   float local_controllability_radius[n_dims];
   NearMeet2PBVP near_meet_;
+#define IGHASTAR_MEET_ANGULAR_DIMS(env) ((env)->near_meet_.angular_dims)
   sampling::GoalSamplingConfig goal_sampling;
   float tolerance[n_dims];
   int timesteps;
