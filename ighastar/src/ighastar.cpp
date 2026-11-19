@@ -117,6 +117,7 @@ public:
   std::shared_ptr<Node> start_node_saved; // for the post-search goal check in search_adapter
   std::shared_ptr<Node> goal_node_saved;
   std::vector<float> cost_exp_list;
+  bool at_least_one_expansion = false;
 
   // Preemptive expansion: optionally batch GPU successor calls for several Q_v
   // vertices into a single kernel launch, caching the results until each
@@ -275,6 +276,7 @@ public:
     release_preemptive_caches();
     preemptive_expansions = 0;
     preemptive_hits = 0;
+    at_least_one_expansion = false;
   }
 
   // activate method for HA*M
@@ -372,6 +374,13 @@ public:
   }
 
   bool shift(bool run) {
+    // Do not leave a level that still has a vertex to expand until this
+    // iteration has expanded one. An empty level must still advance, or the
+    // outer loop repeats it forever. run will be true for the first vertex 
+    // because we ensure that at least one vertex is active in the Activate() function.
+    if (!at_least_one_expansion && run) {
+      return true;
+    }
     next_level = level + 1;
     if (run) {
       if (Q_v.top()->level == level) {
@@ -466,11 +475,13 @@ public:
     // for performance reasons, we are branching-bounding the nodes in the
     // activate method.
     std::vector<std::shared_ptr<Node>> unsorted_Q_v;
+    bool at_least_one_active = false;
     for (auto it = inactive_Q_v.begin(); it != inactive_Q_v.end();) {
       std::shared_ptr<Node> node = *it;
       node->level = level;
       if (node->rank == 0 && node->g <= get_G(level, node->index[level])) {
         node->active = true;
+        at_least_one_active = true;
         unsorted_Q_v.push_back(node);
         Q_v_hash.insert(node->hash);
         it = inactive_Q_v.erase(it); // erase returns the next valid iterator
@@ -480,6 +491,12 @@ public:
       } else {
         ++it; // move to the next element
       }
+    }
+    // An empty inactive set is a finished frontier. Inactive vertices that all
+    // fail the rank check leave the next iteration with nothing to expand.
+    if (!at_least_one_active && !inactive_Q_v.empty()) {
+      std::cerr << "Activate: 0 vertices activated at level " << level
+                << " with " << inactive_Q_v.size() << " inactive\n";
     }
     // // sort the Q_v based on f value
     std::make_heap(unsorted_Q_v.begin(), unsorted_Q_v.end(),
@@ -691,6 +708,7 @@ public:
     while (expansion_counter < expansion_limit &&
            (!Q_v.empty() or !inactive_Q_v.empty())) {
       int inactive_insertions = 0;
+      at_least_one_expansion = false;
       while (expansion_counter < expansion_limit) {
         // inner time measurement:
         start_time = std::chrono::high_resolution_clock::now();
@@ -699,7 +717,9 @@ public:
             !Q_v.empty() && Q_v.top()->active == true && Q_v.top()->f < Omega;
         bool shift_run = shift(run); // update next candidate resolution and
                                      // whether we should continue running
-        if (!run) {
+        // Stop before the pop. shift can refuse the vertex that would change
+        // resolution; popping it first left it in Seen and unexpanded.
+        if (!run || !shift_run) {
           break;
         }
 
@@ -729,18 +749,6 @@ public:
               false; // set flag to false to continue searching for better paths
           break;
         }
-        if (!shift_run) {
-          // `shift` is switching resolution level. v isn't expanded at this
-          // level, so put it back: the switch then treats it like every other
-          // open vertex (kept while f < Omega). Breaking with v left in Seen
-          // instead dropped it for good, so the search could end with an
-          // unexpanded vertex below Omega, short of proving its plan optimal.
-          Seen.erase(v);
-          Seen_hash.erase(v->hash);
-          Q_v.push(v);
-          Q_v_hash.insert(v->hash);
-          break;
-        }
         // profiling:
         end_time = std::chrono::high_resolution_clock::now();
         goal_check_time +=
@@ -761,6 +769,7 @@ public:
 
         expansion_counter++;
         v->expand_index = expansion_counter;
+        at_least_one_expansion = true;
 
         start_time = std::chrono::high_resolution_clock::now();
         // get successors:
@@ -1380,6 +1389,7 @@ public:
       if (debug) {
         log_stream << "entering inner loop" << std::endl;
       }
+      search->at_least_one_expansion = false;
       while (total_expansions.load() < expansion_limit &&
              !search_complete.load() && search->level <= level_limit) {
         if (debug) {
@@ -1537,6 +1547,7 @@ public:
         search->expansion_counter++;
         int global_exp = total_expansions.fetch_add(1) + 1;
         v->expand_index = global_exp;
+        search->at_least_one_expansion = true;
 
         start_time = std::chrono::high_resolution_clock::now();
         // Process successors - mirrors IGHAStar
