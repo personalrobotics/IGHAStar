@@ -730,15 +730,6 @@ public:
           break;
         }
         if (!shift_run) {
-          // `shift` is switching resolution level. v isn't expanded at this
-          // level, so put it back: the switch then treats it like every other
-          // open vertex (kept while f < Omega). Breaking with v left in Seen
-          // instead dropped it for good, so the search could end with an
-          // unexpanded vertex below Omega, short of proving its plan optimal.
-          Seen.erase(v);
-          Seen_hash.erase(v->hash);
-          Q_v.push(v);
-          Q_v_hash.insert(v->hash);
           break;
         }
         // profiling:
