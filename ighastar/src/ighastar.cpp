@@ -173,7 +173,8 @@ public:
   std::vector<std::shared_ptr<Node>> preexpanded_nodes;
 
   // Vertices dropped by branch-and-bound. They leave both queues, so the export
-  // cannot see them unless they are kept here.
+  // cannot see them unless they are kept here. Config key: save_search_tree.
+  bool save_pruned_vertices = false;
   std::vector<std::shared_ptr<Node>> pruned;
 
   // Drop every preemptive cache (and the stash), breaking the parent <-> child
@@ -195,6 +196,15 @@ public:
     // create environment using config:
     env = new Environment(config, time_direction_);
     debug = debug_;
+
+    for (const py::dict &section :
+         {config, config.contains("experiment_info_default")
+                      ? config["experiment_info_default"].cast<py::dict>()
+                      : py::dict()}) {
+      if (section.contains("save_search_tree")) {
+        save_pruned_vertices = section["save_search_tree"].cast<bool>();
+      }
+    }
 
     // Optional preemptive expansion configuration.
     auto [pe_config, pe_found] =
@@ -427,7 +437,7 @@ public:
       if (node->f < Omega) {
         new_inactive_Q_v.insert(node);
         new_inactive_Q_v_hash.insert(node->hash);
-      } else {
+      } else if (save_pruned_vertices) {
         pruned.push_back(node);
       }
     }
@@ -436,7 +446,7 @@ public:
         // put it into new_inactive_Q_v and new inactive_Q_v_hash
         new_inactive_Q_v.insert(node);
         new_inactive_Q_v_hash.insert(node->hash);
-      } else {
+      } else if (save_pruned_vertices) {
         pruned.push_back(node);
       }
     }
