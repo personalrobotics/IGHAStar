@@ -35,7 +35,7 @@ _spec.loader.exec_module(_curves)
 pad_best_cost = _curves.pad_best_cost
 success_vs_expansions = _curves.success_vs_expansions
 
-PROBLEMS = REPO / "Content" / "standalone" / "pusht_multi_slot_1T_rearrange.npz"
+PROBLEMS = REPO / "Content" / "standalone" / "pusht_multi_slot_1T_rearrange_e300000.npz"
 CONFIG = HERE / "Configs" / "pusht_multi_slot_1T_rearrange.yml"
 OUT = REPO / "Content" / "standalone" / "curve_plots" / "slot_trajlib_growth"
 N_GOALS = 30

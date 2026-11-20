@@ -1,9 +1,10 @@
-// Two-tee Push-T for IGHAStar. Chipmunk only. Open right wall, one static square.
-// State [16]: ax ay t0x t0y t0a t1x t1y t1a avx avy t0vx t0vy t0w t1vx t1vy t1w
+// One or two tees. State length is 4 per agent plus 6 per tee.
+// One agent and two tees is [16]: ax ay t0x t0y t0a t1x t1y t1a avx avy t0vx t0vy t0w t1vx t1vy t1w
 // Clear bits live on Node, not in the state and not in the hash.
 #pragma once
 
 #include <algorithm>
+#include <limits>
 #include "solve_2pbvp.h"
 #include <boost/functional/hash.hpp>
 #include <cmath>
@@ -120,6 +121,7 @@ class Environment {
   std::vector<float> action_radii;
   float edge_cost;
   float max_agent_vel;
+  bool use_heuristic;  // false: h = 0, speed cap unchanged
   float max_penetration_px;
   bool rearrange;     // pose goal per tee. Clear uses the exit box.
   bool close_right;   // fourth wall. Rearrange closes it. Clear leaves it open.
@@ -137,6 +139,9 @@ public:
   float resolution[n_dims];
   float tolerance[n_dims];
   float local_controllability_radius[n_dims];
+  // Meet acceptance. The first hash_dims entries are the config. The rest are
+  // velocities, which the meet does not check.
+  float mpc_solve_tolerance[n_dims];
   NearMeet2PBVP near_meet_;
 #define IGHASTAR_MEET_ANGULAR_DIMS(env) ((env)->near_meet_.angular_dims)
   sampling::GoalSamplingConfig goal_sampling;
@@ -188,12 +193,21 @@ public:
     }
     edge_cost = static_cast<float>(n_substeps) *
                 static_cast<float>(pusht_multi_physics::kDt);
+    if (!node_info.contains("num_tees") ||
+        node_info["num_tees"].cast<int>() != kNumTees) {
+      throw std::runtime_error(
+          "pusht_multi num_tees does not match this build");
+    }
     set_resolutions(info);
     set_controls(node_info);
     goal_sampling = sampling::load_goal_sampling(
         config, n_dims, local_controllability_radius);
-    near_meet_.load(config, n_dims, local_controllability_radius,
-                    goal_sampling.angular_dims);
+    std::vector<int> tee_angles;
+    tee_angles.reserve(kNumTees);
+    for (int i = 0; i < kNumTees; i++) {
+      tee_angles.push_back(pusht_multi_physics::tee_pose(i) + 2);
+    }
+    near_meet_.load(config, n_dims, local_controllability_radius, tee_angles);
     if (!traj_filter_self_check()) {
       throw std::runtime_error("trajectory filter self-check failed");
     }
@@ -214,20 +228,45 @@ public:
     auto res = as_fvec(info["resolution"]);
     auto tol = as_fvec(info["tolerance"]);
     std::vector<float> eps = as_fvec(info["epsilon"]);
-    for (int i = 0; i < n_dims; i++) {
-      resolution[i] = (i < (int)res.size()) ? res[i] : res.back();
-      tolerance[i] = (i < (int)tol.size()) ? tol[i] : tol.back();
-      epsilon[i] = (i < (int)eps.size()) ? eps[i] : eps.back();
+    if ((int)res.size() != n_dims || (int)tol.size() != n_dims ||
+        (int)eps.size() != n_dims) {
+      throw std::runtime_error(
+          "pusht_multi resolution, tolerance, and epsilon must each have length n_dims");
     }
-    if (info.contains("LCR")) {
-      auto lcr = as_fvec(info["LCR"]);
-      for (int i = 0; i < n_dims; i++) {
-        local_controllability_radius[i] =
-            (i < (int)lcr.size()) ? lcr[i] : epsilon[i];
+    for (int i = 0; i < n_dims; i++) {
+      resolution[i] = res[i];
+      tolerance[i] = tol[i];
+      epsilon[i] = eps[i];
+    }
+    // The hash reads the first hash_dims entries. Velocities stay at epsilon
+    // and are not part of the cell.
+    for (int i = 0; i < n_dims; i++) {
+      local_controllability_radius[i] = epsilon[i];
+    }
+    if (info.contains("lcr")) {
+      auto lcr = as_fvec(info["lcr"]);
+      if ((int)lcr.size() != hash_dims) {
+        throw std::runtime_error(
+            "pusht_multi lcr must have one entry per hashed dimension");
       }
-    } else {
-      for (int i = 0; i < n_dims; i++) {
-        local_controllability_radius[i] = epsilon[i];
+      for (int i = 0; i < hash_dims; i++) {
+        local_controllability_radius[i] = lcr[i];
+      }
+    }
+    for (int i = 0; i < n_dims; i++) {
+      mpc_solve_tolerance[i] = tolerance[i];
+    }
+    if (info.contains("mpc_solve_tolerance")) {
+      auto meet = as_fvec(info["mpc_solve_tolerance"]);
+      if ((int)meet.size() != hash_dims) {
+        throw std::runtime_error(
+            "pusht_multi mpc_solve_tolerance must have one entry per hashed dimension");
+      }
+      for (int i = 0; i < hash_dims; i++) {
+        mpc_solve_tolerance[i] = meet[i];
+      }
+      for (int i = hash_dims; i < n_dims; i++) {
+        mpc_solve_tolerance[i] = std::numeric_limits<float>::infinity();
       }
     }
   }
@@ -242,6 +281,8 @@ public:
     max_agent_vel = node_info.contains("max_agent_vel")
                         ? node_info["max_agent_vel"].cast<float>()
                         : 500.f;
+    use_heuristic = !node_info.contains("use_heuristic") ||
+                    node_info["use_heuristic"].cast<bool>();
     max_penetration_px = node_info.contains("max_penetration_px")
                              ? node_info["max_penetration_px"].cast<float>()
                              : 1.f;
@@ -477,7 +518,7 @@ public:
         [this](const float *a, const float *b) {
           return heuristic(const_cast<float *>(a), const_cast<float *>(b));
         },
-        tolerance, true);
+        mpc_solve_tolerance, true);
   }
 
   // The edge the search attaches: the winning held target, rolled out from the
@@ -506,7 +547,8 @@ public:
         source->pose, controls.data(), final_pose, n_substeps, inter.data(),
         max_agent_vel, &pen_inc, &peak_force, walls_, n_walls_, close_right);
     if (!rollout_valid(final_pose, inter.data(), pen_inc, peak_force) ||
-        !near_meet_.within_tolerance(final_pose, target->pose, tolerance)) {
+        !near_meet_.within_tolerance(final_pose, target->pose,
+                                    mpc_solve_tolerance)) {
       return edge;
     }
     edge.poses = std::move(inter);
@@ -561,6 +603,8 @@ public:
   // now. Successors set f from Node::cleared, which also remembers a past
   // entry. Rearrange: distance of each tee body to its goal pose.
   float heuristic(float *pose, float *goal) {
+    if (!use_heuristic)
+      return 0.f;
     if (rearrange)
       return h_rearrange(pose, goal);
     bool now[kNumTees];
@@ -570,10 +614,18 @@ public:
   }
 
   bool reached_goal_region(std::shared_ptr<Node> v, std::shared_ptr<Node> goal) {
-    if (!rearrange)
-      return v->cleared[0] && v->cleared[1];
-    return tee_at_goal(v->pose, goal->pose, 0) &&
-           tee_at_goal(v->pose, goal->pose, 1);
+    if (!rearrange) {
+      for (int i = 0; i < kNumTees; i++) {
+        if (!v->cleared[i])
+          return false;
+      }
+      return true;
+    }
+    for (int i = 0; i < kNumTees; i++) {
+      if (!tee_at_goal(v->pose, goal->pose, i))
+        return false;
+    }
+    return true;
   }
 
   bool finite_pose(const float *pose) const {

@@ -44,6 +44,7 @@ class Environment {
   std::vector<float> action_radii; // agent-relative PD offsets
   float edge_cost;
   float max_agent_vel; // px/s; clamps PD; heuristic = block_dist / this
+  bool use_heuristic;  // false: h = 0, speed cap unchanged
   float max_penetration_px; // invalidate Succ if pen deepens by more than this
   bool use_quasistatic;     // Mason/Lynch QS (pusht_qs) vs Chipmunk
   float qs_support_radius;  // ellipsoidal LS ℓ = (2/3) R
@@ -136,6 +137,8 @@ public:
     max_agent_vel = node_info.contains("max_agent_vel")
                         ? node_info["max_agent_vel"].cast<float>()
                         : 100.0f;
+    use_heuristic = !node_info.contains("use_heuristic") ||
+                    node_info["use_heuristic"].cast<bool>();
     max_penetration_px = node_info.contains("max_penetration_px")
                              ? node_info["max_penetration_px"].cast<float>()
                              : 1.0f;
@@ -210,6 +213,8 @@ public:
   float distance(float *pose, float *goal) { return block_distance(pose, goal); }
 
   float heuristic(float *pose, float *goal) {
+    if (!use_heuristic)
+      return 0.f;
     // Time lower bound when speed is capped; uncapped (vmax<=0) → no guidance.
     return max_agent_vel > 0.f ? block_distance(pose, goal) / max_agent_vel
                                : 0.f;
