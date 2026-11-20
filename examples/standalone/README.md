@@ -144,7 +144,7 @@ Open the printed localhost URL. The GUI has play/pause, a state slider, and a li
 
 ### 4. Scrub search-tree growth in Viser
 
-Call `export_search_tree()` after `search()` returns. A later `search()` on the same planner clears the tree.
+Call `get_search_tree()` after `search()` returns. A later `search()` on the same planner clears the tree.
 
 A unidirectional export is one `SearchTree`. Vertex `i` has state `poses[i]`. `parents[i]` is the index of the parent. The root parent is `-1`. `edges[i]` holds the poses from the parent to vertex `i` when `has_edge[i]` is true.
 

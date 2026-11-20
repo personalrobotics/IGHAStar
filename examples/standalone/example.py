@@ -99,7 +99,7 @@ def main(
     success = planner.search(start, goal, bitmap, expansion_limit, hysteresis, False)
     end = time.perf_counter()
     print(f"Search completed, success: {success}")
-    exported = planner.export_search_tree()
+    exported = planner.get_search_tree()
     if bidirectional:
         _require_tree(exported["forward"], "forward")
         _require_tree(exported["backward"], "backward")

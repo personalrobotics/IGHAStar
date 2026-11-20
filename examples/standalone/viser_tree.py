@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Export an IGHA* search tree and scrub its growth in Viser.
 
-Shows how to call ``export_search_tree()`` and draw the flat arrays.
+Shows how to call ``get_search_tree()`` and draw the flat arrays.
 ``edges[i]`` is the poses from the parent to vertex ``i``. Green is
 ``time_direction`` 1. Purple is -1. The slider keeps edges whose
 ``discover_index`` is at most the slider value. The black solution path
@@ -160,7 +160,7 @@ def plan_and_export(
     success = planner.search(start, goal, bitmap, expansion_limit, hysteresis, False)
     print(f"Search done (success={success}), exporting tree...")
 
-    exported = planner.export_search_tree()
+    exported = planner.get_search_tree()
     if bidirectional:
         tree = {
             "forward": _tree_arrays(exported["forward"]),

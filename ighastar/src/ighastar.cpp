@@ -1025,7 +1025,7 @@ public:
   int get_first_goal_level() const { return first_goal_level; }
 
   // Flat snapshot of the containers still alive after search().
-  std::shared_ptr<tree_utils::SearchTree> export_search_tree() {
+  std::shared_ptr<tree_utils::SearchTree> get_search_tree() {
     return tree_utils::export_search_tree(
         Seen, Q_v, inactive_Q_v, pruned, best_path_list, best_path, Omega,
         env->timesteps, expansion_counter, expansion_limit, SUCCESS);
@@ -1988,10 +1988,10 @@ public:
   }
 
   // Export forward and backward trees; expansion indices use the global counter.
-  py::dict export_search_tree() {
+  py::dict get_search_tree() {
     py::dict out;
-    out["forward"] = forward_search->export_search_tree();
-    out["backward"] = backward_search->export_search_tree();
+    out["forward"] = forward_search->get_search_tree();
+    out["backward"] = backward_search->get_search_tree();
     out["expansion_count"] = total_expansions.load();
     // Per-tree expansion_count still reflects each direction's local counter;
     // override the top-level scrub range with the global total.
@@ -2052,7 +2052,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("get_preemptive_hits", &IGHAStar::get_preemptive_hits)
       .def("get_level_history", &IGHAStar::get_level_history)
       .def("get_first_goal_level", &IGHAStar::get_first_goal_level)
-      .def("export_search_tree", &IGHAStar::export_search_tree)
+      .def("get_search_tree", &IGHAStar::get_search_tree)
       .def("record_solution_trajectory",
            [](IGHAStar &self) {
              const float *goal_pose = self.goal_node_saved
@@ -2098,5 +2098,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("get_profiler_info", &BiIGHAStar::get_profiler_info)
       .def("get_preemptive_expansions",
            &BiIGHAStar::get_preemptive_expansions)
-      .def("export_search_tree", &BiIGHAStar::export_search_tree);
+      .def("get_search_tree", &BiIGHAStar::get_search_tree);
 }
