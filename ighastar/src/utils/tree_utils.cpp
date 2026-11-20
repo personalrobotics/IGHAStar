@@ -35,7 +35,11 @@ std::shared_ptr<SearchTree> export_search_tree(
     if (inserted) {
       nodes.push_back(node);
       tree->status.push_back(node_status);
-    } else if (node_status < tree->status[it->second]) {
+    } else if (node_status == SearchTree::Solution ||
+               (tree->status[it->second] != SearchTree::Solution &&
+                node_status < tree->status[it->second])) {
+      // A reused goal already has expand_index >= 0, and the parent walk
+      // marks ancestors Expanded. Solution stays Solution.
       tree->status[it->second] = node_status;
     }
   };
@@ -88,8 +92,15 @@ std::shared_ptr<SearchTree> export_search_tree(
     tree->parents[i] = node.parent ? index.at(node.parent.get()) : -1;
     const size_t row = static_cast<size_t>(i) * T;
     if (node.parent && node.intermediate_poses && T > 0) {
-      std::copy(node.intermediate_poses, node.intermediate_poses + T * n_dims,
-                tree->edges.begin() + row * n_dims);
+      // The node stores a backward edge flipped. Parent-to-vertex order is the
+      // generator order, which is also the control order, so flip the poses back.
+      const bool backward = node.time_direction < 0;
+      for (int t = 0; t < T; t++) {
+        const int src = backward ? T - 1 - t : t;
+        std::copy(node.intermediate_poses + src * n_dims,
+                  node.intermediate_poses + (src + 1) * n_dims,
+                  tree->edges.begin() + (row + static_cast<size_t>(t)) * n_dims);
+      }
       if (node.intermediate_controls) {
         std::copy(node.intermediate_controls,
                   node.intermediate_controls + T * n_cont,

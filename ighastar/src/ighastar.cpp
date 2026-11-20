@@ -36,6 +36,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <pybind11/stl.h>
 #include "utils/hash_map.h"
 
@@ -93,7 +94,8 @@ public:
   std::vector<igha::unordered_map<int, float>> G;
 
   bool SUCCESS;
-  int next_level, level, expansion_limit, expansion_counter, hysteresis;
+  int next_level, level, expansion_counter, hysteresis;
+  int expansion_limit = 0;
   int hysteresis_threshold;
   std::vector<std::shared_ptr<Node>> best_path;
   std::vector<std::vector<std::shared_ptr<Node>>> best_path_list;
@@ -1063,6 +1065,7 @@ public:
   std::mutex path_mutex;
   std::vector<std::shared_ptr<Node>> best_path;
   std::vector<std::vector<std::shared_ptr<Node>>> best_path_list;
+  int expansion_limit = 0;
 
   // Profiling lists mutex
   std::mutex profiling_lists_mutex;
@@ -1758,6 +1761,9 @@ public:
 
     forward_search->reset();
     backward_search->reset();
+    this->expansion_limit = expansion_limit;
+    forward_search->expansion_limit = expansion_limit;
+    backward_search->expansion_limit = expansion_limit;
 
     // Create start and goal nodes for both directions
     std::shared_ptr<Node> forward_start =
@@ -1987,14 +1993,62 @@ public:
            backward_search->preemptive_expansions;
   }
 
-  // Export forward and backward trees; expansion indices use the global counter.
+  // Forward and backward trees. Solution vertices come from this search's paths,
+  // because each direction's own best_path stays empty.
   py::dict get_search_tree() {
+    std::unordered_set<const Node *> forward_ids, backward_ids;
+    auto collect = [](IGHAStar *search, std::unordered_set<const Node *> &ids) {
+      for (const auto &node : search->Seen)
+        ids.insert(node.get());
+      for (const auto &node : tree_utils::heap_container(search->Q_v))
+        ids.insert(node.get());
+      for (const auto &node : search->inactive_Q_v)
+        ids.insert(node.get());
+      for (const auto &node : search->pruned)
+        ids.insert(node.get());
+    };
+    collect(forward_search, forward_ids);
+    collect(backward_search, backward_ids);
+
+    std::vector<std::vector<std::shared_ptr<Node>>> forward_paths, backward_paths;
+    std::shared_ptr<Node> forward_best, backward_best;
+    for (const auto &path : best_path_list) {
+      std::shared_ptr<Node> forward_node, backward_node;
+      for (const auto &node : path) {
+        if (!forward_node && forward_ids.count(node.get()))
+          forward_node = node;
+        if (backward_ids.count(node.get()))
+          backward_node = node;
+      }
+      if (forward_node)
+        forward_paths.push_back({forward_node});
+      if (backward_node)
+        backward_paths.push_back({backward_node});
+      forward_best = forward_node;
+      backward_best = backward_node;
+    }
+
+    const float best_cost = shared_Omega.load();
+    const int total = total_expansions.load();
+    const bool exhausted = total >= expansion_limit;
+    auto export_side =
+        [&](IGHAStar *search,
+            const std::vector<std::vector<std::shared_ptr<Node>>> &paths,
+            const std::shared_ptr<Node> &best) {
+          std::vector<std::shared_ptr<Node>> best_path;
+          if (best)
+            best_path.push_back(best);
+          auto tree = tree_utils::export_search_tree(
+              search->Seen, search->Q_v, search->inactive_Q_v, search->pruned,
+              paths, best_path, best_cost, search->env->timesteps,
+              search->expansion_counter, expansion_limit, best != nullptr);
+          tree->budget_exhausted = exhausted;
+          return tree;
+        };
     py::dict out;
-    out["forward"] = forward_search->get_search_tree();
-    out["backward"] = backward_search->get_search_tree();
-    out["expansion_count"] = total_expansions.load();
-    // Per-tree expansion_count still reflects each direction's local counter;
-    // override the top-level scrub range with the global total.
+    out["forward"] = export_side(forward_search, forward_paths, forward_best);
+    out["backward"] = export_side(backward_search, backward_paths, backward_best);
+    out["expansion_count"] = total;
     return out;
   }
 
