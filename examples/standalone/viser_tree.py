@@ -1,33 +1,31 @@
 #!/usr/bin/env python3
 """Export an IGHA* search tree and scrub its growth in Viser.
 
-Shows how to call ``export_search_tree()``, round-trip the result through
-pickle, and consume the node dicts. Overlays intermediate-pose line segments
-on the elevation+cost terrain (same shading as the trajectory replay):
-green = forward (``time_direction > 0``), purple = backward
-(``time_direction < 0``), black = solution path (appears once
-``cost_exp_list`` first drops below 1e4).
+Shows how to call ``get_search_tree()`` and draw the flat arrays.
+``edges[i]`` is the poses from the parent to vertex ``i``. Green is
+``time_direction`` 1. Purple is -1. The slider keeps edges whose
+``discover_index`` is at most the slider value. The black solution path
+appears once ``cost_exp_list`` first drops below 1e4.
 
     # Plan, export, and scrub (bidirectional by default)
     python3 viser_tree.py -c Configs/kinodynamic_example.yml --test-case case1
 
     # Save for later
     python3 viser_tree.py -c Configs/kinodynamic_example.yml --test-case case1 \
-        --save ../../Content/standalone/race-2_tree.pkl
+        --save ../../Content/standalone/race-2_tree.npz
 
     # Load a saved tree (skip planning)
     python3 viser_tree.py -c Configs/kinodynamic_example.yml \
-        --tree ../../Content/standalone/race-2_tree.pkl
+        --tree ../../Content/standalone/race-2_tree.npz
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import pickle
 import sys
 import time
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
@@ -60,17 +58,85 @@ def first_solution_expansion(cost_exp_list: List[float], threshold: float = 1e4)
     return int(hits[0]) if len(hits) else -1
 
 
+_ARRAYS = (
+    "poses",
+    "parents",
+    "g",
+    "f",
+    "levels",
+    "status",
+    "has_edge",
+    "edges",
+    "edge_controls",
+    "time_direction",
+    "discover_index",
+    "expand_index",
+)
+
+
+def _tree_arrays(tree: Any) -> Dict[str, Any]:
+    """Copy one SearchTree into numpy arrays. The C++ object is not saved."""
+    out: Dict[str, Any] = {name: np.asarray(getattr(tree, name)).copy() for name in _ARRAYS}
+    out["num_nodes"] = int(tree.num_nodes)
+    out["state_dim"] = int(tree.state_dim)
+    out["expansions"] = int(tree.expansions)
+    out["best_index"] = int(tree.best_index)
+    out["best_cost"] = float(tree.best_cost)
+    out["expansion_count"] = int(tree.expansions)
+    return out
+
+
 def load_tree(path: str) -> Dict[str, Any]:
-    """Load a tree dict previously written by ``save_tree``."""
-    with open(path, "rb") as f:
-        return pickle.load(f)
+    """Load a tree previously written by ``save_tree``."""
+    with np.load(path) as data:
+        kind = str(data["kind"])
+        sol = np.array(data["solution_path"])
+        found = int(data["solution_found_at"])
+        if kind == "bi":
+            tree: Dict[str, Any] = {
+                "expansion_count": int(data["expansion_count"]),
+                "forward": {},
+                "backward": {},
+            }
+            for key in data.files:
+                if "." not in key:
+                    continue
+                side, name = key.split(".", 1)
+                tree[side][name] = np.array(data[key])
+        else:
+            tree = {
+                key: np.array(data[key])
+                for key in data.files
+                if key not in ("kind", "solution_path", "solution_found_at")
+            }
+            tree["expansion_count"] = int(tree["expansion_count"])
+        tree["solution_path"] = None if sol.shape[0] == 0 else sol
+        tree["solution_found_at"] = found
+    return tree
 
 
 def save_tree(tree: Dict[str, Any], path: str) -> None:
-    """Persist an ``export_search_tree()`` dict for offline playback / ML."""
+    """Write the tree arrays. A SearchTree object is not pickled."""
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
-    with open(path, "wb") as f:
-        pickle.dump(tree, f, protocol=pickle.HIGHEST_PROTOCOL)
+    payload: Dict[str, Any] = {}
+    if "forward" in tree:
+        payload["kind"] = np.array("bi")
+        payload["expansion_count"] = np.int64(tree["expansion_count"])
+        for side in ("forward", "backward"):
+            for key, value in tree[side].items():
+                payload[f"{side}.{key}"] = np.asarray(value)
+    else:
+        payload["kind"] = np.array("uni")
+        for key, value in tree.items():
+            if key in ("solution_path", "solution_found_at"):
+                continue
+            payload[key] = np.asarray(value)
+    sol = tree.get("solution_path")
+    payload["solution_path"] = (
+        np.zeros((0, 2), dtype=np.float32) if sol is None else np.asarray(sol, dtype=np.float32)
+    )
+    payload["solution_found_at"] = np.int64(tree.get("solution_found_at", -1))
+    np.savez(path, **payload)
 
 
 def plan_and_export(
@@ -94,7 +160,15 @@ def plan_and_export(
     success = planner.search(start, goal, bitmap, expansion_limit, hysteresis, False)
     print(f"Search done (success={success}), exporting tree...")
 
-    tree = planner.export_search_tree()
+    exported = planner.get_search_tree()
+    if bidirectional:
+        tree = {
+            "forward": _tree_arrays(exported["forward"]),
+            "backward": _tree_arrays(exported["backward"]),
+            "expansion_count": int(exported["expansion_count"]),
+        }
+    else:
+        tree = _tree_arrays(exported)
     *_, cost_exp_list = planner.get_profiler_info()
     found_at = first_solution_expansion(cost_exp_list)
     if success and found_at >= 0:
@@ -110,12 +184,11 @@ def plan_and_export(
     return tree
 
 
-def _all_nodes(tree: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], int]:
-    """Flatten uni / bi export into one node list + scrub max."""
+def _sides(tree: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], int]:
+    """One SearchTree for a unidirectional export. Two for bidirectional."""
     if "forward" in tree and "backward" in tree:
-        nodes = list(tree["forward"]["nodes"]) + list(tree["backward"]["nodes"])
-        return nodes, int(tree["expansion_count"])
-    return list(tree["nodes"]), int(tree["expansion_count"])
+        return [tree["forward"], tree["backward"]], int(tree["expansion_count"])
+    return [tree], int(tree["expansion_count"])
 
 
 def _segments_from_polyline(
@@ -134,37 +207,31 @@ def _segments_from_polyline(
     return np.stack([pts[:-1], pts[1:]], axis=1).astype(np.float32)
 
 
-def _segments_for_nodes(
-    nodes: Iterable[Dict[str, Any]],
+def _segments_for_sides(
+    sides: List[Dict[str, Any]],
     expansion: int,
     elevation: np.ndarray,
     map_res: float,
     forward: bool,
 ) -> np.ndarray:
-    """Build (N, 2, 3) segments; split by ``time_direction`` (+1 fwd, -1 bwd)."""
-    segs: List[List[List[float]]] = []
-    for node in nodes:
-        td = int(node.get("time_direction", 1))
-        if forward and td < 0:
-            continue
-        if not forward and td >= 0:
-            continue
-        if int(node["discover_index"]) > expansion:
-            continue
-        intermediates = node.get("intermediate_poses")
-        if not intermediates:
-            continue
-        pts: List[List[float]] = []
-        for pose in intermediates:
-            x = float(pose[0])
-            y = float(pose[1])
-            z = float(sample_height(elevation, x, y, map_res)) + 0.08
-            pts.append([x, y, z])
-        for i in range(len(pts) - 1):
-            segs.append([pts[i], pts[i + 1]])
-    if not segs:
+    """Build (N, 2, 3) segments from edges. Green is time_direction 1."""
+    pieces: List[np.ndarray] = []
+    for side in sides:
+        direction = np.asarray(side["time_direction"])
+        keep = direction >= 0 if forward else direction < 0
+        keep &= np.asarray(side["has_edge"]).astype(bool)
+        keep &= np.asarray(side["discover_index"]) <= expansion
+        for edge in np.asarray(side["edges"])[keep]:
+            if len(edge) < 2:
+                continue
+            z = sample_height(elevation, edge[:, 0], edge[:, 1], map_res).astype(np.float32)
+            pts = np.stack(
+                [edge[:, 0], edge[:, 1], z + np.float32(0.08)], axis=-1
+            ).astype(np.float32)
+            pieces.append(np.stack([pts[:-1], pts[1:]], axis=1))
+    if not pieces:
         return np.zeros((0, 2, 3), dtype=np.float32)
-    return np.asarray(segs, dtype=np.float32)
+    return np.concatenate(pieces, axis=0)
 
 
 def _set_segments(handle: Any, pts: np.ndarray, color: Tuple[int, int, int]) -> None:
@@ -189,15 +256,16 @@ def playback_tree(
     """Scrub tree growth over elevation+cost terrain; green fwd, purple bwd, black solution."""
     import viser
 
-    nodes, expansion_count = _all_nodes(tree)
-    n_fwd = sum(1 for n in nodes if int(n.get("time_direction", 1)) >= 0)
-    n_bwd = len(nodes) - n_fwd
+    sides, expansion_count = _sides(tree)
+    n_nodes = sum(len(np.asarray(side["time_direction"])) for side in sides)
+    n_fwd = sum(int((np.asarray(side["time_direction"]) >= 0).sum()) for side in sides)
+    n_bwd = n_nodes - n_fwd
     solution_path = tree.get("solution_path")
     if solution_path is not None:
         solution_path = np.asarray(solution_path, dtype=np.float32)
     solution_found_at = int(tree.get("solution_found_at", -1))
     print(
-        f"Tree: {len(nodes)} nodes (fwd={n_fwd}, bwd={n_bwd}), "
+        f"Tree: {n_nodes} nodes (fwd={n_fwd}, bwd={n_bwd}), "
         f"expansion_count={expansion_count}, "
         f"solution_found_at={solution_found_at}"
     )
@@ -245,8 +313,8 @@ def playback_tree(
     def redraw(expansion: int) -> None:
         visible = 0
         for name, is_forward in (("forward", True), ("backward", False)):
-            pts = _segments_for_nodes(
-                nodes, expansion, elevation, map_res, forward=is_forward
+            pts = _segments_for_sides(
+                sides, expansion, elevation, map_res, forward=is_forward
             )
             _set_segments(handles[name], pts, color_by_name[name])
             visible += len(pts)
@@ -308,8 +376,8 @@ def main() -> None:
         action="store_false",
         help="Use unidirectional IGHAStar",
     )
-    parser.add_argument("--tree", default=None, help="Load a pickled tree and skip planning")
-    parser.add_argument("--save", default=None, help="Write the exported tree pickle here")
+    parser.add_argument("--tree", default=None, help="Load an .npz tree and skip planning")
+    parser.add_argument("--save", default=None, help="Write the exported tree arrays here")
     parser.add_argument("--port", type=int, default=8080, help="Viser port")
     args = parser.parse_args()
 

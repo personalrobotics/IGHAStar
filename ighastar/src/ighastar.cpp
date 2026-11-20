@@ -34,6 +34,9 @@
 #include <chrono>
 #include <iomanip>
 #include <stdexcept>
+#include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <pybind11/stl.h>
 #include "utils/hash_map.h"
 
@@ -91,7 +94,8 @@ public:
   std::vector<igha::unordered_map<int, float>> G;
 
   bool SUCCESS;
-  int next_level, level, expansion_limit, expansion_counter, hysteresis;
+  int next_level, level, expansion_counter, hysteresis;
+  int expansion_limit = 0;
   int hysteresis_threshold;
   std::vector<std::shared_ptr<Node>> best_path;
   std::vector<std::vector<std::shared_ptr<Node>>> best_path_list;
@@ -168,6 +172,11 @@ public:
   // every reset and on destruction so the cycles are broken.
   std::vector<std::shared_ptr<Node>> preexpanded_nodes;
 
+  // Vertices dropped by branch-and-bound. They leave both queues, so the export
+  // cannot see them unless they are kept here. Config key: save_search_tree.
+  bool save_pruned_vertices = false;
+  std::vector<std::shared_ptr<Node>> pruned;
+
   // Drop every preemptive cache (and the stash), breaking the parent <-> child
   // reference cycles of the caches no search consumed.
   void release_preemptive_caches() {
@@ -187,6 +196,15 @@ public:
     // create environment using config:
     env = new Environment(config, time_direction_);
     debug = debug_;
+
+    for (const py::dict &section :
+         {config, config.contains("experiment_info_default")
+                      ? config["experiment_info_default"].cast<py::dict>()
+                      : py::dict()}) {
+      if (section.contains("save_search_tree")) {
+        save_pruned_vertices = section["save_search_tree"].cast<bool>();
+      }
+    }
 
     // Optional preemptive expansion configuration.
     auto [pe_config, pe_found] =
@@ -277,6 +295,7 @@ public:
     preemptive_expansions = 0;
     preemptive_hits = 0;
     at_least_one_expansion = false;
+    pruned.clear();
   }
 
   // activate method for HA*M
@@ -418,6 +437,8 @@ public:
       if (node->f < Omega) {
         new_inactive_Q_v.insert(node);
         new_inactive_Q_v_hash.insert(node->hash);
+      } else if (save_pruned_vertices) {
+        pruned.push_back(node);
       }
     }
     for (std::shared_ptr<Node> node : inactive_Q_v) {
@@ -425,6 +446,8 @@ public:
         // put it into new_inactive_Q_v and new inactive_Q_v_hash
         new_inactive_Q_v.insert(node);
         new_inactive_Q_v_hash.insert(node->hash);
+      } else if (save_pruned_vertices) {
+        pruned.push_back(node);
       }
     }
     // now delete the old inactive_Q_v and inactive_Q_v_hash
@@ -937,7 +960,7 @@ public:
         best_path_list.push_back(best_path);
         goal_reached =
             false; // set flag to false to continue searching for better paths
-      }        
+      }
     }
     // The pop loop records Omega on the next expansion. This pass has none,
     // so the curve would otherwise stay at 1e5 after a path was returned.
@@ -946,6 +969,7 @@ public:
 
     return SUCCESS;
   }
+
 
   // Batch of states, one world tensor. Same check_validity_batched the env
   // already implements. Used by problem sampling.
@@ -1012,10 +1036,11 @@ public:
   std::vector<int> get_level_history() { return level_list; }
   int get_first_goal_level() const { return first_goal_level; }
 
-  // Export Seen ∪ Q_v ∪ inactive_Q_v as a Python dict for viz / ML.
-  py::dict export_search_tree() {
-    return tree_utils::export_search_tree(Seen, Q_v, inactive_Q_v,
-                                          env->timesteps, expansion_counter);
+  // Flat snapshot of the containers still alive after search().
+  std::shared_ptr<tree_utils::SearchTree> get_search_tree() {
+    return tree_utils::export_search_tree(
+        Seen, Q_v, inactive_Q_v, pruned, best_path_list, best_path, Omega,
+        env->timesteps, expansion_counter, expansion_limit, SUCCESS);
   }
 };
 
@@ -1050,6 +1075,7 @@ public:
   std::mutex path_mutex;
   std::vector<std::shared_ptr<Node>> best_path;
   std::vector<std::vector<std::shared_ptr<Node>>> best_path_list;
+  int expansion_limit = 0;
 
   // Profiling lists mutex
   std::mutex profiling_lists_mutex;
@@ -1745,6 +1771,9 @@ public:
 
     forward_search->reset();
     backward_search->reset();
+    this->expansion_limit = expansion_limit;
+    forward_search->expansion_limit = expansion_limit;
+    backward_search->expansion_limit = expansion_limit;
 
     // Create start and goal nodes for both directions
     std::shared_ptr<Node> forward_start =
@@ -1974,14 +2003,62 @@ public:
            backward_search->preemptive_expansions;
   }
 
-  // Export forward and backward trees; expansion indices use the global counter.
-  py::dict export_search_tree() {
+  // Forward and backward trees. Solution vertices come from this search's paths,
+  // because each direction's own best_path stays empty.
+  py::dict get_search_tree() {
+    std::unordered_set<const Node *> forward_ids, backward_ids;
+    auto collect = [](IGHAStar *search, std::unordered_set<const Node *> &ids) {
+      for (const auto &node : search->Seen)
+        ids.insert(node.get());
+      for (const auto &node : tree_utils::heap_container(search->Q_v))
+        ids.insert(node.get());
+      for (const auto &node : search->inactive_Q_v)
+        ids.insert(node.get());
+      for (const auto &node : search->pruned)
+        ids.insert(node.get());
+    };
+    collect(forward_search, forward_ids);
+    collect(backward_search, backward_ids);
+
+    std::vector<std::vector<std::shared_ptr<Node>>> forward_paths, backward_paths;
+    std::shared_ptr<Node> forward_best, backward_best;
+    for (const auto &path : best_path_list) {
+      std::shared_ptr<Node> forward_node, backward_node;
+      for (const auto &node : path) {
+        if (!forward_node && forward_ids.count(node.get()))
+          forward_node = node;
+        if (backward_ids.count(node.get()))
+          backward_node = node;
+      }
+      if (forward_node)
+        forward_paths.push_back({forward_node});
+      if (backward_node)
+        backward_paths.push_back({backward_node});
+      forward_best = forward_node;
+      backward_best = backward_node;
+    }
+
+    const float best_cost = shared_Omega.load();
+    const int total = total_expansions.load();
+    const bool exhausted = total >= expansion_limit;
+    auto export_side =
+        [&](IGHAStar *search,
+            const std::vector<std::vector<std::shared_ptr<Node>>> &paths,
+            const std::shared_ptr<Node> &best) {
+          std::vector<std::shared_ptr<Node>> best_path;
+          if (best)
+            best_path.push_back(best);
+          auto tree = tree_utils::export_search_tree(
+              search->Seen, search->Q_v, search->inactive_Q_v, search->pruned,
+              paths, best_path, best_cost, search->env->timesteps,
+              search->expansion_counter, expansion_limit, best != nullptr);
+          tree->budget_exhausted = exhausted;
+          return tree;
+        };
     py::dict out;
-    out["forward"] = forward_search->export_search_tree();
-    out["backward"] = backward_search->export_search_tree();
-    out["expansion_count"] = total_expansions.load();
-    // Per-tree expansion_count still reflects each direction's local counter;
-    // override the top-level scrub range with the global total.
+    out["forward"] = export_side(forward_search, forward_paths, forward_best);
+    out["backward"] = export_side(backward_search, backward_paths, backward_best);
+    out["expansion_count"] = total;
     return out;
   }
 
@@ -2039,7 +2116,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("get_preemptive_hits", &IGHAStar::get_preemptive_hits)
       .def("get_level_history", &IGHAStar::get_level_history)
       .def("get_first_goal_level", &IGHAStar::get_first_goal_level)
-      .def("export_search_tree", &IGHAStar::export_search_tree)
+      .def("get_search_tree", &IGHAStar::get_search_tree)
       .def("record_solution_trajectory",
            [](IGHAStar &self) {
              const float *goal_pose = self.goal_node_saved
@@ -2070,6 +2147,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "Step the multi-tee Chipmunk world. target is one xy per agent.");
 #endif
 
+  tree_utils::bind_search_tree(m);
+
   py::class_<BiIGHAStar>(m, "BiIGHAStar", py::module_local())
       .def(py::init<const py::dict &, bool>(), py::arg("config"),
            py::arg("debug") = false)
@@ -2083,5 +2162,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("get_profiler_info", &BiIGHAStar::get_profiler_info)
       .def("get_preemptive_expansions",
            &BiIGHAStar::get_preemptive_expansions)
-      .def("export_search_tree", &BiIGHAStar::export_search_tree);
+      .def("get_search_tree", &BiIGHAStar::get_search_tree);
 }

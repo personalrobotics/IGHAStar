@@ -420,5 +420,71 @@ def test_cuda_matches_cpu(torch_result):
         torch.testing.assert_close(r["path"], torch_result["path"], atol=1e-5, rtol=1e-5)
 
 
+# --------------------------------------------------------------------------
+# Search tree export
+# --------------------------------------------------------------------------
+def _tree_search(max_expansions=None):
+    info = {}
+    if max_expansions is not None:
+        info["max_expansions"] = max_expansions
+    return solve("generic", gp.callbacks(), **info)
+
+
+def test_search_tree_holds_the_best_path_and_a_consistent_tree():
+    r = _tree_search()
+    assert r["ok"]
+    tree = r["planner"].get_search_tree()
+    status = tree.STATUS
+    n = tree.num_nodes
+    parents, g, st = tree.parents, tree.g, tree.status
+    assert n > tree.expansions > 0 and not tree.budget_exhausted
+    assert tree.parents.shape == (n,) and tree.poses.shape == (n, 2)
+    # One root; every other parent is an expanded node, with a lower cost-to-come.
+    assert int((parents == -1).sum()) == 1
+    children = parents >= 0
+    assert bool((st[parents[children]] == status["expanded"]).all())
+    assert bool((g[children] >= g[parents[children]] - 1e-6).all())
+    assert int((st == status["expanded"]).sum()) == tree.expansions
+    # The best path ends at a solution.
+    assert int((st == status["solution"]).sum()) >= 1
+    assert int(st[tree.best_index]) == status["solution"]
+    # A finished search leaves nothing unexpanded below the best cost.
+    assert int(((st == status["open"]) | (st == status["inactive"])).sum()) == 0
+    # get_best_path's rows: the state, then its cost-to-come and time.
+    g_column = tree.state_dim
+    assert abs(tree.best_cost - float(r["path"][0, g_column])) < 1e-5
+    # The best path: root to the best solution's node. get_best_path has the same states and
+    # costs-to-come, goal first and without the root.
+    path = tree.path_to(tree.best_index)
+    assert path[0] == int((parents == -1).nonzero()[0, 0])
+    best = r["planner"].get_best_path().flip(0)
+    torch.testing.assert_close(tree.poses[path[1:]], best[:, :g_column])
+    torch.testing.assert_close(tree.g[path[1:]], best[:, g_column])
+    # Each edge ends at its node's state.
+    has_edge = tree.has_edge
+    assert bool(has_edge[children].all()) and not bool(has_edge[~children].any())
+    torch.testing.assert_close(tree.edges[has_edge][:, -1], tree.poses[has_edge])
+
+
+def test_search_tree_of_a_budget_limited_search_keeps_its_open_vertices():
+    tree = _tree_search(max_expansions=40)["planner"].get_search_tree()
+    status = tree.STATUS
+    assert tree.budget_exhausted and tree.expansions == 40
+    open_ = (tree.status == status["open"]) | (tree.status == status["inactive"])
+    assert int(open_.sum()) > 0
+
+
+def test_search_tree_follows_each_search():
+    r = _tree_search()
+    first = r["planner"].get_search_tree()
+    saved = int(first.expansions)
+    r["configs"]["experiment_info_default"]["max_expansions"] = 5
+    gp.run_search(r["planner"], r["configs"])
+    second = r["planner"].get_search_tree()
+    assert int(first.expansions) == saved
+    assert int(second.expansions) == 5
+    assert int(second.expansions) != saved
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

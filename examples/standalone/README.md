@@ -144,7 +144,15 @@ Open the printed localhost URL. The GUI has play/pause, a state slider, and a li
 
 ### 4. Scrub search-tree growth in Viser
 
-After a search, `export_search_tree()` returns the nodes in Seen ∪ Q_v ∪ inactive (discover/expand indices, intermediate poses, and the action at each of those poses). `intermediate_controls[t]` is the action for `intermediate_poses[t]`; a node with no edge has `None`. `viser_tree.py` is a minimal example of saving/loading that dict and drawing growth:
+Call `get_search_tree()` after `search()` returns. A later `search()` on the same planner clears the tree.
+
+A unidirectional export is one `SearchTree`. Vertex `i` has state `poses[i]`. `parents[i]` is the index of the parent. The root parent is `-1`. `edges[i]` holds the poses from the parent to vertex `i` when `has_edge[i]` is true.
+
+`time_direction[i]` is `1` for a forward edge and `-1` for a backward edge. `discover_index[i]` is the expansion count when the search found vertex `i`. Draw the edge when `discover_index[i]` is less than or equal to the slider value.
+
+`path_to(best_index)` returns the indices from the root to the best goal vertex.
+
+A bidirectional export is a dict. `forward` and `backward` are each one `SearchTree`. `expansion_count` is the shared count for both trees.
 
 ```bash
 cd examples/standalone
@@ -154,12 +162,12 @@ python3 viser_tree.py -c Configs/kinodynamic_example.yml --test-case case1
 
 # Save, then replay offline
 python3 viser_tree.py -c Configs/kinodynamic_example.yml --test-case case1 \
-  --save ../../Content/standalone/race-2_tree.pkl
+  --save ../../Content/standalone/race-2_tree.npz
 python3 viser_tree.py -c Configs/kinodynamic_example.yml \
-  --tree ../../Content/standalone/race-2_tree.pkl
+  --tree ../../Content/standalone/race-2_tree.npz
 ```
 
-Use `--no-bidirectional` for a unidirectional tree (green only). Trees are drawn over the elevation+cost terrain. Color is chosen from each node's `time_direction` (green forward, purple backward). The Expansion slider shows segments for edges whose `discover_index` is at most the current expansion.
+Use `--no-bidirectional` for a unidirectional tree (green only). Trees are drawn over the elevation+cost terrain. Color is chosen from each vertex's `time_direction` (green forward, purple backward). The Expansion slider shows segments for edges whose `discover_index` is at most the current expansion. Save and load use numpy arrays.
 
 ## Modifying Start and Goal Points
 

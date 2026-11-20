@@ -10,6 +10,16 @@ from ighastar.scripts.common_utils import create_planner, BASE_DIR
 from typing import Optional
 
 
+def _require_tree(tree, label):
+    n = int(tree.num_nodes)
+    if n <= 0:
+        raise RuntimeError(label + " search tree is empty")
+    rows = int(tree.poses.shape[0])
+    if rows != n:
+        raise RuntimeError(label + " search tree has %d vertices and %d poses" % (n, rows))
+    print("%s tree: %d vertices" % (label, n))
+
+
 def main(
     yaml_path: str = "",
     test_case: Optional[str] = None,
@@ -89,6 +99,12 @@ def main(
     success = planner.search(start, goal, bitmap, expansion_limit, hysteresis, False)
     end = time.perf_counter()
     print(f"Search completed, success: {success}")
+    exported = planner.get_search_tree()
+    if bidirectional:
+        _require_tree(exported["forward"], "forward")
+        _require_tree(exported["backward"], "backward")
+    else:
+        _require_tree(exported, "search")
 
     print("Getting profiler info...")
     (

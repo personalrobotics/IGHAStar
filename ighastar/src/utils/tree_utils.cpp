@@ -7,6 +7,8 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <unordered_map>
 #include <unordered_set>
 
 #include <pybind11/numpy.h>
@@ -15,112 +17,105 @@
 
 namespace tree_utils {
 
-namespace {
-
-py::list pose_to_list(const float *pose) {
-  py::list out;
-  for (int d = 0; d < n_dims; ++d) {
-    out.append(pose[d]);
-  }
-  return out;
-}
-
-py::object intermediate_poses_to_list(const float *intermediate_poses,
-                                      int timesteps) {
-  if (intermediate_poses == nullptr || timesteps <= 0) {
-    return py::none();
-  }
-  py::list frames;
-  for (int t = 0; t < timesteps; ++t) {
-    frames.append(pose_to_list(intermediate_poses + t * n_dims));
-  }
-  return frames;
-}
-
-py::dict node_to_dict(const std::shared_ptr<Node> &node, int timesteps) {
-  py::dict d;
-  d["hash"] = py::int_(node->hash);
-  if (node->parent) {
-    d["parent_hash"] = py::int_(node->parent->hash);
-  } else {
-    d["parent_hash"] = py::none();
-  }
-  d["pose"] = pose_to_list(node->pose);
-  d["g"] = node->g;
-  d["time"] = node->time;
-  d["f"] = node->f;
-  d["discover_index"] = node->discover_index;
-  d["expand_index"] = node->expand_index;
-  d["time_direction"] = node->time_direction;
-  d["intermediate_poses"] =
-      intermediate_poses_to_list(node->intermediate_poses, timesteps);
-  // Stored controls stay in generator order. Pose rows are reversed on a
-  // backward edge, so the control row is flipped to match intermediate_poses[t].
-  if (node->intermediate_controls == nullptr || timesteps <= 0 || n_cont <= 0) {
-    d["intermediate_controls"] = py::none();
-  } else {
-    const bool backward = node->time_direction < 0;
-    py::list controls;
-    for (int t = 0; t < timesteps; ++t) {
-      const int src = backward ? timesteps - 1 - t : t;
-      py::list sample;
-      for (int c = 0; c < n_cont; ++c) {
-        sample.append(node->intermediate_controls[src * n_cont + c]);
-      }
-      controls.append(sample);
+std::shared_ptr<SearchTree> export_search_tree(
+    const igha::unordered_set<std::shared_ptr<Node>> &Seen, const OpenQueue &Q_v,
+    const igha::unordered_set<std::shared_ptr<Node>> &inactive_Q_v,
+    const std::vector<std::shared_ptr<Node>> &pruned,
+    const std::vector<std::vector<std::shared_ptr<Node>>> &best_path_list,
+    const std::vector<std::shared_ptr<Node>> &best_path, float best_cost,
+    int timesteps, int expansion_counter, int expansion_limit, bool success) {
+  auto tree = std::make_shared<SearchTree>();
+  std::unordered_map<const Node *, int64_t> index;
+  std::vector<std::shared_ptr<Node>> nodes;
+  auto add = [&](const std::shared_ptr<Node> &node, int8_t node_status) {
+    if (!node) {
+      return;
     }
-    d["intermediate_controls"] = controls;
-  }
-  if (node->intermediate_times == nullptr || timesteps <= 0) {
-    d["intermediate_times"] = py::none();
-  } else {
-    py::list times;
-    for (int t = 0; t < timesteps; ++t) {
-      times.append(node->intermediate_times[t]);
-    }
-    d["intermediate_times"] = times;
-  }
-  return d;
-}
-
-} // namespace
-
-py::dict export_search_tree(
-    const igha::unordered_set<std::shared_ptr<Node>> &Seen,
-    std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>,
-                        NodePtrCompare>
-        Q_v,
-    const igha::unordered_set<std::shared_ptr<Node>> &inactive_Q_v, int timesteps,
-    int expansion_count) {
-  igha::unordered_map<size_t, std::shared_ptr<Node>> unique;
-  auto consider = [&](const std::shared_ptr<Node> &node) {
-    if (node && unique.find(node->hash) == unique.end()) {
-      unique.emplace(node->hash, node);
+    auto [it, inserted] = index.emplace(node.get(), nodes.size());
+    if (inserted) {
+      nodes.push_back(node);
+      tree->status.push_back(node_status);
+    } else if (node_status == SearchTree::Solution ||
+               (tree->status[it->second] != SearchTree::Solution &&
+                node_status < tree->status[it->second])) {
+      // A reused goal already has expand_index >= 0, and the parent walk
+      // marks ancestors Expanded. Solution stays Solution.
+      tree->status[it->second] = node_status;
     }
   };
-
   for (const auto &node : Seen) {
-    consider(node);
+    add(node, node->expand_index >= 0 ? SearchTree::Expanded
+                                      : SearchTree::Open);
   }
-  while (!Q_v.empty()) {
-    consider(Q_v.top());
-    Q_v.pop();
+  for (const auto &path : best_path_list) {
+    if (!path.empty()) {
+      add(path.front(), SearchTree::Solution);
+    }
+  }
+  for (const auto &node : heap_container(Q_v)) {
+    add(node, node->active ? SearchTree::Open : SearchTree::Inactive);
   }
   for (const auto &node : inactive_Q_v) {
-    consider(node);
+    add(node, SearchTree::Inactive);
+  }
+  for (const auto &node : pruned) {
+    add(node, SearchTree::Pruned);
+  }
+  for (size_t i = 0; i < nodes.size(); i++) {
+    add(nodes[i]->parent, SearchTree::Expanded);
   }
 
-  py::list nodes;
-  for (const auto &kv : unique) {
-    nodes.append(node_to_dict(kv.second, timesteps));
+  const int64_t N = static_cast<int64_t>(nodes.size());
+  const int T = timesteps;
+  tree->num_nodes = N;
+  tree->timesteps = T;
+  tree->poses.resize(N * n_dims);
+  tree->g.resize(N);
+  tree->f.resize(N);
+  tree->parents.resize(N);
+  tree->levels.resize(N);
+  tree->time_direction.resize(N);
+  tree->discover_index.resize(N);
+  tree->expand_index.resize(N);
+  tree->has_edge.assign(N, 0);
+  tree->edges.assign(static_cast<size_t>(N) * T * n_dims, 0.f);
+  tree->edge_controls.assign(static_cast<size_t>(N) * T * n_cont, 0.f);
+  for (int64_t i = 0; i < N; i++) {
+    const Node &node = *nodes[i];
+    std::copy(node.pose, node.pose + n_dims, tree->poses.begin() + i * n_dims);
+    tree->g[i] = node.g;
+    tree->f[i] = node.f;
+    tree->levels[i] = node.level;
+    tree->time_direction[i] = node.time_direction;
+    tree->discover_index[i] = node.discover_index;
+    tree->expand_index[i] = node.expand_index;
+    tree->parents[i] = node.parent ? index.at(node.parent.get()) : -1;
+    const size_t row = static_cast<size_t>(i) * T;
+    if (node.parent && node.intermediate_poses && T > 0) {
+      // The node stores a backward edge flipped. Parent-to-vertex order is the
+      // generator order, which is also the control order, so flip the poses back.
+      const bool backward = node.time_direction < 0;
+      for (int t = 0; t < T; t++) {
+        const int src = backward ? T - 1 - t : t;
+        std::copy(node.intermediate_poses + src * n_dims,
+                  node.intermediate_poses + (src + 1) * n_dims,
+                  tree->edges.begin() + (row + static_cast<size_t>(t)) * n_dims);
+      }
+      if (node.intermediate_controls) {
+        std::copy(node.intermediate_controls,
+                  node.intermediate_controls + T * n_cont,
+                  tree->edge_controls.begin() + row * n_cont);
+      }
+      tree->has_edge[i] = 1;
+    }
   }
-
-  py::dict out;
-  out["n_dims"] = n_dims;
-  out["timesteps"] = timesteps;
-  out["expansion_count"] = expansion_count;
-  out["nodes"] = nodes;
-  return out;
+  tree->best_cost = best_cost;
+  if (success && !best_path.empty()) {
+    tree->best_index = index.at(best_path.front().get());
+  }
+  tree->expansions = expansion_counter;
+  tree->budget_exhausted = expansion_counter >= expansion_limit;
+  return tree;
 }
 
 namespace {
@@ -915,6 +910,76 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
     }
   }
   return out;
+}
+
+void bind_search_tree(py::module_ &m) {
+  auto to_tensor = [](const auto &values, std::vector<int64_t> shape,
+                      torch::ScalarType dtype) {
+    using T = typename std::decay_t<decltype(values)>::value_type;
+    return torch::from_blob(const_cast<T *>(values.data()), shape,
+                            torch::TensorOptions().dtype(dtype))
+        .clone();
+  };
+  py::class_<SearchTree, std::shared_ptr<SearchTree>>(m, "SearchTree",
+                                                      py::module_local())
+      .def_readonly("num_nodes", &SearchTree::num_nodes)
+      .def_readonly("state_dim", &SearchTree::state_dim)
+      .def_readonly("control_dim", &SearchTree::control_dim)
+      .def_readonly("timesteps", &SearchTree::timesteps)
+      .def_readonly("best_cost", &SearchTree::best_cost)
+      .def_readonly("best_index", &SearchTree::best_index)
+      .def_readonly("expansions", &SearchTree::expansions)
+      .def_readonly("budget_exhausted", &SearchTree::budget_exhausted)
+      .def_property_readonly("poses", [to_tensor](const SearchTree &t) {
+        return to_tensor(t.poses, {t.num_nodes, t.state_dim}, torch::kFloat32);
+      })
+      .def_property_readonly("parents", [to_tensor](const SearchTree &t) {
+        return to_tensor(t.parents, {t.num_nodes}, torch::kInt64);
+      })
+      .def_property_readonly("g", [to_tensor](const SearchTree &t) {
+        return to_tensor(t.g, {t.num_nodes}, torch::kFloat32);
+      })
+      .def_property_readonly("f", [to_tensor](const SearchTree &t) {
+        return to_tensor(t.f, {t.num_nodes}, torch::kFloat32);
+      })
+      .def_property_readonly("levels", [to_tensor](const SearchTree &t) {
+        return to_tensor(t.levels, {t.num_nodes}, torch::kInt32);
+      })
+      .def_property_readonly("status", [to_tensor](const SearchTree &t) {
+        return to_tensor(t.status, {t.num_nodes}, torch::kInt8);
+      })
+      .def_property_readonly("time_direction", [to_tensor](const SearchTree &t) {
+        return to_tensor(t.time_direction, {t.num_nodes}, torch::kInt32);
+      })
+      .def_property_readonly("discover_index", [to_tensor](const SearchTree &t) {
+        return to_tensor(t.discover_index, {t.num_nodes}, torch::kInt32);
+      })
+      .def_property_readonly("expand_index", [to_tensor](const SearchTree &t) {
+        return to_tensor(t.expand_index, {t.num_nodes}, torch::kInt32);
+      })
+      .def_property_readonly("has_edge", [to_tensor](const SearchTree &t) {
+        return to_tensor(t.has_edge, {t.num_nodes}, torch::kUInt8).to(torch::kBool);
+      })
+      .def_property_readonly("edges", [to_tensor](const SearchTree &t) {
+        return to_tensor(t.edges, {t.num_nodes, t.timesteps, t.state_dim},
+                         torch::kFloat32);
+      })
+      .def_property_readonly("edge_controls", [to_tensor](const SearchTree &t) {
+        return to_tensor(t.edge_controls,
+                         {t.num_nodes, t.timesteps, t.control_dim},
+                         torch::kFloat32);
+      })
+      .def("path_to", &SearchTree::path_to, py::arg("index"),
+           "Node indices from the root to `index`.")
+      .def_property_readonly_static("STATUS", [](py::object) {
+        py::dict names;
+        names["expanded"] = int(SearchTree::Expanded);
+        names["solution"] = int(SearchTree::Solution);
+        names["open"] = int(SearchTree::Open);
+        names["inactive"] = int(SearchTree::Inactive);
+        names["pruned"] = int(SearchTree::Pruned);
+        return names;
+      });
 }
 
 } // namespace tree_utils
