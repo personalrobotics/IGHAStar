@@ -421,10 +421,10 @@ def test_cuda_matches_cpu(torch_result):
 
 
 # --------------------------------------------------------------------------
-# Search tree snapshots (`save_search_tree`)
+# Search tree export
 # --------------------------------------------------------------------------
 def _tree_search(max_expansions=None):
-    info = {"save_search_tree": True}
+    info = {}
     if max_expansions is not None:
         info["max_expansions"] = max_expansions
     return solve("generic", gp.callbacks(), **info)
@@ -433,7 +433,7 @@ def _tree_search(max_expansions=None):
 def test_search_tree_holds_the_best_path_and_a_consistent_tree():
     r = _tree_search()
     assert r["ok"]
-    tree = r["planner"].get_search_tree()
+    tree = r["planner"].export_search_tree()
     status = tree.STATUS
     n = tree.num_nodes
     parents, g, st = tree.parents, tree.g, tree.status
@@ -467,22 +467,23 @@ def test_search_tree_holds_the_best_path_and_a_consistent_tree():
 
 
 def test_search_tree_of_a_budget_limited_search_keeps_its_open_vertices():
-    tree = _tree_search(max_expansions=40)["planner"].get_search_tree()
+    tree = _tree_search(max_expansions=40)["planner"].export_search_tree()
     status = tree.STATUS
     assert tree.budget_exhausted and tree.expansions == 40
     open_ = (tree.status == status["open"]) | (tree.status == status["inactive"])
     assert int(open_.sum()) > 0
 
 
-def test_search_tree_needs_the_option_and_follows_each_search():
-    planner = solve("generic", gp.callbacks())["planner"]
-    with pytest.raises(Exception, match="save_search_tree"):
-        planner.get_search_tree()
+def test_search_tree_follows_each_search():
     r = _tree_search()
-    first = r["planner"].get_search_tree()
-    assert gp.run_search(r["planner"], r["configs"], goal=torch.tensor([3.0, 3.0]))
-    second = r["planner"].get_search_tree()
-    assert second.num_nodes != first.num_nodes or not torch.equal(second.g, first.g)
+    first = r["planner"].export_search_tree()
+    saved = int(first.expansions)
+    r["configs"]["experiment_info_default"]["max_expansions"] = 5
+    gp.run_search(r["planner"], r["configs"])
+    second = r["planner"].export_search_tree()
+    assert int(first.expansions) == saved
+    assert int(second.expansions) == 5
+    assert int(second.expansions) != saved
 
 
 if __name__ == "__main__":

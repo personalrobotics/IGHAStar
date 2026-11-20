@@ -78,62 +78,6 @@ private:
   int generation;
 };
 
-// Read-only access to a std::priority_queue's underlying container (its
-// protected member `c`), to read every queued vertex without popping.
-template <class PriorityQueue>
-const typename PriorityQueue::container_type &
-heap_container(const PriorityQueue &queue) {
-  // A derived class may name the protected member `c`, and a pointer to it
-  // can then be applied to any PriorityQueue.
-  struct Access : PriorityQueue {
-    static const typename PriorityQueue::container_type &
-    get(const PriorityQueue &q) {
-      return q.*&Access::c;
-    }
-  };
-  return Access::get(queue);
-}
-
-// A finished search's tree (`save_search_tree`), as flat per-node arrays for Python. Node i's
-// parent is `parents[i]` (-1 for the root); its state is `poses[i]`, and `edges[i]` is the edge
-// from its parent (`timesteps` states, `has_edge[i]` false for the root), with `edge_controls[i]`
-// the controls along it.
-struct SearchTree {
-  // How each node stands when the search ends.
-  enum Status : int8_t {
-    Expanded = 0, // Its successors were generated.
-    Solution = 1, // Popped as a solution (it reached the goal), so never expanded.
-    Open = 2,     // Active in Q_v, not yet popped.
-    Inactive = 3, // In inactive_Q_v (dominated at the current resolution level).
-    Pruned = 4,   // Dropped unexpanded because its f reached the best cost (Omega).
-  };
-  int64_t num_nodes = 0;
-  int state_dim = n_dims, control_dim = n_cont, timesteps = 0;
-  std::vector<float> poses, g, f;
-  std::vector<int64_t> parents;
-  std::vector<int32_t> levels;
-  std::vector<int8_t> status;
-  std::vector<uint8_t> has_edge;
-  std::vector<float> edges, edge_controls;
-  float best_cost = 1e5f;   // Omega when the search ended.
-  int64_t best_index = -1;  // The best solution's last node, or -1.
-  int expansions = 0;
-  bool budget_exhausted = false;
-
-  // Node indices from the root to `index`.
-  std::vector<int64_t> path_to(int64_t index) const {
-    if (index < 0 || index >= num_nodes) {
-      throw std::out_of_range("node index out of range");
-    }
-    std::vector<int64_t> path;
-    for (int64_t i = index; i >= 0; i = parents[i]) {
-      path.push_back(i);
-    }
-    std::reverse(path.begin(), path.end());
-    return path;
-  }
-};
-
 class IGHAStar {
 public:
   std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>,
@@ -226,13 +170,9 @@ public:
   // every reset and on destruction so the cycles are broken.
   std::vector<std::shared_ptr<Node>> preexpanded_nodes;
 
-  // `save_search_tree`: keep a snapshot of each search's tree (`get_search_tree`). While on,
-  // the search also records which vertices it expanded and the unexpanded ones it dropped as no
-  // longer promising (`combine_Q_v_and_prune`), so the snapshot holds the whole tree.
-  bool save_search_tree = false;
-  std::vector<std::shared_ptr<Node>> tree_expanded, tree_pruned, tree_solutions,
-      tree_goal_checked;
-  std::shared_ptr<SearchTree> last_tree;
+  // Vertices dropped by branch-and-bound. They leave both queues, so the export
+  // cannot see them unless they are kept here.
+  std::vector<std::shared_ptr<Node>> pruned;
 
   // Drop every preemptive cache (and the stash), breaking the parent <-> child
   // reference cycles of the caches no search consumed.
@@ -253,16 +193,6 @@ public:
     // create environment using config:
     env = new Environment(config, time_direction_);
     debug = debug_;
-
-    // Optional search tree snapshots (root level or under experiment_info_default).
-    for (const py::dict &section :
-         {config, config.contains("experiment_info_default")
-                      ? config["experiment_info_default"].cast<py::dict>()
-                      : py::dict()}) {
-      if (section.contains("save_search_tree")) {
-        save_search_tree = section["save_search_tree"].cast<bool>();
-      }
-    }
 
     // Optional preemptive expansion configuration.
     auto [pe_config, pe_found] =
@@ -353,12 +283,7 @@ public:
     preemptive_expansions = 0;
     preemptive_hits = 0;
     at_least_one_expansion = false;
-    // search tree snapshots reset:
-    tree_expanded.clear();
-    tree_pruned.clear();
-    tree_solutions.clear();
-    tree_goal_checked.clear();
-    last_tree.reset();
+    pruned.clear();
   }
 
   // activate method for HA*M
@@ -500,8 +425,8 @@ public:
       if (node->f < Omega) {
         new_inactive_Q_v.insert(node);
         new_inactive_Q_v_hash.insert(node->hash);
-      } else if (save_search_tree) {
-        tree_pruned.push_back(node);
+      } else {
+        pruned.push_back(node);
       }
     }
     for (std::shared_ptr<Node> node : inactive_Q_v) {
@@ -509,8 +434,8 @@ public:
         // put it into new_inactive_Q_v and new inactive_Q_v_hash
         new_inactive_Q_v.insert(node);
         new_inactive_Q_v_hash.insert(node->hash);
-      } else if (save_search_tree) {
-        tree_pruned.push_back(node);
+      } else {
+        pruned.push_back(node);
       }
     }
     // now delete the old inactive_Q_v and inactive_Q_v_hash
@@ -831,9 +756,6 @@ public:
           best_path = reconstruct_path(start_node, v);
           Omega = v->g;
           best_path_list.push_back(best_path);
-          if (save_search_tree) {
-            tree_solutions.push_back(v);
-          }
           goal_reached =
               false; // set flag to false to continue searching for better paths
           break;
@@ -859,9 +781,6 @@ public:
         expansion_counter++;
         v->expand_index = expansion_counter;
         at_least_one_expansion = true;
-        if (save_search_tree) {
-          tree_expanded.push_back(v);
-        }
 
         start_time = std::chrono::high_resolution_clock::now();
         // get successors:
@@ -981,7 +900,7 @@ public:
       }
     }
     if (!any_below)
-      return finish_search();
+      return SUCCESS;
 
     // preexpanded_nodes holds the parents. The children sit in cached_succ and
     // have not been through process_successors. push() keeps the heap ordered.
@@ -1027,13 +946,8 @@ public:
         best_path = reconstruct_path(start_node_saved, v);
         Omega = v->g;
         best_path_list.push_back(best_path);
-        if (save_search_tree) {
-          tree_solutions.push_back(v);
-        }
         goal_reached =
             false; // set flag to false to continue searching for better paths
-      } else if (save_search_tree) {
-        tree_goal_checked.push_back(v);
       }
     }
     // The pop loop records Omega on the next expansion. This pass has none,
@@ -1041,113 +955,9 @@ public:
     if (SUCCESS && (cost_exp_list.empty() || cost_exp_list.back() > Omega))
       cost_exp_list.push_back(Omega);
 
-    return finish_search();
-  }
-
-  // search_adapter's result, after saving the tree if `save_search_tree`.
-  bool finish_search() {
-    if (save_search_tree) {
-      last_tree = snapshot_search_tree();
-    }
     return SUCCESS;
   }
 
-  // The search tree as it stands (see `SearchTree`): every vertex in Seen, Q_v,
-  // inactive_Q_v or dropped by `combine_Q_v_and_prune`, plus any ancestor of
-  // one. Only meaningful with `save_search_tree` (which records expansions and
-  // drops).
-  std::shared_ptr<SearchTree> snapshot_search_tree() const {
-    auto tree = std::make_shared<SearchTree>();
-    std::unordered_map<const Node *, int64_t> index;
-    std::vector<std::shared_ptr<Node>> nodes;
-    std::vector<int8_t> &status = tree->status;
-    // A vertex found in several places keeps its most advanced status (the
-    // lowest code).
-    auto add = [&](const std::shared_ptr<Node> &node, int8_t node_status) {
-      if (!node) {
-        return;
-      }
-      auto [it, inserted] = index.emplace(node.get(), nodes.size());
-      if (inserted) {
-        nodes.push_back(node);
-        status.push_back(node_status);
-      } else if (node_status < status[it->second]) {
-        status[it->second] = node_status;
-      }
-    };
-    for (const auto &node : tree_expanded) {
-      add(node, SearchTree::Expanded);
-    }
-    for (const auto &node : tree_solutions) {
-      add(node, SearchTree::Solution);
-    }
-    // Popped by search_adapter's final goal check without being expanded.
-    for (const auto &node : tree_goal_checked) {
-      add(node, SearchTree::Open);
-    }
-    for (const auto &node : heap_container(Q_v)) {
-      add(node, node->active ? SearchTree::Open : SearchTree::Inactive);
-    }
-    for (const auto &node : inactive_Q_v) {
-      add(node, SearchTree::Inactive);
-    }
-    for (const auto &node : tree_pruned) {
-      add(node, SearchTree::Pruned);
-    }
-    // Ancestors (all expanded: they produced a child) not found above.
-    for (size_t i = 0; i < nodes.size(); i++) {
-      add(nodes[i]->parent, SearchTree::Expanded);
-    }
-
-    const int64_t N = static_cast<int64_t>(nodes.size());
-    const int T = env->timesteps;
-    tree->num_nodes = N;
-    tree->timesteps = T;
-    tree->poses.resize(N * n_dims);
-    tree->g.resize(N);
-    tree->f.resize(N);
-    tree->parents.resize(N);
-    tree->levels.resize(N);
-    tree->has_edge.assign(N, 0);
-    tree->edges.assign(static_cast<size_t>(N) * T * n_dims, 0.0f);
-    tree->edge_controls.assign(static_cast<size_t>(N) * T * n_cont, 0.0f);
-    for (int64_t i = 0; i < N; i++) {
-      const Node &node = *nodes[i];
-      std::copy(node.pose, node.pose + n_dims, tree->poses.begin() + i * n_dims);
-      tree->g[i] = node.g;
-      tree->f[i] = node.f;
-      tree->levels[i] = node.level;
-      tree->parents[i] = node.parent ? index.at(node.parent.get()) : -1;
-      const size_t row = static_cast<size_t>(i) * T;
-      if (node.parent && node.intermediate_poses && T > 0) {
-        std::copy(node.intermediate_poses, node.intermediate_poses + T * n_dims,
-                  tree->edges.begin() + row * n_dims);
-        if (node.intermediate_controls) {
-          std::copy(node.intermediate_controls,
-                    node.intermediate_controls + T * n_cont,
-                    tree->edge_controls.begin() + row * n_cont);
-        }
-        tree->has_edge[i] = 1;
-      }
-    }
-    tree->best_cost = Omega;
-    if (SUCCESS && !best_path.empty()) {
-      tree->best_index = index.at(best_path.front().get()); // Goal-first path.
-    }
-    tree->expansions = expansion_counter;
-    tree->budget_exhausted = expansion_counter >= expansion_limit;
-    return tree;
-  }
-
-  // The last search's tree (needs `save_search_tree`).
-  std::shared_ptr<SearchTree> get_search_tree() const {
-    if (!last_tree) {
-      throw std::runtime_error(
-          save_search_tree ? "no search tree: no search has finished yet"
-                           : "search trees aren't saved: set save_search_tree");
-    }
-    return last_tree;
-  }
 
   // Batch of states, one world tensor. Same check_validity_batched the env
   // already implements. Used by problem sampling.
@@ -1214,10 +1024,11 @@ public:
   std::vector<int> get_level_history() { return level_list; }
   int get_first_goal_level() const { return first_goal_level; }
 
-  // Export Seen ∪ Q_v ∪ inactive_Q_v as a Python dict for viz / ML.
-  py::dict export_search_tree() {
-    return tree_utils::export_search_tree(Seen, Q_v, inactive_Q_v,
-                                          env->timesteps, expansion_counter);
+  // Flat snapshot of the containers still alive after search().
+  std::shared_ptr<tree_utils::SearchTree> export_search_tree() {
+    return tree_utils::export_search_tree(
+        Seen, Q_v, inactive_Q_v, pruned, best_path_list, best_path, Omega,
+        env->timesteps, expansion_counter, expansion_limit, SUCCESS);
   }
 };
 
@@ -2242,7 +2053,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("get_level_history", &IGHAStar::get_level_history)
       .def("get_first_goal_level", &IGHAStar::get_first_goal_level)
       .def("export_search_tree", &IGHAStar::export_search_tree)
-      .def("get_search_tree", &IGHAStar::get_search_tree)
       .def("record_solution_trajectory",
            [](IGHAStar &self) {
              const float *goal_pose = self.goal_node_saved
@@ -2273,62 +2083,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "Step the multi-tee Chipmunk world. target is one xy per agent.");
 #endif
 
-  // Per-node arrays (copies) of a saved search tree; see `SearchTree`.
-  auto to_tensor = [](const auto &values, std::vector<int64_t> shape,
-                      torch::ScalarType dtype) {
-    using T = typename std::decay_t<decltype(values)>::value_type;
-    return torch::from_blob(const_cast<T *>(values.data()), shape,
-                            torch::TensorOptions().dtype(dtype))
-        .clone();
-  };
-  py::class_<SearchTree, std::shared_ptr<SearchTree>>(m, "SearchTree", py::module_local())
-      .def_readonly("num_nodes", &SearchTree::num_nodes)
-      .def_readonly("state_dim", &SearchTree::state_dim)
-      .def_readonly("control_dim", &SearchTree::control_dim)
-      .def_readonly("timesteps", &SearchTree::timesteps)
-      .def_readonly("best_cost", &SearchTree::best_cost)
-      .def_readonly("best_index", &SearchTree::best_index)
-      .def_readonly("expansions", &SearchTree::expansions)
-      .def_readonly("budget_exhausted", &SearchTree::budget_exhausted)
-      .def_property_readonly("poses", [to_tensor](const SearchTree &t) {
-        return to_tensor(t.poses, {t.num_nodes, t.state_dim}, torch::kFloat32);
-      })
-      .def_property_readonly("parents", [to_tensor](const SearchTree &t) {
-        return to_tensor(t.parents, {t.num_nodes}, torch::kInt64);
-      })
-      .def_property_readonly("g", [to_tensor](const SearchTree &t) {
-        return to_tensor(t.g, {t.num_nodes}, torch::kFloat32);
-      })
-      .def_property_readonly("f", [to_tensor](const SearchTree &t) {
-        return to_tensor(t.f, {t.num_nodes}, torch::kFloat32);
-      })
-      .def_property_readonly("levels", [to_tensor](const SearchTree &t) {
-        return to_tensor(t.levels, {t.num_nodes}, torch::kInt32);
-      })
-      .def_property_readonly("status", [to_tensor](const SearchTree &t) {
-        return to_tensor(t.status, {t.num_nodes}, torch::kInt8);
-      })
-      .def_property_readonly("has_edge", [to_tensor](const SearchTree &t) {
-        return to_tensor(t.has_edge, {t.num_nodes}, torch::kUInt8).to(torch::kBool);
-      })
-      .def_property_readonly("edges", [to_tensor](const SearchTree &t) {
-        return to_tensor(t.edges, {t.num_nodes, t.timesteps, t.state_dim}, torch::kFloat32);
-      })
-      .def_property_readonly("edge_controls", [to_tensor](const SearchTree &t) {
-        return to_tensor(t.edge_controls, {t.num_nodes, t.timesteps, t.control_dim},
-                         torch::kFloat32);
-      })
-      .def("path_to", &SearchTree::path_to, py::arg("index"),
-           "Node indices from the root to `index`.")
-      .def_property_readonly_static("STATUS", [](py::object) {
-        py::dict names;
-        names["expanded"] = int(SearchTree::Expanded);
-        names["solution"] = int(SearchTree::Solution);
-        names["open"] = int(SearchTree::Open);
-        names["inactive"] = int(SearchTree::Inactive);
-        names["pruned"] = int(SearchTree::Pruned);
-        return names;
-      });
+  tree_utils::bind_search_tree(m);
 
   py::class_<BiIGHAStar>(m, "BiIGHAStar", py::module_local())
       .def(py::init<const py::dict &, bool>(), py::arg("config"),

@@ -21,7 +21,9 @@ run() {
 }
 
 run kinematic python3 -u example.py --no-visuals -c Configs/kinematic_example.yml
+run kinematic-bi python3 -u example.py --no-visuals --bidirectional -c Configs/kinematic_example.yml
 run kinodynamic python3 -u example.py --no-visuals -c Configs/kinodynamic_example.yml
+run kinodynamic-bi python3 -u example.py --no-visuals --bidirectional -c Configs/kinodynamic_example.yml
 run simple python3 -u example.py --no-visuals -c Configs/simple_example.yml
 run pusht python3 -u pusht_example.py --no-video
 run pusht-qs python3 -u pusht_qs_selfcheck.py

@@ -3,9 +3,11 @@
 // Requires Node, NodePtrCompare, and n_dims to already be defined (include the
 // active environment header before this file).
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <queue>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -20,17 +22,70 @@ namespace py = pybind11;
 
 namespace tree_utils {
 
-// Collect nodes from Seen, active Q_v, and inactive_Q_v into a Python dict.
-// Q_v is taken by value so the caller's queue is not modified.
-// Uses igha::unordered_set so this matches the planner containers whether the
-// backend is std or robin_hood (-DIGHA_USE_ROBIN_HOOD).
-py::dict export_search_tree(
-    const igha::unordered_set<std::shared_ptr<Node>> &Seen,
+using OpenQueue =
     std::priority_queue<std::shared_ptr<Node>, std::vector<std::shared_ptr<Node>>,
-                        NodePtrCompare>
-        Q_v,
-    const igha::unordered_set<std::shared_ptr<Node>> &inactive_Q_v, int timesteps,
-    int expansion_count);
+                        NodePtrCompare>;
+
+// Read the priority_queue container without popping it.
+template <class PriorityQueue>
+const typename PriorityQueue::container_type &
+heap_container(const PriorityQueue &queue) {
+  struct Access : PriorityQueue {
+    static const typename PriorityQueue::container_type &
+    get(const PriorityQueue &q) {
+      return q.*&Access::c;
+    }
+  };
+  return Access::get(queue);
+}
+
+// Flat per-node arrays. Vertex i has state poses[i]. parents[i] is the parent
+// index, or -1 for the root. edges[i] is the edge from the parent.
+struct SearchTree {
+  enum Status : int8_t {
+    Expanded = 0,
+    Solution = 1,
+    Open = 2,
+    Inactive = 3,
+    Pruned = 4,
+  };
+  int64_t num_nodes = 0;
+  int state_dim = n_dims, control_dim = n_cont, timesteps = 0;
+  std::vector<float> poses, g, f;
+  std::vector<int64_t> parents;
+  std::vector<int32_t> levels, time_direction, discover_index, expand_index;
+  std::vector<int8_t> status;
+  std::vector<uint8_t> has_edge;
+  std::vector<float> edges, edge_controls;
+  float best_cost = 1e5f;
+  int64_t best_index = -1;
+  int expansions = 0;
+  bool budget_exhausted = false;
+
+  std::vector<int64_t> path_to(int64_t index) const {
+    if (index < 0 || index >= num_nodes) {
+      throw std::out_of_range("node index out of range");
+    }
+    std::vector<int64_t> path;
+    for (int64_t i = index; i >= 0; i = parents[i]) {
+      path.push_back(i);
+    }
+    std::reverse(path.begin(), path.end());
+    return path;
+  }
+};
+
+// Seen, Q_v, inactive_Q_v, and pruned. Q_v is not modified.
+std::shared_ptr<SearchTree> export_search_tree(
+    const igha::unordered_set<std::shared_ptr<Node>> &Seen,
+    const OpenQueue &Q_v,
+    const igha::unordered_set<std::shared_ptr<Node>> &inactive_Q_v,
+    const std::vector<std::shared_ptr<Node>> &pruned,
+    const std::vector<std::vector<std::shared_ptr<Node>>> &best_path_list,
+    const std::vector<std::shared_ptr<Node>> &best_path, float best_cost,
+    int timesteps, int expansion_counter, int expansion_limit, bool success);
+
+void bind_search_tree(py::module_ &m);
 
 // Solution path plus off-path children of those vertices. Parent pointers are
 // the links. The next path vertex is not copied into children.
