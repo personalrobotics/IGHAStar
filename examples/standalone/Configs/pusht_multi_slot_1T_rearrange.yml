@@ -1,6 +1,7 @@
 # slot_1T_rearrange: peg-in-slot Push-T with one tee. State [10]:
 # ax ay t0x t0y t0a avx avy t0vx t0vy t0w. Tee epsilon is 8 px, 0.15 rad.
 experiment_info_default:
+  save_search_tree: true
   resolution: [40.0, 40.0, 40.0, 40.0, 0.5, 50.0, 50.0, 50.0, 50.0, 0.5]
   tolerance: [1.0, 1.0, 1.0, 1.0, 0.01, 25.0, 25.0, 25.0, 25.0, 0.25]
   epsilon: [1.0e9, 1.0e9, 8.0, 8.0, 0.15, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9]

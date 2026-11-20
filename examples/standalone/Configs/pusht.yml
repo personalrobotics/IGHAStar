@@ -2,6 +2,7 @@
 # State [10]: ax, ay, bx, by, angle, avx, avy, bvx, bvy, bw
 # Control [2]: agent PD target xy
 experiment_info_default:
+  save_search_tree: true
   # Pose resolution/tolerance (5 hash dims); trailing entries pad velocities.
   resolution: [40.0, 40.0, 40.0, 40.0, 0.5, 50.0, 50.0, 50.0, 50.0, 0.5]
   tolerance: [1.0, 1.0, 1.0, 1.0, 0.01, 25.0, 25.0, 25.0, 25.0, 0.25]

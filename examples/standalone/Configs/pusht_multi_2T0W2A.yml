@@ -5,6 +5,7 @@
 # single pusher: Coulomb cone on contact, uniform off contact. The other
 # agent is commanded to hold.
 experiment_info_default:
+  save_search_tree: true
   resolution: [40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 0.5, 40.0, 40.0, 0.5, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 0.5, 50.0, 50.0, 0.5]
   tolerance: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.01, 1.0, 1.0, 0.01, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 0.25, 25.0, 25.0, 0.25]
   epsilon: [1.0e9, 1.0e9, 1.0e9, 1.0e9, 20.0, 20.0, 0.349, 20.0, 20.0, 0.349, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9]

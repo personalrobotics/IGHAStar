@@ -16,6 +16,7 @@ import torch
 import yaml
 
 from ighastar.scripts.common_utils import create_planner
+from pusht_condition_sweep import tree_payload
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -107,9 +108,9 @@ def run_condition(name: str, use_heuristic: bool, problems, indices) -> None:
             planner, problems["starts"][i], problems["goals"][i],
             MAX_EXP, int(info["hysteresis"]),
         )
-        tree = planner.export_search_tree_arrays()
-        n_nodes = int(tree["n_nodes"])
-        payload = {key: np.asarray(tree[key]) for key in tree}
+        tree = tree_payload(planner.get_search_tree())
+        n_nodes = int(tree["num_nodes"])
+        payload = dict(tree)
         payload["best_cost"] = np.asarray(curve, dtype=np.float64)
         payload["problem_idx"] = np.int32(i)
         payload["success"] = np.uint8(ok)

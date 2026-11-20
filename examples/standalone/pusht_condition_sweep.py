@@ -23,6 +23,43 @@ from ighastar.scripts.common_utils import create_planner
 
 COST_INF = 1e4
 
+_TREE_ARRAYS = (
+    "poses",
+    "parents",
+    "g",
+    "f",
+    "time",
+    "hash",
+    "levels",
+    "status",
+    "time_direction",
+    "discover_index",
+    "expand_index",
+    "has_edge",
+    "has_times",
+    "edges",
+    "edge_controls",
+    "intermediate_times",
+)
+_TREE_SCALARS = (
+    "num_nodes",
+    "state_dim",
+    "control_dim",
+    "timesteps",
+    "expansions",
+    "best_index",
+    "best_cost",
+    "budget_exhausted",
+)
+
+
+def tree_payload(tree):
+    """Arrays from one SearchTree. The C++ object is not saved."""
+    out = {name: np.asarray(getattr(tree, name)) for name in _TREE_ARRAYS}
+    for name in _TREE_SCALARS:
+        out[name] = np.asarray(getattr(tree, name))
+    return out
+
 
 def difficulty_order(n: int, rank_csv: Path) -> np.ndarray:
     """Easiest first, using the ndir=16 chipmunk cell that matches pusht.yml."""
@@ -177,17 +214,17 @@ def main() -> None:
                 planner, data["starts"][i], data["goals"][i], world,
                 args.max_expansions, hyst,
             )
-            payload = {
-                "best_cost": np.asarray(curve, dtype=np.float64),
-                "problem_idx": np.int32(i),
-                "success": np.uint8(ok),
-            }
+            payload = {}
             n_nodes = -1
             if args.save_trees:
-                tree = planner.export_search_tree_arrays()
-                n_nodes = int(tree["n_nodes"])
-                payload.update({key: np.asarray(tree[key]) for key in tree})
+                tree = tree_payload(planner.get_search_tree())
+                n_nodes = int(tree["num_nodes"])
+                payload.update(tree)
                 del tree
+            # The curve keeps the name best_cost. SearchTree.best_cost is Omega.
+            payload["best_cost"] = np.asarray(curve, dtype=np.float64)
+            payload["problem_idx"] = np.int32(i)
+            payload["success"] = np.uint8(ok)
             save_result(path, payload)
             del payload
             hit = np.where(curve < COST_INF)[0]

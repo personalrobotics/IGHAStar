@@ -1,6 +1,7 @@
 # PushT Mason/Lynch QS on CUDA — A/B vs pusht.yml + dynamics: quasistatic
 # State [10] / control [2] match pusht.h. node_type selects the CUDA env.
 experiment_info_default:
+  save_search_tree: true
   resolution: [40.0, 40.0, 40.0, 40.0, 0.5, 50.0, 50.0, 50.0, 50.0, 0.5]
   tolerance: [1.0, 1.0, 1.0, 1.0, 0.01, 25.0, 25.0, 25.0, 25.0, 0.25]
   epsilon: [1.0, 1.0, 20.0, 20.0, 0.349, 1e9, 1e9, 1e9, 1e9, 1e9]
