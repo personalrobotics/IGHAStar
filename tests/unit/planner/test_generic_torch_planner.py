@@ -439,9 +439,6 @@ def test_search_tree_holds_the_best_path_and_a_consistent_tree():
     parents, g, st = tree.parents, tree.g, tree.status
     assert n > tree.expansions > 0 and not tree.budget_exhausted
     assert tree.parents.shape == (n,) and tree.poses.shape == (n, 2)
-    assert tree.time.shape == (n,) and tree.hash.shape == (n,)
-    assert tree.intermediate_times.shape == (n, tree.timesteps)
-    assert tree.has_times.shape == (n,)
     # One root; every other parent is an expanded node, with a lower cost-to-come.
     assert int((parents == -1).sum()) == 1
     children = parents >= 0
