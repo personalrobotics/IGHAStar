@@ -188,12 +188,21 @@ public:
     }
     edge_cost = static_cast<float>(n_substeps) *
                 static_cast<float>(pusht_multi_physics::kDt);
+    if (!node_info.contains("num_tees") ||
+        node_info["num_tees"].cast<int>() != kNumTees) {
+      throw std::runtime_error(
+          "pusht_multi num_tees does not match this build");
+    }
     set_resolutions(info);
     set_controls(node_info);
     goal_sampling = sampling::load_goal_sampling(
         config, n_dims, local_controllability_radius);
-    near_meet_.load(config, n_dims, local_controllability_radius,
-                    goal_sampling.angular_dims);
+    std::vector<int> tee_angles;
+    tee_angles.reserve(kNumTees);
+    for (int i = 0; i < kNumTees; i++) {
+      tee_angles.push_back(pusht_multi_physics::tee_pose(i) + 2);
+    }
+    near_meet_.load(config, n_dims, local_controllability_radius, tee_angles);
     if (!traj_filter_self_check()) {
       throw std::runtime_error("trajectory filter self-check failed");
     }
@@ -214,10 +223,15 @@ public:
     auto res = as_fvec(info["resolution"]);
     auto tol = as_fvec(info["tolerance"]);
     std::vector<float> eps = as_fvec(info["epsilon"]);
+    if ((int)res.size() != n_dims || (int)tol.size() != n_dims ||
+        (int)eps.size() != n_dims) {
+      throw std::runtime_error(
+          "pusht_multi resolution, tolerance, and epsilon must each have length n_dims");
+    }
     for (int i = 0; i < n_dims; i++) {
-      resolution[i] = (i < (int)res.size()) ? res[i] : res.back();
-      tolerance[i] = (i < (int)tol.size()) ? tol[i] : tol.back();
-      epsilon[i] = (i < (int)eps.size()) ? eps[i] : eps.back();
+      resolution[i] = res[i];
+      tolerance[i] = tol[i];
+      epsilon[i] = eps[i];
     }
     if (info.contains("LCR")) {
       auto lcr = as_fvec(info["LCR"]);
@@ -570,10 +584,18 @@ public:
   }
 
   bool reached_goal_region(std::shared_ptr<Node> v, std::shared_ptr<Node> goal) {
-    if (!rearrange)
-      return v->cleared[0] && v->cleared[1];
-    return tee_at_goal(v->pose, goal->pose, 0) &&
-           tee_at_goal(v->pose, goal->pose, 1);
+    if (!rearrange) {
+      for (int i = 0; i < kNumTees; i++) {
+        if (!v->cleared[i])
+          return false;
+      }
+      return true;
+    }
+    for (int i = 0; i < kNumTees; i++) {
+      if (!tee_at_goal(v->pose, goal->pose, i))
+        return false;
+    }
+    return true;
   }
 
   bool finite_pose(const float *pose) const {
