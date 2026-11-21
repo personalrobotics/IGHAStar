@@ -513,8 +513,11 @@ public:
         n_cont, timesteps, mpc_solve_tolerance);
   }
 
-  // The edge the search attaches: the winning held target, rolled out from the
-  // source vertex. An empty control list is the parentless exact-state meet.
+  // The edge the search attaches. An empty control list adds no motion: the
+  // geometric meet already treated the source as the overlap, so its control
+  // is the timesteps*n_cont sequence on the edge from the source's parent.
+  // mpc uses that empty list only for a parentless source already inside
+  // tolerance. A nonempty list is a new held action and is rolled out below.
   MeetEdge realize_meet(const std::shared_ptr<Node> &source,
                         const std::shared_ptr<Node> &target,
                         const std::vector<float> &controls) const {

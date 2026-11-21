@@ -174,6 +174,17 @@ struct NearMeet2PBVP {
     }
   }
 
+  // Same connection the original near-meet kept. u and v share an LCR cell,
+  // so u is already the state that overlaps v. The control of that overlap is
+  // the timesteps*n_cont sequence stored on the edge from u->parent to u.
+  // This function does not build another one: an empty trajectory leaves that
+  // edge in place. With both counts at 0 that overlap is "trust me bro": the
+  // segment between u and v is not checked. Interpolation and perturbation
+  // exist to make the geometric solve a bit more robust than that. They sample
+  // the segment, and the perturbations around those samples, and reject the
+  // meet when those states are invalid. mpc_solve is the other choice. It
+  // searches for a new sequence of the same length whose arrival overlaps v
+  // inside the tolerance.
   template <typename NodeT, typename ValidityChecker>
   void geometric_solve(const std::vector<std::pair<std::shared_ptr<NodeT>,
                                          std::shared_ptr<NodeT>>> &pairs,
@@ -183,6 +194,8 @@ struct NearMeet2PBVP {
     const size_t n = pairs.size();
     valid.assign(n, true);
     trajectories.assign(n, {});
+    // using interpolation and perturbation to find the meet is more robust, otherwise you're
+    // saying "trust me bro" and not checking the overlap.
     if (num_interpolation_points == 0 && num_perturbations == 0) {
       return;
     }
@@ -278,10 +291,11 @@ struct NearMeet2PBVP {
               std::forward<Rollout>(rollout), tolerance);
   }
 
-  // CEM over every meet that has a parent control. One rollout call per
-  // iteration covers n_shoot x mpc_num_rollouts samples. The held action is
-  // repeated across timesteps while the controls are packed. topk refits the
-  // next distribution. The stored control is the lowest-cost sample of every
+  // Replaces the edge into u, which is what geometric_solve keeps. CEM over
+  // every meet that has a parent control. One rollout call per iteration
+  // covers n_shoot x mpc_num_rollouts samples. The held action is repeated
+  // across timesteps while the controls are packed. topk refits the next
+  // distribution. The stored control is the lowest-cost sample of every
   // last-iteration rollout that is also inside tolerance. A parentless u is a
   // meet only when its pose is already inside tolerance.
   // shortcut: diagonal covariance, fixed seed, std may collapse to 0.
