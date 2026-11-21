@@ -16,10 +16,13 @@ constexpr cpFloat kV = 20.0;
 constexpr cpFloat kAgentRadius = 15.0;
 constexpr cpFloat kTeeScale = 30.0;
 constexpr cpFloat kTeeLength = 4.0;
-// gym-pusht / Chipmunk: every shape uses this; contact μ = fa * fb.
-constexpr cpFloat kShapeFriction = 1.0;
-inline float contact_friction_mu() {
-  return static_cast<float>(kShapeFriction * kShapeFriction);
+// Per-shape Chipmunk friction. Contact μ = fa * fb, and every shape uses this.
+// Default 1 keeps historical IGHA* PushT plans.
+// gym-pusht writes body.friction = 1, which pymunk ignores. Shapes stay at the
+// Chipmunk default of 0, so gym-pusht contacts are frictionless (μ = 0).
+// The pusht Environment stores node_info.shape_friction and passes it in.
+inline float contact_friction_mu(cpFloat shape_friction) {
+  return static_cast<float>(shape_friction * shape_friction);
 }
 constexpr int kStateDim = 10; // ax ay bx by ang avx avy bvx bvy bw
 constexpr int kDefaultSubsteps = 10;
@@ -48,27 +51,28 @@ inline void install_pen_handler(World &w) {
   h->userData = &w.max_penetration;
 }
 
-inline void add_segment(cpSpace *space, cpVect a, cpVect b, cpFloat radius) {
+inline void add_segment(cpSpace *space, cpVect a, cpVect b, cpFloat radius,
+                        cpFloat friction) {
   cpShape *shape = cpSegmentShapeNew(cpSpaceGetStaticBody(space), a, b, radius);
-  cpShapeSetFriction(shape, kShapeFriction);
+  cpShapeSetFriction(shape, friction);
   cpSpaceAddShape(space, shape);
 }
 
-inline World make_world() {
+inline World make_world(cpFloat friction) {
   World w;
   w.space = cpSpaceNew();
   cpSpaceSetGravity(w.space, cpvzero);
   cpSpaceSetDamping(w.space, 0.0);
 
-  add_segment(w.space, cpv(5, 506), cpv(5, 5), 2);
-  add_segment(w.space, cpv(5, 5), cpv(506, 5), 2);
-  add_segment(w.space, cpv(506, 5), cpv(506, 506), 2);
-  add_segment(w.space, cpv(5, 506), cpv(506, 506), 2);
+  add_segment(w.space, cpv(5, 506), cpv(5, 5), 2, friction);
+  add_segment(w.space, cpv(5, 5), cpv(506, 5), 2, friction);
+  add_segment(w.space, cpv(506, 5), cpv(506, 506), 2, friction);
+  add_segment(w.space, cpv(5, 506), cpv(506, 506), 2, friction);
 
   w.agent = cpBodyNewKinematic();
   cpSpaceAddBody(w.space, w.agent);
   cpShape *agent_shape = cpCircleShapeNew(w.agent, kAgentRadius, cpvzero);
-  cpShapeSetFriction(agent_shape, kShapeFriction);
+  cpShapeSetFriction(agent_shape, friction);
   cpSpaceAddShape(w.space, agent_shape);
 
   const cpFloat s = kTeeScale;
@@ -86,8 +90,8 @@ inline World make_world() {
 
   cpShape *sh1 = cpPolyShapeNew(w.block, 4, v1, cpTransformIdentity, 0.0);
   cpShape *sh2 = cpPolyShapeNew(w.block, 4, v2, cpTransformIdentity, 0.0);
-  cpShapeSetFriction(sh1, kShapeFriction);
-  cpShapeSetFriction(sh2, kShapeFriction);
+  cpShapeSetFriction(sh1, friction);
+  cpShapeSetFriction(sh2, friction);
   cpSpaceAddShape(w.space, sh1);
   cpSpaceAddShape(w.space, sh2);
 
@@ -118,9 +122,9 @@ inline void destroy_world(World &w) {
   w = {};
 }
 
-inline void remake_world(World &w) {
+inline void remake_world(World &w, cpFloat friction) {
   destroy_world(w);
-  w = make_world();
+  w = make_world(friction);
 }
 
 inline void zero_accums(cpBody *body) {
@@ -130,8 +134,8 @@ inline void zero_accums(cpBody *body) {
 
 // Snapshot restore: angle THEN position (planner / get_obs values).
 // Remake the space each time so edges don't inherit stale contact caches.
-inline void load_snapshot(World &w, const float *s) {
-  remake_world(w);
+inline void load_snapshot(World &w, const float *s, cpFloat friction) {
+  remake_world(w, friction);
   zero_accums(w.agent);
   zero_accums(w.block);
   cpBodySetVelocity(w.agent, cpv(s[5], s[6]));
@@ -194,9 +198,10 @@ inline void step_from_snapshot(const float *state_in, float ax, float ay,
                                float *state_out, int n_substeps = kDefaultSubsteps,
                                float *intermediates = nullptr,
                                cpFloat max_agent_vel = 0.0,
-                               float *out_pen_increase = nullptr) {
+                               float *out_pen_increase = nullptr,
+                               cpFloat shape_friction = 1.0) {
   thread_local World w{};
-  load_snapshot(w, state_in);
+  load_snapshot(w, state_in, shape_friction);
   // Re-bind handler userData after remake (World address is stable: thread_local).
   install_pen_handler(w);
   clamp_agent_velocity(w, max_agent_vel);
@@ -207,7 +212,7 @@ inline void step_from_snapshot(const float *state_in, float ax, float ay,
   cpSpaceStep(w.space, kDt);
   const cpFloat pen0 = w.max_penetration;
 
-  load_snapshot(w, state_in);
+  load_snapshot(w, state_in, shape_friction);
   install_pen_handler(w);
   clamp_agent_velocity(w, max_agent_vel);
   w.max_penetration = 0.0;
