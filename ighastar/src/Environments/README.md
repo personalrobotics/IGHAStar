@@ -207,7 +207,7 @@ Node(const float *pose_in, const float *intermediate_poses_,
 
 The destructor frees `intermediate_poses` and `intermediate_controls`.
 
-`NodePtrCompare` orders the open set as a min-heap on `f` (`a->f > b->f`). It is in `node.h`.
+`Node::g` is a cost plus the pose hash. `a->g < b->g` orders by cost, then hash. Comparisons with a bare float (`get_G`, `Omega`) use the cost only. `NodePtrCompare` orders the open set as a min-heap on `f`, then pose hash (`Node::f_before`).
 
 ## Example
 

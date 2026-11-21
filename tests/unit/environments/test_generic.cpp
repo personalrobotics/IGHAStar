@@ -89,7 +89,7 @@ public:
       for (int d = 0; d < n_dims; d++) {
         poses[i][d] = flat[i]->pose[d];
       }
-      g[i] = flat[i]->g;
+      g[i] = static_cast<float>(flat[i]->g);
       f[i] = flat[i]->f;
     }
     return {poses, g, f};
