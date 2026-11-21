@@ -39,12 +39,36 @@ struct NodeCleared {
 template <>
 struct NodeCleared<0> {};
 
+// Cost plus the pose hash of the node that owns it. Ordering two costs uses
+// the value, then the hash, so a->g < b->g matches across processes. A bare
+// float has no hash: arithmetic and comparisons with get_G / Omega use the
+// value alone, and an equal value does not replace the incumbent.
+struct NodeCost {
+  float value = 0.f;
+  size_t tie = 0;
+
+  NodeCost() = default;
+  explicit NodeCost(float v) : value(v) {}
+  void bind(size_t pose_hash) { tie = pose_hash; }
+  operator float() const { return value; }
+
+  friend bool operator<(NodeCost a, NodeCost b) {
+    if (a.value != b.value)
+      return a.value < b.value;
+    return a.tie < b.tie;
+  }
+  friend bool operator>(NodeCost a, NodeCost b) { return b < a; }
+  friend bool operator<=(NodeCost a, NodeCost b) { return !(b < a); }
+  friend bool operator>=(NodeCost a, NodeCost b) { return !(a < b); }
+};
+
 template <int NFlags>
 struct NodeT : NodeCleared<NFlags> {
   float pose[n_dims];
   float *intermediate_poses;
   float *intermediate_times; // one clock value per intermediate pose
-  float g, f;
+  NodeCost g;
+  float f;
   float time; // arrival clock. g is the cost and may differ.
   bool active;
   int rank, level;
@@ -113,6 +137,7 @@ struct NodeT : NodeCleared<NFlags> {
     }
     LCR_index = calc_hash(pose, LCR_);
     hash = calc_hash(pose, tolerance);
+    g.bind(hash);
     index.init(pose, resolution_, division_factor);
   }
 
@@ -121,14 +146,23 @@ struct NodeT : NodeCleared<NFlags> {
     delete[] intermediate_times;
     delete[] intermediate_controls;
   }
+
+  // Smaller f, then smaller pose hash. The open set is filled from a
+  // pointer-keyed container.
+  bool f_before(const NodeT &other) const {
+    if (f != other.f)
+      return f < other.f;
+    return hash < other.hash;
+  }
 };
 
 using Node = NodeT<NODE_NFLAGS>;
 
 struct NodePtrCompare {
+  // Min-heap: smaller f wins.
   bool operator()(const std::shared_ptr<Node> &a,
                   const std::shared_ptr<Node> &b) const {
-    return a->f > b->f; // min-heap: smaller f has higher priority
+    return b->f_before(*a);
   }
 };
 
