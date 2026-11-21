@@ -1,9 +1,10 @@
 #pragma once
 
-// Default 2-point BVP for built-in environments. Environment::solve_2pBVP calls
-// Environment::mpc_solve. The validity-only mpc_solve is geometric_solve.
-// An environment that wants a dynamics-aware connection instead calls the
-// rollout overload below; kinodynamic and the others stay on geometric_solve.
+// One 2-point BVP for every environment. near_meet_config.solver selects
+// geometric or mpc. An omitted solver is geometric. A near-meet call without
+// LCR throws: the caller has to name the solver and give that solver's
+// parameters. mpc is CEM on a rollout the environment supplies. It does not
+// fall back to another shooter.
 // shortcut: checks one pair at a time. Pack every pair's samples into one
 // check_validity_batched if this shows up hot.
 
@@ -14,20 +15,40 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <random>
 #include <stdexcept>
-#include <utility>
 #include <utility>
 #include <vector>
 
 inline bool mpc_shooting_self_check();
 
 inline const char *cem_config_error() {
-  return "near_meet_config must set mpc_num_rollouts, action_noise, "
+  return "near_meet_config solver mpc must set mpc_num_rollouts, action_noise, "
          "num_iters, topk, and cost_function_weights";
 }
+
+inline const char *meet_config_error() {
+  return "near-meet was called without LCR. Set near_meet_config.solver to "
+         "geometric or mpc, and set that solver's parameters.";
+}
+
+// Search entry only. The self-check calls mpc_solve directly and does not warn.
+inline void warn_mpc_solve_untested() {
+  static bool shown = false;
+  if (shown) {
+    return;
+  }
+  shown = true;
+  std::cerr << "\033[1;31m"
+            << "MPC_SOLVE IS UNTESTED AND SHOULD NOT BE USED. "
+            << "https://github.com/personalrobotics/IGHAStar/issues/57\n"
+            << "\033[0m";
+}
+
+enum class MeetSolver { geometric, mpc };
 
 // Default problem filter: every stored trajectory stays eligible. An
 // environment that can tell problems apart overrides filter_trajectories.
@@ -63,8 +84,8 @@ struct NearMeet2PBVP {
   float perturbation_scale = 1.0f;
   std::vector<int> angular_dims;
   std::vector<std::vector<float>> cached_perturbations;
-  // Shooting only. Geometric interpolation does not read these.
-  bool cem_ready = false;
+  MeetSolver solver = MeetSolver::geometric;
+  bool lcr_set = false;
   int mpc_num_rollouts = 0;
   int num_iters = 0;
   int topk = 0;
@@ -72,10 +93,24 @@ struct NearMeet2PBVP {
   std::vector<float> cost_weights;
 
   void load(const py::dict &config, int dims, const float *lcr,
-            const std::vector<int> &angular) {
+            const std::vector<int> &angular, int n_cont) {
     n_dims = dims;
     angular_dims = angular;
+    lcr_set = config.contains("LCR");
+    if (!lcr_set && config.contains("experiment_info_default")) {
+      lcr_set = config["experiment_info_default"].cast<py::dict>().contains("LCR");
+    }
     auto nm = config_utils::get_config_dict(config, "near_meet_config").first;
+    solver = MeetSolver::geometric;
+    if (nm.contains("solver")) {
+      const std::string name = nm["solver"].cast<std::string>();
+      if (name == "mpc") {
+        solver = MeetSolver::mpc;
+      } else if (name != "geometric") {
+        throw std::runtime_error(
+            "near_meet_config.solver must be geometric or mpc");
+      }
+    }
     if (nm.contains("num_interpolation_points")) {
       num_interpolation_points = nm["num_interpolation_points"].cast<int>();
     }
@@ -93,7 +128,12 @@ struct NearMeet2PBVP {
     const int n_set = static_cast<int>(has_rollouts) + static_cast<int>(has_noise) +
                       static_cast<int>(has_iters) + static_cast<int>(has_topk) +
                       static_cast<int>(has_weights);
-    if (n_set != 0 && n_set != 5) {
+    if (solver == MeetSolver::geometric && n_set != 0) {
+      throw std::runtime_error(
+          "near_meet_config.solver is geometric. Remove the CEM parameters, "
+          "or set solver: mpc.");
+    }
+    if (solver == MeetSolver::mpc && n_set != 5) {
       throw std::runtime_error(cem_config_error());
     }
     if (n_set == 5) {
@@ -110,13 +150,22 @@ struct NearMeet2PBVP {
         throw std::runtime_error(
             "near_meet_config cost_function_weights must have one entry per state dimension");
       }
+      if (static_cast<int>(action_noise.size()) != n_cont) {
+        throw std::runtime_error(
+            "near_meet_config action_noise must have one entry per held action");
+      }
+      for (float w : cost_weights) {
+        if (w < 0.f && w != -1.f) {
+          throw std::runtime_error(
+              "near_meet_config cost_function_weights entries must be >= 0, or -1 for 1/tolerance");
+        }
+      }
       for (float scale : action_noise) {
         if (scale < 0.f) {
           throw std::runtime_error(
               "near_meet_config action_noise entries must be >= 0");
         }
       }
-      cem_ready = true;
     }
     cached_perturbations = sampling::generate_perturbation_cache(
         lcr, n_dims, num_perturbations, perturbation_scale);
@@ -158,17 +207,6 @@ struct NearMeet2PBVP {
     }
   }
 
-  // Default MPC is geometric interpolation. Environment::mpc_solve calls this.
-  template <typename NodeT, typename ValidityChecker>
-  void mpc_solve(const std::vector<std::pair<std::shared_ptr<NodeT>,
-                                             std::shared_ptr<NodeT>>> &pairs,
-                 std::vector<bool> &valid,
-                 std::vector<std::vector<float>> &trajectories,
-                 ValidityChecker &&validity_checker) const {
-    geometric_solve(pairs, valid, trajectories,
-                    std::forward<ValidityChecker>(validity_checker));
-  }
-
   // True when each component of a is within tol of b. Angular components use
   // the shortest wrap. A null tolerance accepts nothing.
   bool within_tolerance(const float *a, const float *b,
@@ -187,228 +225,247 @@ struct NearMeet2PBVP {
     return true;
   }
 
+  // A stored weight of -1 is 1/tolerance for that dimension. An infinite
+  // tolerance becomes weight 0.
+  void resolve_weights(const float *tol, std::vector<float> &out) const {
+    out.resize(static_cast<size_t>(n_dims));
+    for (int d = 0; d < n_dims; ++d) {
+      const float w = cost_weights[static_cast<size_t>(d)];
+      if (w != -1.f) {
+        out[static_cast<size_t>(d)] = w;
+        continue;
+      }
+      if (tol == nullptr || !(tol[d] > 0.f)) {
+        throw std::runtime_error(
+            "cost weight -1 needs a positive tolerance on that dimension");
+      }
+      out[static_cast<size_t>(d)] = 1.f / tol[d];
+    }
+  }
+
   // Weighted terminal cost. Angular dimensions use the shortest wrap.
-  float weighted_cost(const float *a, const float *b) const {
+  float weighted_cost(const float *a, const float *b,
+                      const float *weights) const {
     float cost = 0.f;
     for (int d = 0; d < n_dims; ++d) {
       const float diff = sampling::is_angular_dim(d, angular_dims)
                              ? sampling::angular_diff(a[d], b[d])
                              : a[d] - b[d];
-      cost += cost_weights[static_cast<size_t>(d)] * diff * diff;
+      cost += weights[d] * diff * diff;
     }
     return cost;
   }
 
-  // One-shot Gaussian used when the config does not opt into CEM.
-  template <typename NodeT, typename Rollout, typename Distance>
-  void mpc_solve_shooting(
-      const std::vector<std::pair<std::shared_ptr<NodeT>,
-                                  std::shared_ptr<NodeT>>> &pairs,
-      std::vector<bool> &valid, std::vector<std::vector<float>> &trajectories,
-      int n_cont, int timesteps, Rollout &&rollout, Distance &&distance,
-      const float *tolerance, bool hold_action) const {
-    const size_t n = pairs.size();
-    valid.assign(n, false);
-    trajectories.assign(n, {});
-    if (n_cont <= 0 || timesteps <= 0) {
+  // solver picks geometric_solve or mpc_solve. Missing LCR throws here,
+  // which is the first time a near-meet actually runs.
+  template <typename NodeT, typename ValidityChecker, typename Rollout>
+  void solve(const std::vector<std::pair<std::shared_ptr<NodeT>,
+                                         std::shared_ptr<NodeT>>> &pairs,
+             std::vector<bool> &valid,
+             std::vector<std::vector<float>> &trajectories,
+             ValidityChecker &&validity_checker, Rollout &&rollout, int n_cont,
+             int timesteps, const float *tolerance) const {
+    if (!lcr_set) {
+      throw std::runtime_error(meet_config_error());
+    }
+    if (solver == MeetSolver::geometric) {
+      geometric_solve(pairs, valid, trajectories,
+                      std::forward<ValidityChecker>(validity_checker));
       return;
     }
-    const int n_ctrl = timesteps * n_cont;
-    const int n_shots = num_perturbations > 0 ? num_perturbations : 8;
-    std::mt19937 gen(1);
-    std::normal_distribution<float> noise(0.f, perturbation_scale);
-    std::vector<float> controls(static_cast<size_t>(n_ctrl));
-    std::vector<float> final_pose(static_cast<size_t>(n_dims > 0 ? n_dims : 1));
-    for (size_t i = 0; i < n; ++i) {
-      const auto &u = pairs[i].first;
-      const auto &v = pairs[i].second;
-      if (!u || !v) {
-        continue;
-      }
-      if (!u->parent || u->intermediate_controls == nullptr) {
-        valid[i] = within_tolerance(u->pose, v->pose, tolerance);
-        continue;
-      }
-      const int shot_n = hold_action ? n_cont : n_ctrl;
-      float best = 1e30f;
-      std::vector<float> best_controls;
-      for (int s = 0; s <= n_shots; ++s) {
-        for (int c = 0; c < shot_n; ++c) {
-          controls[static_cast<size_t>(c)] =
-              u->intermediate_controls[c] + (s == 0 ? 0.f : noise(gen));
-        }
-        if (hold_action) {
-          for (int t = 1; t < timesteps; ++t) {
-            std::memcpy(controls.data() + static_cast<size_t>(t) * n_cont,
-                        controls.data(),
-                        static_cast<size_t>(n_cont) * sizeof(float));
-          }
-        }
-        if (!rollout(u->pose, controls.data(), n_cont, timesteps,
-                     final_pose.data())) {
-          continue;
-        }
-        if (!within_tolerance(final_pose.data(), v->pose, tolerance)) {
-          continue;
-        }
-        const float d = distance(final_pose.data(), v->pose);
-        if (d < best) {
-          best = d;
-          best_controls = controls;
-        }
-      }
-      if (best_controls.empty()) {
-        continue;
-      }
-      valid[i] = true;
-      trajectories[i] = std::move(best_controls);
-    }
+    warn_mpc_solve_untested();
+    mpc_solve(pairs, valid, trajectories, n_cont, timesteps,
+              std::forward<Rollout>(rollout), tolerance);
   }
 
-  // CEM on the held action when near_meet_config sets the five CEM keys.
-  // Otherwise this is the previous one-shot Gaussian, so an environment that
-  // does not opt in keeps its meets. pairs are (u, v): u is the vertex the
-  // search attaches to, v is the library state to reach. The warmstart is the
-  // control that produced u. hold_action repeats the first n_cont block
-  // across timesteps. CEM draws mpc_num_rollouts samples from a diagonal
-  // Gaussian, keeps the topk lowest weighted costs, and refits the mean and
-  // std. The stored control is the lowest-cost sample that is also inside
-  // tolerance. A parentless u is a meet only when its pose is already inside
-  // tolerance.
-  // ponytail: diagonal covariance, fixed seed, std may collapse to 0.
+  // CEM over every meet that has a parent control. One rollout call per
+  // iteration covers n_shoot x mpc_num_rollouts samples. The held action is
+  // repeated across timesteps while the controls are packed. The stored
+  // control is the lowest-cost sample of the last iteration's topk that is
+  // also inside tolerance. A parentless u is a meet only when its pose is
+  // already inside tolerance.
+  // shortcut: diagonal covariance, fixed seed, std may collapse to 0.
   // Upgrade path is a full covariance or an MPPI weight if topk shows up hot.
-  template <typename NodeT, typename Rollout, typename Distance>
+  template <typename NodeT, typename Rollout>
   void mpc_solve(const std::vector<std::pair<std::shared_ptr<NodeT>,
                                              std::shared_ptr<NodeT>>> &pairs,
                  std::vector<bool> &valid,
                  std::vector<std::vector<float>> &trajectories, int n_cont,
-                 int timesteps, Rollout &&rollout, Distance &&distance,
-                 const float *tolerance, bool hold_action = false) const {
-    if (!cem_ready) {
-      mpc_solve_shooting(pairs, valid, trajectories, n_cont, timesteps,
-                         std::forward<Rollout>(rollout),
-                         std::forward<Distance>(distance), tolerance,
-                         hold_action);
-      return;
+                 int timesteps, Rollout &&rollout,
+                 const float *tolerance) const {
+    if (mpc_num_rollouts < 1 || num_iters < 1 || topk < 1) {
+      throw std::runtime_error(cem_config_error());
     }
-    const size_t n = pairs.size();
-    valid.assign(n, false);
-    trajectories.assign(n, {});
     if (n_cont <= 0 || timesteps <= 0) {
-      return;
-    }
-    const int n_ctrl = timesteps * n_cont;
-    const int shot_n = hold_action ? n_cont : n_ctrl;
-    if (static_cast<int>(action_noise.size()) != shot_n) {
       throw std::runtime_error(
-          "near_meet_config action_noise must have one entry per held action");
+          "mpc near-meet needs a positive control dimension and timestep count");
     }
-    if (static_cast<int>(cost_weights.size()) != n_dims) {
-      throw std::runtime_error(
-          "near_meet_config cost_function_weights must have one entry per state dimension");
-    }
-    std::mt19937 gen(1);
-    std::normal_distribution<float> unit(0.f, 1.f);
-    std::vector<float> final_pose(static_cast<size_t>(n_dims > 0 ? n_dims : 1));
-    for (size_t i = 0; i < n; ++i) {
-      const auto &u = pairs[i].first;
-      const auto &v = pairs[i].second;
+    const int n_meets = static_cast<int>(pairs.size());
+    valid.assign(n_meets, false);
+    trajectories.assign(n_meets, {});
+    std::vector<int> shoot_ids;
+    shoot_ids.reserve(static_cast<size_t>(n_meets));
+    for (int meet = 0; meet < n_meets; ++meet) {
+      const auto &u = pairs[static_cast<size_t>(meet)].first;
+      const auto &v = pairs[static_cast<size_t>(meet)].second;
       if (!u || !v) {
         continue;
       }
       if (!u->parent || u->intermediate_controls == nullptr) {
-        valid[i] = within_tolerance(u->pose, v->pose, tolerance);
+        valid[meet] = within_tolerance(u->pose, v->pose, tolerance);
         continue;
       }
-      std::vector<float> mean(static_cast<size_t>(shot_n));
-      std::vector<float> stddev(static_cast<size_t>(shot_n));
-      for (int c = 0; c < shot_n; ++c) {
-        mean[static_cast<size_t>(c)] = u->intermediate_controls[c];
-        stddev[static_cast<size_t>(c)] = action_noise[static_cast<size_t>(c)];
+      shoot_ids.push_back(meet);
+    }
+    const int n_shoot = static_cast<int>(shoot_ids.size());
+    if (n_shoot == 0) {
+      return;
+    }
+    std::vector<float> weights;
+    resolve_weights(tolerance, weights);
+    const int n_rollouts = mpc_num_rollouts;
+    const int n_ctrl = timesteps * n_cont;
+    const size_t n_samples = static_cast<size_t>(n_shoot) * n_rollouts;
+    std::vector<float> mean(static_cast<size_t>(n_shoot) * n_cont);
+    std::vector<float> stddev(static_cast<size_t>(n_shoot) * n_cont);
+    std::vector<float> states(static_cast<size_t>(n_shoot) * n_dims);
+    for (int m = 0; m < n_shoot; ++m) {
+      const auto &u = pairs[static_cast<size_t>(shoot_ids[m])].first;
+      std::copy(u->pose, u->pose + n_dims,
+                states.begin() + static_cast<size_t>(m) * n_dims);
+      for (int c = 0; c < n_cont; ++c) {
+        mean[static_cast<size_t>(m) * n_cont + c] = u->intermediate_controls[c];
+        stddev[static_cast<size_t>(m) * n_cont + c] =
+            action_noise[static_cast<size_t>(c)];
       }
-      struct Shot {
-        std::vector<float> held;
-        std::vector<float> full;
-        float cost;
-        bool in_tol;
-      };
-      float best_cost = std::numeric_limits<float>::infinity();
-      std::vector<float> best_full;
-      for (int iter = 0; iter < num_iters; ++iter) {
-        std::vector<Shot> shots;
-        shots.reserve(static_cast<size_t>(mpc_num_rollouts));
-        for (int s = 0; s < mpc_num_rollouts; ++s) {
-          Shot shot;
-          shot.held.resize(static_cast<size_t>(shot_n));
-          const bool warm = iter == 0 && s == 0;
-          for (int c = 0; c < shot_n; ++c) {
+    }
+    std::vector<float> controls(n_samples * n_ctrl);
+    std::vector<float> finals(n_samples * n_dims);
+    std::vector<uint8_t> ok(n_samples, 0);
+    std::vector<float> costs(n_samples);
+    std::mt19937 gen(1);
+    std::normal_distribution<float> unit(0.f, 1.f);
+    const float no_cost = std::numeric_limits<float>::infinity();
+    for (int iter = 0; iter < num_iters; ++iter) {
+      for (int m = 0; m < n_shoot; ++m) {
+        for (int r = 0; r < n_rollouts; ++r) {
+          const bool warm = iter == 0 && r == 0;
+          float *sample = controls.data() +
+                          (static_cast<size_t>(m) * n_rollouts + r) * n_ctrl;
+          for (int c = 0; c < n_cont; ++c) {
             const float z = warm ? 0.f : unit(gen);
-            shot.held[static_cast<size_t>(c)] =
-                mean[static_cast<size_t>(c)] +
-                stddev[static_cast<size_t>(c)] * z;
-          }
-          shot.full.assign(static_cast<size_t>(n_ctrl), 0.f);
-          std::memcpy(shot.full.data(), shot.held.data(),
-                      static_cast<size_t>(shot_n) * sizeof(float));
-          if (hold_action) {
-            for (int t = 1; t < timesteps; ++t) {
-              std::memcpy(shot.full.data() + static_cast<size_t>(t) * n_cont,
-                          shot.held.data(),
-                          static_cast<size_t>(n_cont) * sizeof(float));
+            const float held =
+                mean[static_cast<size_t>(m) * n_cont + c] +
+                stddev[static_cast<size_t>(m) * n_cont + c] * z;
+            for (int t = 0; t < timesteps; ++t) {
+              sample[static_cast<size_t>(t) * n_cont + c] = held;
             }
           }
-          if (!rollout(u->pose, shot.full.data(), n_cont, timesteps,
-                       final_pose.data())) {
+        }
+      }
+      rollout(states.data(), controls.data(), n_shoot, n_rollouts, timesteps,
+              n_cont, finals.data(), ok.data());
+      for (size_t s = 0; s < n_samples; ++s) {
+        const int m = static_cast<int>(s) / n_rollouts;
+        const auto &target = pairs[static_cast<size_t>(shoot_ids[m])].second;
+        costs[s] = ok[s] ? weighted_cost(finals.data() + s * n_dims, target->pose,
+                                         weights.data())
+                         : no_cost;
+      }
+      const bool last = iter + 1 == num_iters;
+      for (int m = 0; m < n_shoot; ++m) {
+        std::vector<int> rank(static_cast<size_t>(n_rollouts));
+        for (int r = 0; r < n_rollouts; ++r) {
+          rank[static_cast<size_t>(r)] = r;
+        }
+        const float *meet_cost =
+            costs.data() + static_cast<size_t>(m) * n_rollouts;
+        std::sort(rank.begin(), rank.end(), [&](int a, int b) {
+          return meet_cost[a] < meet_cost[b];
+        });
+        int k = 0;
+        while (k < topk && k < n_rollouts && meet_cost[rank[k]] < no_cost) {
+          ++k;
+        }
+        if (k > 0) {
+          std::vector<float> next_mean(static_cast<size_t>(n_cont), 0.f);
+          for (int e = 0; e < k; ++e) {
+            const float *sample =
+                controls.data() +
+                (static_cast<size_t>(m) * n_rollouts + rank[e]) * n_ctrl;
+            for (int c = 0; c < n_cont; ++c) {
+              next_mean[static_cast<size_t>(c)] += sample[c];
+            }
+          }
+          const float inv = 1.f / static_cast<float>(k);
+          for (int c = 0; c < n_cont; ++c) {
+            float var = 0.f;
+            for (int e = 0; e < k; ++e) {
+              const float *sample =
+                  controls.data() +
+                  (static_cast<size_t>(m) * n_rollouts + rank[e]) * n_ctrl;
+              const float d = sample[c] - next_mean[static_cast<size_t>(c)] * inv;
+              var += d * d;
+            }
+            mean[static_cast<size_t>(m) * n_cont + c] =
+                next_mean[static_cast<size_t>(c)] * inv;
+            stddev[static_cast<size_t>(m) * n_cont + c] = std::sqrt(var * inv);
+          }
+        }
+        if (!last) {
+          continue;
+        }
+        const auto &target = pairs[static_cast<size_t>(shoot_ids[m])].second;
+        int winner = -1;
+        float best = no_cost;
+        for (int e = 0; e < k; ++e) {
+          const int r = rank[e];
+          const size_t s = static_cast<size_t>(m) * n_rollouts + r;
+          if (!ok[s] ||
+              !within_tolerance(finals.data() + s * n_dims, target->pose,
+                                tolerance) ||
+              meet_cost[r] >= best) {
             continue;
           }
-          shot.cost = weighted_cost(final_pose.data(), v->pose);
-          shot.in_tol = within_tolerance(final_pose.data(), v->pose, tolerance);
-          if (shot.in_tol && shot.cost < best_cost) {
-            best_cost = shot.cost;
-            best_full = shot.full;
-          }
-          shots.push_back(std::move(shot));
+          best = meet_cost[r];
+          winner = r;
         }
-        if (shots.empty()) {
-          break;
+        if (winner < 0) {
+          continue;
         }
-        std::sort(shots.begin(), shots.end(),
-                  [](const Shot &a, const Shot &b) { return a.cost < b.cost; });
-        const int k = std::min(topk, static_cast<int>(shots.size()));
-        std::vector<float> next_mean(static_cast<size_t>(shot_n), 0.f);
-        for (int e = 0; e < k; ++e) {
-          for (int c = 0; c < shot_n; ++c) {
-            next_mean[static_cast<size_t>(c)] +=
-                shots[static_cast<size_t>(e)].held[static_cast<size_t>(c)];
-          }
-        }
-        const float inv = 1.f / static_cast<float>(k);
-        for (int c = 0; c < shot_n; ++c) {
-          next_mean[static_cast<size_t>(c)] *= inv;
-        }
-        for (int c = 0; c < shot_n; ++c) {
-          float var = 0.f;
-          for (int e = 0; e < k; ++e) {
-            const float d =
-                shots[static_cast<size_t>(e)].held[static_cast<size_t>(c)] -
-                next_mean[static_cast<size_t>(c)];
-            var += d * d;
-          }
-          mean[static_cast<size_t>(c)] = next_mean[static_cast<size_t>(c)];
-          stddev[static_cast<size_t>(c)] = std::sqrt(var * inv);
-        }
+        const int id = shoot_ids[m];
+        const float *sample =
+            controls.data() +
+            (static_cast<size_t>(m) * n_rollouts + winner) * n_ctrl;
+        trajectories[id].assign(sample, sample + n_ctrl);
+        valid[id] = true;
       }
-      if (best_full.empty()) {
-        continue;
-      }
-      valid[i] = true;
-      trajectories[i] = std::move(best_full);
     }
   }
 };
 
+// Environments with no dynamics rollout. solver: mpc throws from the rollout.
+template <typename Env, typename NodeT>
+void solve_near_meet(
+    Env *env,
+    const std::vector<std::pair<std::shared_ptr<NodeT>, std::shared_ptr<NodeT>>>
+        &pairs,
+    std::vector<bool> &valid, std::vector<std::vector<float>> &trajectories) {
+  env->near_meet_.solve(
+      pairs, valid, trajectories,
+      [env](const std::vector<float *> &states, std::vector<bool> &results) {
+        env->check_validity_batched(states, results);
+      },
+      [](const float *, const float *, int, int, int, int, float *,
+         uint8_t *) {
+        throw std::runtime_error(
+            "near_meet_config.solver is mpc, and this environment has no rollout");
+      },
+      0, 0, nullptr);
+}
+
 // The warmstart is applied at u, not at u->parent. A rollout that misses the
-// tolerance is not a meet. hold_action copies the first control across steps.
+// tolerance is not a meet. The held action is copied across timesteps.
 inline bool mpc_shooting_self_check() {
   struct Node {
     float pose[2] = {};
@@ -428,7 +485,6 @@ inline bool mpc_shooting_self_check() {
   solver.n_dims = 1;
   solver.num_perturbations = 0;
   solver.perturbation_scale = 0.f;
-  solver.cem_ready = true;
   solver.mpc_num_rollouts = 1;
   solver.num_iters = 1;
   solver.topk = 1;
@@ -438,49 +494,63 @@ inline bool mpc_shooting_self_check() {
       {u, v}};
   std::vector<bool> valid;
   std::vector<std::vector<float>> trajectories;
-  const float *seen = nullptr;
-  auto step = [&](const float *start, const float *controls, int, int steps,
+  float seen_state = -1.f;
+  bool called = false;
+  auto shoot = [&](auto &&sample, int n_c, int steps, const float *tol) {
+    auto batched = [&](const float *states, const float *controls, int n_shoot,
+                       int n_rollouts, int n_steps, int n_ctrl, float *finals,
+                       uint8_t *ok) {
+      called = true;
+      seen_state = states[0];
+      for (int s = 0; s < n_shoot * n_rollouts; ++s) {
+        const int meet = s / n_rollouts;
+        ok[s] = sample(states + static_cast<size_t>(meet) * solver.n_dims,
+                       controls + static_cast<size_t>(s) * n_steps * n_ctrl,
+                       n_steps,
+                       finals + static_cast<size_t>(s) * solver.n_dims)
+                    ? 1
+                    : 0;
+      }
+    };
+    solver.mpc_solve(pairs, valid, trajectories, n_c, steps, batched, tol);
+  };
+  auto step = [&](const float *start, const float *controls, int steps,
                   float *final_pose) {
-    seen = start;
-    if (steps > 1 && controls[0] != controls[steps - 1]) {
+    if (steps > 1 && controls[0] != controls[(steps - 1) * 1]) {
       return false;
     }
     final_pose[0] = start[0] + controls[0];
     return true;
   };
-  auto dist = [](const float *a, const float *b) {
-    return std::fabs(a[0] - b[0]);
-  };
   float tol[1] = {1e-3f};
-  solver.mpc_solve(pairs, valid, trajectories, 1, 2, step, dist, tol, true);
-  if (!valid[0] || seen != u->pose || trajectories[0].size() != 2 ||
-      trajectories[0][0] != 1.f || trajectories[0][1] != 1.f) {
+  shoot(step, 1, 2, tol);
+  if (!valid[0] || !called || seen_state != u->pose[0] ||
+      trajectories[0].size() != 2 || trajectories[0][0] != 1.f ||
+      trajectories[0][1] != 1.f) {
     return false;
   }
   v->pose[0] = 2.5f;
   tol[0] = 0.1f;
-  solver.mpc_solve(pairs, valid, trajectories, 1, 2, step, dist, tol, true);
+  shoot(step, 1, 2, tol);
   if (valid[0]) {
     return false;
   }
   tol[0] = 1e-3f;
   v->pose[0] = 2.f;
-  auto reject = [](const float *, const float *, int, int, float *) {
-    return false;
-  };
-  solver.mpc_solve(pairs, valid, trajectories, 1, 1, reject, dist, tol);
+  auto reject = [](const float *, const float *, int, float *) { return false; };
+  shoot(reject, 1, 1, tol);
   if (valid[0]) {
     return false;
   }
   auto start = std::make_shared<Node>();
   start->pose[0] = 2.f;
   pairs = {{start, v}};
-  solver.mpc_solve(pairs, valid, trajectories, 1, 1, reject, dist, tol);
+  shoot(reject, 1, 1, tol);
   if (!valid[0]) {
     return false;
   }
   start->pose[0] = 2.f + 10.f * tol[0];
-  solver.mpc_solve(pairs, valid, trajectories, 1, 1, reject, dist, tol);
+  shoot(reject, 1, 1, tol);
   if (valid[0]) {
     return false;
   }
@@ -488,20 +558,22 @@ inline bool mpc_shooting_self_check() {
   start->pose[0] = 0.f;
   v->pose[0] = 6.f;
   tol[0] = 0.3f;
-  solver.mpc_solve(pairs, valid, trajectories, 1, 1, reject, dist, tol);
+  shoot(reject, 1, 1, tol);
   if (!valid[0]) {
     return false;
   }
   v->pose[0] = 3.f;
-  solver.mpc_solve(pairs, valid, trajectories, 1, 1, reject, dist, tol);
+  shoot(reject, 1, 1, tol);
   if (valid[0]) {
     return false;
   }
-  // Lower cost outside the tolerance box, higher cost inside it. The meet
-  // is the inside sample. One rollout sees only the outside sample.
+  // Lower cost outside the tolerance box, higher cost inside it. The winner
+  // is the last iteration's topk, so both samples have to be elite. One
+  // rollout sees only the outside sample.
   solver.n_dims = 2;
   solver.angular_dims.clear();
   solver.mpc_num_rollouts = 2;
+  solver.topk = 2;
   solver.cost_weights = {1.f, 100.f};
   u->parent = parent;
   u->intermediate_controls = warm;
@@ -510,7 +582,7 @@ inline bool mpc_shooting_self_check() {
   pairs = {{u, v}};
   float tol2[2] = {0.1f, 100.f};
   int which = 0;
-  auto two = [&](const float *, const float *, int, int, float *final_pose) {
+  auto two = [&](const float *, const float *, int, float *final_pose) {
     if (which++ == 0) {
       final_pose[0] = 1.f;
       final_pose[1] = 0.f;
@@ -520,12 +592,41 @@ inline bool mpc_shooting_self_check() {
     }
     return true;
   };
-  solver.mpc_solve(pairs, valid, trajectories, 1, 1, two, dist, tol2);
+  shoot(two, 1, 1, tol2);
   if (!valid[0]) {
     return false;
   }
   which = 0;
   solver.mpc_num_rollouts = 1;
-  solver.mpc_solve(pairs, valid, trajectories, 1, 1, two, dist, tol2);
-  return !valid[0];
+  shoot(two, 1, 1, tol2);
+  if (valid[0]) {
+    return false;
+  }
+  solver.n_dims = 1;
+  solver.cost_weights = {-1.f};
+  std::vector<float> inv;
+  float quarter = 0.25f;
+  solver.resolve_weights(&quarter, inv);
+  if (inv.size() != 1 || inv[0] != 4.f) {
+    return false;
+  }
+  float wide = std::numeric_limits<float>::infinity();
+  solver.resolve_weights(&wide, inv);
+  if (inv[0] != 0.f) {
+    return false;
+  }
+  NearMeet2PBVP bare;
+  bare.n_dims = 1;
+  bool threw = false;
+  try {
+    bare.solve(
+        pairs, valid, trajectories,
+        [](const std::vector<float *> &, std::vector<bool> &) {},
+        [](const float *, const float *, int, int, int, int, float *,
+           uint8_t *) {},
+        1, 1, tol2);
+  } catch (const std::runtime_error &) {
+    threw = true;
+  }
+  return threw;
 }

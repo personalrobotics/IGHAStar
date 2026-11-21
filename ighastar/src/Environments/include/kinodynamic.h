@@ -117,7 +117,7 @@ public:
     goal_sampling = sampling::load_goal_sampling(
         config, n_dims, local_controllability_radius);
     near_meet_.load(config, n_dims, local_controllability_radius,
-                    goal_sampling.angular_dims);
+                    goal_sampling.angular_dims, n_cont);
   }
   // destructor
   virtual ~Environment() {
@@ -516,6 +516,7 @@ public:
   // search Note that this implementation is left up to the user and can be
   // different for different environments. The search method does not care "how"
   // this is computed, as long as it is a valid distance metric.
+  // todo: this is technically also the nearmeet solver's problem, not the environment's problem.
   float compute_near_meet_distance(float *pose1, float *pose2) {
     return heuristic(pose1, pose2);
   }
@@ -527,20 +528,7 @@ public:
           &pairs,
       std::vector<bool> &valid,
       std::vector<std::vector<float>> &trajectories) {
-    mpc_solve(pairs, valid, trajectories);
-  }
-
-  // Default: geometric interpolation. Override for a dynamics-aware MPC.
-  virtual void mpc_solve(
-      const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
-          &pairs,
-      std::vector<bool> &valid,
-      std::vector<std::vector<float>> &trajectories) {
-    near_meet_.mpc_solve(
-        pairs, valid, trajectories,
-        [this](const std::vector<float *> &states, std::vector<bool> &results) {
-          check_validity_batched(states, results);
-        });
+    solve_near_meet(this, pairs, valid, trajectories);
   }
 
   // Default calls sampling::sample_goal_region. Override to replace the sampler.

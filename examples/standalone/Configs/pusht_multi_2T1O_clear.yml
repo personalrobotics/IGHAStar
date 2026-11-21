@@ -9,11 +9,13 @@ experiment_info_default:
   tolerance: [1.0, 1.0, 1.0, 1.0, 0.01, 1.0, 1.0, 0.01, 25.0, 25.0, 25.0, 25.0, 0.25, 25.0, 25.0, 0.25]
   epsilon: [1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9]
   near_meet_config:
+    solver: mpc
     mpc_num_rollouts: 64
     action_noise: [10.0, 10.0]
     num_iters: 3
     topk: 16
-    cost_function_weights: [0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    # -1 uses 1/tolerance on that dimension
+    cost_function_weights: [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
   division_factor: 2.0
   max_expansions: 100000
   hysteresis: 500

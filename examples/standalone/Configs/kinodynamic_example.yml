@@ -27,6 +27,7 @@ experiment_info_default:
     min_preemptive: 64 # only batch once the stash holds at least this many vertices
     max_preemptive: 100 # max vertices preemptively expanded alongside each popped vertex
   near_meet_config: # configuration for BiIGHAStar near-meet validation
+    solver: geometric
     num_interpolation_points: 0 # number of interpolation points for validity check
     num_perturbations: 0 # number of perturbations per interpolation point
     perturbation_scale: 1.0 # scale factor for perturbations

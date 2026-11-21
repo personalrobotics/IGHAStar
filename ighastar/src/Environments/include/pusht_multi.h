@@ -206,10 +206,8 @@ public:
     for (int i = 0; i < kNumTees; i++) {
       tee_angles.push_back(pusht_multi_physics::tee_pose(i) + 2);
     }
-    near_meet_.load(config, n_dims, local_controllability_radius, tee_angles);
-    if (!near_meet_.cem_ready) {
-      throw std::runtime_error(cem_config_error());
-    }
+    near_meet_.load(config, n_dims, local_controllability_radius, tee_angles,
+                    n_cont);
     if (!traj_filter_self_check()) {
       throw std::runtime_error("trajectory filter self-check failed");
     }
@@ -487,34 +485,32 @@ public:
           &pairs,
       std::vector<bool> &valid,
       std::vector<std::vector<float>> &trajectories) {
-    mpc_solve(pairs, valid, trajectories);
-  }
-
-  // Shooting MPC: warmstart is the edge into u, rollout is the same
-  // step_from_snapshot call Succ uses. A pair with no valid sample is not a near-meet.
-  virtual void mpc_solve(
-      const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
-          &pairs,
-      std::vector<bool> &valid,
-      std::vector<std::vector<float>> &trajectories) {
-    near_meet_.mpc_solve(
-        pairs, valid, trajectories, n_cont, timesteps,
-        [this](const float *source_pose, const float *controls, int, int,
-               float *final_pose) {
-          std::vector<float> inter(static_cast<size_t>(timesteps) * n_dims);
-          float pen_inc = 0.f;
-          float peak_force = 0.f;
-          // One held target. The solver repeats it across the control rows.
-          pusht_multi_physics::step_from_snapshot(
-              source_pose, controls, final_pose, n_substeps, inter.data(),
-              max_agent_vel, &pen_inc, &peak_force, walls_, n_walls_,
-              close_right);
-          return rollout_valid(final_pose, inter.data(), pen_inc, peak_force);
+    near_meet_.solve(
+        pairs, valid, trajectories,
+        [this](const std::vector<float *> &states, std::vector<bool> &results) {
+          check_validity_batched(states, results);
         },
-        [this](const float *a, const float *b) {
-          return heuristic(const_cast<float *>(a), const_cast<float *>(b));
+        [this](const float *states, const float *controls, int n_shoot,
+               int n_rollouts, int steps, int n_c, float *final_poses,
+               uint8_t *ok) {
+          const int n_samples = n_shoot * n_rollouts;
+          const int ctrl_stride = steps * n_c;
+#pragma omp parallel for schedule(static)
+          for (int s = 0; s < n_samples; ++s) {
+            const int meet = s / n_rollouts;
+            std::vector<float> inter(static_cast<size_t>(steps) * n_dims);
+            float pen_inc = 0.f;
+            float peak_force = 0.f;
+            float *out = final_poses + static_cast<size_t>(s) * n_dims;
+            pusht_multi_physics::step_from_snapshot(
+                states + static_cast<size_t>(meet) * n_dims,
+                controls + static_cast<size_t>(s) * ctrl_stride, out, n_substeps,
+                inter.data(), max_agent_vel, &pen_inc, &peak_force, walls_,
+                n_walls_, close_right);
+            ok[s] = rollout_valid(out, inter.data(), pen_inc, peak_force) ? 1 : 0;
+          }
         },
-        mpc_solve_tolerance, true);
+        n_cont, timesteps, mpc_solve_tolerance);
   }
 
   // The edge the search attaches: the winning held target, rolled out from the

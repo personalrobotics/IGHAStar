@@ -131,7 +131,7 @@ elevation representation only and rejects 4D tensors.
       std::vector<bool> &valid,
       std::vector<std::vector<float>> &trajectories);
   ```
-  2-point boundary-value solver for bidirectional near-meet checks. `pairs[i]` is a source node and a target node (the nodes, not just their coordinates, so the solver can use parent state). `valid[i]` is true when that connection is usable. `trajectories[i]` is the connecting states, row-major `[n_states * n_dims]` (empty if the solver does not return one). A single connection is a batch of size 1. `solve_2pBVP` calls `mpc_solve`. The default `mpc_solve` is geometric interpolation between the two nodes. Override `mpc_solve` to supply a dynamics-aware solver.
+  2-point boundary-value solver for bidirectional near-meet checks. `pairs[i]` is a source node and a target node (the nodes, not just their coordinates, so the solver can use parent state). `valid[i]` is true when that connection is usable. `trajectories[i]` is the connecting states, row-major `[n_states * n_dims]` (empty if the solver does not return one). A single connection is a batch of size 1. `near_meet_config.solver` is `geometric` or `mpc`. An omitted solver is geometric. A near-meet call without `LCR` throws. `mpc` is the CEM rollout and requires its five parameters.
 
 **sample_goals**
   ```cpp
