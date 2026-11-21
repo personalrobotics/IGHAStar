@@ -8,7 +8,8 @@ experiment_info_default:
   resolution: [40.0, 40.0, 40.0, 40.0, 0.5, 40.0, 40.0, 0.5, 50.0, 50.0, 50.0, 50.0, 0.5, 50.0, 50.0, 0.5]
   tolerance: [1.0, 1.0, 1.0, 1.0, 0.01, 1.0, 1.0, 0.01, 25.0, 25.0, 25.0, 25.0, 0.25, 25.0, 25.0, 0.25]
   epsilon: [1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9]
-  LCR: [1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9]
+  # Pose radius for a near-meet, same as the 1-tee slot test. Velocities are not hashed.
+  LCR: [10.0, 10.0, 10.0, 10.0, 0.25, 10.0, 10.0, 0.25]
   near_meet_config:
     solver: mpc
     mpc_num_rollouts: 64
