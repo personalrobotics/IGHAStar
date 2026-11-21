@@ -81,7 +81,7 @@ public:
     goal_sampling = sampling::load_goal_sampling(
         config, n_dims, local_controllability_radius);
     near_meet_.load(config, n_dims, local_controllability_radius,
-                    goal_sampling.angular_dims);
+                    goal_sampling.angular_dims, n_cont);
   }
 
   virtual ~Environment() {
@@ -240,20 +240,7 @@ public:
           &pairs,
       std::vector<bool> &valid,
       std::vector<std::vector<float>> &trajectories) {
-    mpc_solve(pairs, valid, trajectories);
-  }
-
-  // Default: geometric interpolation. Override for a dynamics-aware MPC.
-  virtual void mpc_solve(
-      const std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>>
-          &pairs,
-      std::vector<bool> &valid,
-      std::vector<std::vector<float>> &trajectories) {
-    near_meet_.mpc_solve(
-        pairs, valid, trajectories,
-        [this](const std::vector<float *> &states, std::vector<bool> &results) {
-          check_validity_batched(states, results);
-        });
+    solve_near_meet(this, pairs, valid, trajectories);
   }
 
   // Default calls sampling::sample_goal_region. Override to replace the sampler.

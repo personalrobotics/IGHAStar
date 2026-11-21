@@ -5,6 +5,18 @@ experiment_info_default:
   resolution: [40.0, 40.0, 40.0, 40.0, 0.5, 50.0, 50.0, 50.0, 50.0, 0.5]
   tolerance: [1.0, 1.0, 1.0, 1.0, 0.01, 25.0, 25.0, 25.0, 25.0, 0.25]
   epsilon: [1.0e9, 1.0e9, 8.0, 8.0, 0.15, 1.0e9, 1.0e9, 1.0e9, 1.0e9, 1.0e9]
+  # Pose radius for a near-meet. Velocities stay at epsilon.
+  LCR: [10.0, 10.0, 10.0, 10.0, 0.25]
+  # Acceptance box for the meet. Velocities are ignored.
+  mpc_solve_tolerance: [10.0, 10.0, 5.0, 5.0, 0.1]
+  near_meet_config:
+    solver: mpc
+    mpc_num_rollouts: 64
+    action_noise: [10.0, 10.0]
+    num_iters: 3
+    topk: 16
+    # -1 uses 1/tolerance on that dimension
+    cost_function_weights: [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
   division_factor: 2.0
   max_expansions: 100000
   hysteresis: 500

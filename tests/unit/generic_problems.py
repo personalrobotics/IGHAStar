@@ -100,6 +100,8 @@ def make_configs(
         "hash_dims": 2,
         "num_controls": 8,
         "resolution": [0.5, 0.5],
+        # Same radius the hash uses when the key is absent. solve() requires the key.
+        "LCR": [0.5, 0.5],
         "tolerance": [0.1, 0.1],
         "bounds_lower": [0.0, 0.0],
         "bounds_upper": [10.0, 10.0],

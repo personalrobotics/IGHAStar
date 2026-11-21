@@ -315,6 +315,64 @@ MeetEdge geometric_meet_edge(Environment *env, const std::shared_ptr<Node> &sour
   return edge;
 }
 
+// solver: mpc is the only caller of realize_meet. An environment without that
+// method stays on the geometric edge. The int/ellipsis pair picks the first
+// overload when the method exists.
+struct MeetLink {
+  MeetEdge edge;
+  bool from_parent = false;
+};
+
+// The edge that already reached u, hung off u->parent. A parentless u has no
+// such edge, so the suffix stays under u via the interpolated shortcut.
+MeetLink reuse_incoming_edge(Environment *env, const std::shared_ptr<Node> &u,
+                             const std::shared_ptr<Node> &target) {
+  MeetLink link;
+  if (!u || !u->parent) {
+    link.edge = geometric_meet_edge(env, u, target);
+    return link;
+  }
+  link.from_parent = true;
+  link.edge.ok = true;
+  link.edge.cost = u->g - u->parent->g;
+  link.edge.arrival = u->time;
+  const int steps = env ? env->timesteps : 0;
+  if (steps > 0 && u->intermediate_poses != nullptr) {
+    const int n = steps * n_dims;
+    link.edge.poses.assign(u->intermediate_poses, u->intermediate_poses + n);
+  }
+  if (steps > 0 && u->intermediate_controls != nullptr) {
+    const int n = steps * n_cont;
+    link.edge.controls.assign(u->intermediate_controls,
+                              u->intermediate_controls + n);
+  }
+  if (steps > 0 && u->intermediate_times != nullptr) {
+    link.edge.times.assign(u->intermediate_times, u->intermediate_times + steps);
+  }
+  return link;
+}
+
+template <typename Env>
+auto connect_meet(Env *env, const std::shared_ptr<Node> &u,
+                  const std::shared_ptr<Node> &target,
+                  const std::vector<float> &conn, int)
+    -> decltype(env->realize_meet(u, target, conn), MeetLink{}) {
+  if (env->near_meet_.solver == MeetSolver::mpc) {
+    MeetLink link;
+    link.edge = env->realize_meet(u, target, conn);
+    link.from_parent = true;
+    return link;
+  }
+  return reuse_incoming_edge(env, u, target);
+}
+
+template <typename Env>
+MeetLink connect_meet(Env *env, const std::shared_ptr<Node> &u,
+                      const std::shared_ptr<Node> &target,
+                      const std::vector<float> &, ...) {
+  return reuse_incoming_edge(env, u, target);
+}
+
 } // namespace
 
 Trajectory capture_trajectory(
@@ -777,13 +835,12 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
   if (found == library.lcr.end()) {
     return out;
   }
-  // Every LCR hit goes into one solve. A failed connection must not hide
-  // another vertex of the same trajectory; the valid hit with the smallest
-  // spliced cost is the meet. A failed connection leaves the trajectory unused.
+  // Every LCR hit goes into one solve, then one edge build. Rank by the cost
+  // that edge actually stores. A failed edge leaves the trajectory free for
+  // another hit.
   struct Cand {
     int traj;
     int idx;
-    float spliced;
   };
   std::vector<Cand> cands;
   std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>> pairs;
@@ -808,9 +865,7 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
     if (path.empty() || idx < 0 || idx >= static_cast<int>(path.size())) {
       continue;
     }
-    float dist = env->compute_near_meet_distance(u->pose, path[idx]->pose);
-    cands.push_back(
-        {traj, idx, u->g + dist + (path[0]->g - path[idx]->g)});
+    cands.push_back({traj, idx});
     pairs.emplace_back(u, path[idx]);
   }
   if (cands.empty()) {
@@ -822,37 +877,43 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
   struct Best {
     int idx;
     float spliced;
-    int pair;
+    MeetLink link;
   };
   igha::unordered_map<int, Best> best;
   for (size_t n = 0; n < cands.size(); ++n) {
     if (n >= valid.size() || !valid[n]) {
       continue;
     }
-    auto it = best.find(cands[n].traj);
-    if (it == best.end() || cands[n].spliced < it->second.spliced) {
-      best[cands[n].traj] = Best{cands[n].idx, cands[n].spliced,
-                                 static_cast<int>(n)};
+    const auto &path = library.trajs[cands[n].traj].path;
+    const int idx = cands[n].idx;
+    MeetLink link = connect_meet(env, u, path[idx], connections[n], 0);
+    if (!link.edge.ok) {
+      continue;
     }
+    const float base =
+        (link.from_parent && u->parent) ? u->parent->g : u->g;
+    const float spliced =
+        base + link.edge.cost + (path[0]->g - path[idx]->g);
+    auto it = best.find(cands[n].traj);
+    if (it != best.end() && !(spliced < it->second.spliced)) {
+      continue;
+    }
+    best[cands[n].traj] = Best{idx, spliced, std::move(link)};
   }
   for (const auto &kv : best) {
     const int traj = kv.first;
     const int k = kv.second.idx;
     const auto &path = library.trajs[traj].path;
-    const std::vector<float> &conn =
-        connections[static_cast<size_t>(kv.second.pair)];
-#ifdef IGHASTAR_REALIZE_MEET
-    MeetEdge edge = IGHASTAR_REALIZE_MEET(env, u, path[k], conn);
-#else
-    (void)conn;
-    MeetEdge edge = geometric_meet_edge(env, u, path[k]);
-#endif
-    if (!edge.ok) {
-      continue;
-    }
+    // Both solvers prefix the library vertex with u->parent. mpc integrates a
+    // new edge from there. geometric reuses the edge that already reached u.
+    // A parentless u keeps the interpolated shortcut under u.
+    const MeetLink &link = kv.second.link;
+    const MeetEdge &edge = link.edge;
     library.used[traj] = 1;
     const int stored = buffer_steps(library.trajs[traj].steps, env->timesteps);
-    const float g_meet = u->g + edge.cost;
+    const std::shared_ptr<Node> meet_parent =
+        (link.from_parent && u->parent) ? u->parent : u;
+    const float g_meet = meet_parent->g + edge.cost;
     const float g_old_meet = path[k]->g;
     const float offset = edge.arrival - path[k]->time;
     std::vector<std::shared_ptr<Node>> copies(static_cast<size_t>(k) + 1);
@@ -860,7 +921,7 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
       const float g_new = g_meet + (path[i]->g - g_old_meet);
       const float h = env->heuristic(path[i]->pose, goal->pose);
       const std::shared_ptr<Node> parent =
-          (i == k) ? u : copies[static_cast<size_t>(i) + 1];
+          (i == k) ? meet_parent : copies[static_cast<size_t>(i) + 1];
       std::vector<float> shifted;
       const float *times = nullptr;
       const float *poses = path[i]->intermediate_poses;
