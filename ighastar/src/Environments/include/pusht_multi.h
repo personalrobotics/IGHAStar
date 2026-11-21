@@ -4,7 +4,6 @@
 #pragma once
 
 #include <algorithm>
-#include <limits>
 #include "solve_2pbvp.h"
 #include <boost/functional/hash.hpp>
 #include <cmath>
@@ -138,9 +137,6 @@ public:
   float resolution[n_dims];
   float tolerance[n_dims];
   float local_controllability_radius[n_dims];
-  // Meet acceptance. The first hash_dims entries are the config. The rest are
-  // velocities, which the meet does not check.
-  float mpc_solve_tolerance[n_dims];
   NearMeet2PBVP near_meet_;
 #define IGHASTAR_MEET_ANGULAR_DIMS(env) ((env)->near_meet_.angular_dims)
   sampling::GoalSamplingConfig goal_sampling;
@@ -207,9 +203,6 @@ public:
       tee_angles.push_back(pusht_multi_physics::tee_pose(i) + 2);
     }
     near_meet_.load(config, n_dims, local_controllability_radius, tee_angles);
-    if (!near_meet_.cem_ready) {
-      throw std::runtime_error(cem_config_error());
-    }
     if (!traj_filter_self_check()) {
       throw std::runtime_error("trajectory filter self-check failed");
     }
@@ -249,22 +242,6 @@ public:
     } else {
       for (int i = 0; i < n_dims; i++) {
         local_controllability_radius[i] = epsilon[i];
-      }
-    }
-    for (int i = 0; i < n_dims; i++) {
-      mpc_solve_tolerance[i] = tolerance[i];
-    }
-    if (info.contains("mpc_solve_tolerance")) {
-      auto meet = as_fvec(info["mpc_solve_tolerance"]);
-      if ((int)meet.size() != hash_dims) {
-        throw std::runtime_error(
-            "pusht_multi mpc_solve_tolerance must have one entry per hashed dimension");
-      }
-      for (int i = 0; i < hash_dims; i++) {
-        mpc_solve_tolerance[i] = meet[i];
-      }
-      for (int i = hash_dims; i < n_dims; i++) {
-        mpc_solve_tolerance[i] = std::numeric_limits<float>::infinity();
       }
     }
   }
@@ -514,7 +491,7 @@ public:
         [this](const float *a, const float *b) {
           return heuristic(const_cast<float *>(a), const_cast<float *>(b));
         },
-        mpc_solve_tolerance, true);
+        tolerance, true);
   }
 
   // The edge the search attaches: the winning held target, rolled out from the
@@ -543,8 +520,7 @@ public:
         source->pose, controls.data(), final_pose, n_substeps, inter.data(),
         max_agent_vel, &pen_inc, &peak_force, walls_, n_walls_, close_right);
     if (!rollout_valid(final_pose, inter.data(), pen_inc, peak_force) ||
-        !near_meet_.within_tolerance(final_pose, target->pose,
-                                    mpc_solve_tolerance)) {
+        !near_meet_.within_tolerance(final_pose, target->pose, tolerance)) {
       return edge;
     }
     edge.poses = std::move(inter);
