@@ -51,12 +51,12 @@ struct SearchTree {
   };
   int64_t num_nodes = 0;
   int state_dim = n_dims, control_dim = n_cont, timesteps = 0;
-  std::vector<float> poses, g, f;
-  std::vector<int64_t> parents;
+  std::vector<float> poses, g, f, time;
+  std::vector<int64_t> parents, hash;
   std::vector<int32_t> levels, time_direction, discover_index, expand_index;
   std::vector<int8_t> status;
-  std::vector<uint8_t> has_edge;
-  std::vector<float> edges, edge_controls;
+  std::vector<uint8_t> has_edge, has_times;
+  std::vector<float> edges, edge_controls, intermediate_times;
   float best_cost = 1e5f;
   int64_t best_index = -1;
   int expansions = 0;
