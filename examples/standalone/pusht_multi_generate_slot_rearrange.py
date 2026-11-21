@@ -7,8 +7,8 @@ slot SLOT_W px wide. The stem is 30 px wide and 90 px long, so a tee seated with
 against the mouth wall has its stem inside the pocket. Slots are always near an edge, and
 the open side keeps at least OPEN_MIN px free in front of the mouth wall.
 
---tees 1 packs one tee: ax ay | t0 x y a | velocities (10). --tees 2 keeps the
-16-dim two-tee state.
+State is the 16-dim 2-tee state: ax ay | t0 x y a | t1 x y a | velocities.
+With --tees 1 the second tee is a bystander: its goal is its start pose.
 
   python3 -u examples/standalone/pusht_multi_generate_slot_rearrange.py --preview 8
   python3 -u examples/standalone/pusht_multi_generate_slot_rearrange.py --n 10 --tees 2
@@ -27,10 +27,10 @@ from pusht_multi_generate_2T1O_clear import (
     BOX_HI,
     BOX_LO,
     CONTENT,
+    N_DIMS,
     WORLD_STRIDE,
     _tee_polys,
     cost_expansion,
-    gap_wall,
     pack_state,
     pack_walls,
     self_check,
@@ -100,15 +100,6 @@ def free_region(side: str):
     return lo, BOX_HI - far, lo, hi
 
 
-def pack_one_tee(ax, ay, tee) -> np.ndarray:
-    """One agent, one tee. Same order as 4*K + 6*T in pusht_multi_physics.h."""
-    s = np.zeros(10, dtype=np.float32)
-    s[0] = ax
-    s[1] = ay
-    s[2:5] = tee
-    return s
-
-
 def sample_problem(rng, n_tees, near=0.0):
     side = SIDES[rng.randint(4)]
     margin = 70.0
@@ -137,19 +128,26 @@ def sample_problem(rng, n_tees, near=0.0):
         return np.array([xy[0], xy[1], rng.uniform(0, 2 * np.pi)], dtype=np.float32)
 
     agent = np.array([rng.uniform(x0, x1), rng.uniform(y0, y1)])
-    t0 = tee()
-    if n_tees == 1:
-        start = pack_one_tee(agent[0], agent[1], t0)
-        goal = pack_one_tee(agent[0], agent[1], seated_pose(side, cs[0]))
+    t0, t1 = tee(), tee()
+    if n_tees == 1:  # bystander in the corner of the free region farthest from the slot
+        slot_xy = np.array(to_world(side, cs[0], DEPTH))
+        corners = [(x, y) for x in (x0, x1) for y in (y0, y1)]
+        cx, cy = max(corners, key=lambda c: np.hypot(c[0] - slot_xy[0], c[1] - slot_xy[1]))
+        # a tee reaches 120 px from its origin, so keep the origin 130 px from the box edges
+        cx = cx + 90.0 if cx == x0 else cx - 90.0 if cx == x1 else cx
+        cy = cy + 90.0 if cy == y0 else cy - 90.0 if cy == y1 else cy
+        t1 = np.array([cx, cy, rng.uniform(0, 2 * np.pi)], dtype=np.float32)
+    start = pack_state(agent[0], agent[1], t0, t1)
+    if n_tees == 2:
+        g0, g1 = seated_pose(side, cs[0]), seated_pose(side, cs[1])
     else:
-        t1 = tee()
-        start = pack_state(agent[0], agent[1], t0, t1)
-        goal = pack_state(agent[0], agent[1], seated_pose(side, cs[0]), seated_pose(side, cs[1]))
+        g0, g1 = seated_pose(side, cs[0]), t1.copy()
+    goal = pack_state(agent[0], agent[1], g0, g1)
     return start, goal, pack_walls(segs), dict(side=side, centers=cs, tees=n_tees)
 
 
 def render_slot_video(path_goal_first, goal, walls, out_mp4, n_tees, fps=20):
-    """Like the rearrange video. n_tees 1 draws the single tee at state index 2."""
+    """Like the rearrange video, but the bystander tee is not drawn when n_tees is 1."""
     from PIL import Image, ImageDraw
     import imageio.v2 as imageio
     rows = np.asarray(path_goal_first, dtype=np.float32)[::-1]
@@ -260,17 +258,7 @@ def main():
     limit = args.max_expansions or int(info["max_expansions"])
     hyst = int(info["hysteresis"])
     planner = create_planner(cfg, bidirectional=False)
-    if args.tees == 2:
-        self_check(planner, check_exit=False)
-    else:
-        world = torch.from_numpy(pack_walls(gap_wall(1.0, 400.0, 220.0, 380.0)))
-        free = pack_one_tee(80.0, 256.0, (150.0, 150.0, 0.0))
-        bad = pack_one_tee(80.0, 256.0, (400.0, 100.0, 0.0))
-        ok = planner.check_validity_batched(
-            torch.from_numpy(np.stack([free, bad])), world
-        ).detach().cpu().numpy().astype(bool)
-        if not (ok[0] and not ok[1]):
-            raise SystemExit(f"validity self-check failed: mask={ok.tolist()}")
+    self_check(planner, check_exit=False)
     rng = np.random.RandomState(args.seed)
 
     def valid(ps):

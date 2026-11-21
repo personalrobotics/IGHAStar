@@ -1,7 +1,6 @@
-// Chipmunk Push-T with T tees, K agents, and interior wall segments.
+// Chipmunk Push-T with two tees, K agents, and interior wall segments.
 // State: agent xy (K) | tee poses | agent vel (K) | tee vel.
-// K=1, T=2 is ax ay | t0 t1 | avx avy | t0v t1v.
-// K comes from PUSHT_MULTI_AGENTS. T comes from PUSHT_MULTI_TEES.
+// K=1 is ax ay | t0 t1 | avx avy | t0v t1v. K comes from PUSHT_MULTI_AGENTS.
 // Clear bits are not in this vector. The Environment stores them on the node.
 // A wall is one segment (x1, y1, x2, y2) in the same pixels as the tee.
 // The box around the workspace is separate and is not one of these segments.
@@ -19,15 +18,12 @@
 #ifndef PUSHT_MULTI_AGENTS
 #define PUSHT_MULTI_AGENTS 1
 #endif
-#ifndef PUSHT_MULTI_TEES
-#define PUSHT_MULTI_TEES 2
-#endif
 
-// Agent and tee counts are compile flags. Two extensions can be loaded in one
-// process, so the symbols must not collide.
-#define PUSHT_MULTI_NS_CAT(a, b, c) pusht_multi_##a##_##b##_t##c
-#define PUSHT_MULTI_NS(k, t) PUSHT_MULTI_NS_CAT(physics, k, t)
-namespace PUSHT_MULTI_NS(PUSHT_MULTI_AGENTS, PUSHT_MULTI_TEES) {
+// The agent count is a compile flag. Two extensions (1 agent and 2) can be
+// loaded in one process, so the symbols must not collide.
+#define PUSHT_MULTI_NS_CAT(a, b) pusht_multi_##a##_##b
+#define PUSHT_MULTI_NS(k) PUSHT_MULTI_NS_CAT(physics, k)
+namespace PUSHT_MULTI_NS(PUSHT_MULTI_AGENTS) {
 
 constexpr cpFloat kDt = 0.01;
 constexpr cpFloat kP = 100.0;
@@ -37,7 +33,7 @@ constexpr cpFloat kTeeScale = 30.0;
 constexpr cpFloat kTeeLength = 4.0;
 constexpr cpFloat kShapeFriction = 1.0;
 constexpr int kNumAgents = PUSHT_MULTI_AGENTS;
-constexpr int kNumTees = PUSHT_MULTI_TEES;
+constexpr int kNumTees = 2;
 constexpr int kStateDim = 4 * kNumAgents + 6 * kNumTees;
 constexpr int kDefaultSubsteps = 10;
 constexpr cpCollisionType kTypeDynamic = 2;
@@ -184,8 +180,8 @@ inline World make_world(const WallSpec *walls, int n_walls,
     cpSpaceAddShape(w.space, w.agent_shape[i]);
   }
 
-  for (int i = 0; i < kNumTees; i++)
-    add_tee(w, i);
+  add_tee(w, 0);
+  add_tee(w, 1);
 
   return w;
 }
@@ -498,14 +494,10 @@ inline bool overlaps_forbidden(const float *s, const WallSpec *walls, int n_wall
       }
     }
   }
-  for (int t = 0; t < kNumTees; t++) {
-    for (int u = t + 1; u < kNumTees; u++) {
-      for (int k = 0; k < 2; k++) {
-        for (int m = 0; m < 2; m++) {
-          if (shapes_overlap(w.tee_shape[t][k], w.tee_shape[u][m]))
-            return true;
-        }
-      }
+  for (int k = 0; k < 2; k++) {
+    for (int m = 0; m < 2; m++) {
+      if (shapes_overlap(w.tee_shape[0][k], w.tee_shape[1][m]))
+        return true;
     }
   }
   return false;
@@ -565,6 +557,5 @@ inline void step_from_snapshot(const float *state_in, const float *target,
     *out_peak_force = static_cast<float>(w.max_agent_force);
 }
 
-} // namespace pusht_multi_physics_K_tT
-namespace pusht_multi_physics =
-    PUSHT_MULTI_NS(PUSHT_MULTI_AGENTS, PUSHT_MULTI_TEES);
+} // namespace pusht_multi_physics_K
+namespace pusht_multi_physics = PUSHT_MULTI_NS(PUSHT_MULTI_AGENTS);

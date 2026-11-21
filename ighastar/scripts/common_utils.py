@@ -263,18 +263,13 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
         agents = 2 if env_name in ("pusht_multi_2a",) else 1
         if env_name == "pusht":
             ext_name = "ighastar_pusht_v2"
-            build_flags: list = []
+        elif agents == 1:
+            ext_name = "ighastar_pusht_multi"
         else:
-            if "num_tees" not in node_info:
-                raise ValueError("pusht_multi config is missing node_info.num_tees")
-            tees = int(node_info["num_tees"])
-            if tees < 1:
-                raise ValueError("pusht_multi num_tees must be at least 1")
-            ext_name = f"ighastar_pusht_multi_a{agents}_t{tees}"
-            build_flags = [
-                f"-DPUSHT_MULTI_AGENTS={agents}",
-                f"-DPUSHT_MULTI_TEES={tees}",
-            ]
+            ext_name = f"ighastar_pusht_multi_a{agents}"
+        agent_flag = (
+            [] if env_name == "pusht" else [f"-DPUSHT_MULTI_AGENTS={agents}"]
+        )
         chipmunk_root = (
             pathlib.Path(os.environ["PUSHT_CHIPMUNK_DIR"])
             if os.environ.get("PUSHT_CHIPMUNK_DIR")
@@ -303,7 +298,7 @@ def create_planner(configs: Dict[str, Any], bidirectional: bool = False) -> Any:
                 "-DNDEBUG",
                 "-DCP_USE_DOUBLES=1",
                 env_header_flag(env_header),
-                *build_flags,
+                *agent_flag,
                 *hash_cflags,
             ],
             extra_ldflags=["-fopenmp", "-lm"],
