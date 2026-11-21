@@ -513,11 +513,9 @@ public:
         n_cont, timesteps, mpc_solve_tolerance);
   }
 
-  // The edge the search attaches. An empty control list adds no motion: the
-  // geometric meet already treated the source as the overlap, so its control
-  // is the timesteps*n_cont sequence on the edge from the source's parent.
-  // mpc uses that empty list only for a parentless source already inside
-  // tolerance. A nonempty list is a new held action and is rolled out below.
+  // The mpc edge. It replaces the edge into source, so the control is
+  // integrated from source->parent. An empty list is a parentless source
+  // already inside tolerance.
   MeetEdge realize_meet(const std::shared_ptr<Node> &source,
                         const std::shared_ptr<Node> &target,
                         const std::vector<float> &controls) const {
@@ -534,12 +532,13 @@ public:
         static_cast<int>(controls.size()) != timesteps * n_cont) {
       return edge;
     }
+    const std::shared_ptr<Node> origin = source->parent ? source->parent : source;
     std::vector<float> inter(static_cast<size_t>(timesteps) * n_dims);
     float final_pose[n_dims];
     float pen_inc = 0.f;
     float peak_force = 0.f;
     pusht_multi_physics::step_from_snapshot(
-        source->pose, controls.data(), final_pose, n_substeps, inter.data(),
+        origin->pose, controls.data(), final_pose, n_substeps, inter.data(),
         max_agent_vel, &pen_inc, &peak_force, walls_, n_walls_, close_right);
     if (!rollout_valid(final_pose, inter.data(), pen_inc, peak_force) ||
         !near_meet_.within_tolerance(final_pose, target->pose,
@@ -550,7 +549,7 @@ public:
     edge.controls = controls;
     edge.cost = edge_cost;
     edge.times.resize(timesteps);
-    fill_substep_times(edge.times.data(), source->time,
+    fill_substep_times(edge.times.data(), origin->time,
                        static_cast<float>(pusht_multi_physics::kDt), timesteps);
     edge.arrival = edge.times.back();
     edge.ok = true;
@@ -867,8 +866,6 @@ public:
   }
 };
 
-#define IGHASTAR_REALIZE_MEET(env, src, tgt, conn) \
-  (env)->realize_meet((src), (tgt), (conn))
 #define IGHASTAR_RESTORE_NODE(env, node) \
   (env)->stamp_cleared((node), (node).parent.get(), (node).intermediate_poses)
 #define IGHASTAR_STAMP_WORLD(env, dest) (env)->copy_active_world(dest)

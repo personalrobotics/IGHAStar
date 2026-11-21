@@ -175,48 +175,50 @@ struct NearMeet2PBVP {
   }
 
   // Same connection the original near-meet kept. u and v share an LCR cell,
-  // so u is already the state that overlaps v. The control of that overlap is
-  // the timesteps*n_cont sequence stored on the edge from u->parent to u.
-  // This function does not build another one: an empty trajectory leaves that
-  // edge in place. With both counts at 0 that overlap is "trust me bro": the
+  // so u is already the state that overlaps v. The returned trajectory is the
+  // timesteps*n_cont sequence stored on the edge from u->parent to u. It is
+  // not a new edge. With both counts at 0 that overlap is "trust me bro": the
   // segment between u and v is not checked. Interpolation and perturbation
-  // exist to make the geometric solve a bit more robust than that. They sample
-  // the segment, and the perturbations around those samples, and reject the
-  // meet when those states are invalid. mpc_solve is the other choice. It
-  // searches for a new sequence of the same length whose arrival overlaps v
-  // inside the tolerance.
+  // exist to make the geometric solve a bit more robust than that. They only
+  // accept or reject the overlap. Their samples are not the trajectory.
+  // mpc_solve is the other choice. It searches for a new sequence of the same
+  // length whose arrival overlaps v inside the tolerance.
   template <typename NodeT, typename ValidityChecker>
   void geometric_solve(const std::vector<std::pair<std::shared_ptr<NodeT>,
                                          std::shared_ptr<NodeT>>> &pairs,
              std::vector<bool> &valid,
              std::vector<std::vector<float>> &trajectories,
-             ValidityChecker &&validity_checker) const {
+             ValidityChecker &&validity_checker, int n_cont,
+             int timesteps) const {
     const size_t n = pairs.size();
     valid.assign(n, true);
     trajectories.assign(n, {});
     // using interpolation and perturbation to find the meet is more robust, otherwise you're
     // saying "trust me bro" and not checking the overlap.
-    if (num_interpolation_points == 0 && num_perturbations == 0) {
-      return;
-    }
+    const bool check_segment =
+        !(num_interpolation_points == 0 && num_perturbations == 0);
+    const int n_ctrl = timesteps * n_cont;
     for (size_t i = 0; i < n; ++i) {
-      const float *source = pairs[i].first->pose;
-      const float *target = pairs[i].second->pose;
-      valid[i] = sampling::check_interpolation_validity(
-          source, target, n_dims, angular_dims,
-          num_interpolation_points, cached_perturbations, validity_checker);
-      if (!valid[i] || num_interpolation_points <= 1) {
+      const auto &u = pairs[i].first;
+      if (!u) {
+        valid[i] = false;
         continue;
       }
-      const int n_interior = num_interpolation_points - 1;
-      std::vector<float> traj(static_cast<size_t>(n_interior) * n_dims);
-      for (int k = 1; k < num_interpolation_points; ++k) {
-        float t = static_cast<float>(k) /
-                  static_cast<float>(num_interpolation_points);
-        sampling::interpolate_pose(source, target, t, n_dims, angular_dims,
-                                   traj.data() + (k - 1) * n_dims);
+      if (check_segment) {
+        const auto &v = pairs[i].second;
+        if (!v) {
+          valid[i] = false;
+          continue;
+        }
+        valid[i] = sampling::check_interpolation_validity(
+            u->pose, v->pose, n_dims, angular_dims, num_interpolation_points,
+            cached_perturbations, validity_checker);
       }
-      trajectories[i] = std::move(traj);
+      if (!valid[i] || n_ctrl <= 0 || u->intermediate_controls == nullptr) {
+        continue;
+      }
+      const float *ctrl = u->intermediate_controls;
+      trajectories[i].assign(ctrl, ctrl + n_ctrl);
     }
   }
 
@@ -283,7 +285,8 @@ struct NearMeet2PBVP {
     }
     if (solver == MeetSolver::geometric) {
       geometric_solve(pairs, valid, trajectories,
-                      std::forward<ValidityChecker>(validity_checker));
+                      std::forward<ValidityChecker>(validity_checker), n_cont,
+                      timesteps);
       return;
     }
     warn_mpc_solve_untested();
@@ -345,7 +348,9 @@ struct NearMeet2PBVP {
     std::vector<float> states(static_cast<size_t>(n_shoot) * n_dims);
     for (int m = 0; m < n_shoot; ++m) {
       const auto &u = pairs[static_cast<size_t>(shoot_ids[m])].first;
-      std::copy(u->pose, u->pose + n_dims,
+      // The stored control replaces the edge into u, so the rollout starts
+      // where that edge starts.
+      std::copy(u->parent->pose, u->parent->pose + n_dims,
                 states.begin() + static_cast<size_t>(m) * n_dims);
       for (int c = 0; c < n_cont; ++c) {
         mean[static_cast<size_t>(m) * n_cont + c] = u->intermediate_controls[c];
@@ -477,8 +482,9 @@ void solve_near_meet(
       0, 0, nullptr);
 }
 
-// The warmstart is applied at u, not at u->parent. A rollout that misses the
-// tolerance is not a meet. The held action is copied across timesteps.
+// The control replaces the edge into u, so the rollout starts at u->parent.
+// A rollout that misses the tolerance is not a meet. The held action is
+// copied across timesteps.
 inline bool mpc_shooting_self_check() {
   struct Node {
     float pose[2] = {};
@@ -494,6 +500,50 @@ inline bool mpc_shooting_self_check() {
   u->intermediate_controls = warm;
   auto v = std::make_shared<Node>();
   v->pose[0] = 2.f;
+  // Geometric returns the edge into u. Interpolation only accepts or rejects.
+  {
+    NearMeet2PBVP geometric;
+    geometric.n_dims = 1;
+    geometric.num_interpolation_points = 0;
+    geometric.num_perturbations = 0;
+    std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>> gpairs = {
+        {u, v}};
+    std::vector<bool> gvalid;
+    std::vector<std::vector<float>> gtraj;
+    auto mark = [](const std::vector<float *> &states, std::vector<bool> &results,
+                   bool ok) { results.assign(states.size(), ok); };
+    geometric.geometric_solve(
+        gpairs, gvalid, gtraj,
+        [&](const std::vector<float *> &states, std::vector<bool> &results) {
+          mark(states, results, true);
+        },
+        1, 2);
+    if (!gvalid[0] || gtraj[0].size() != 2 || gtraj[0][0] != 1.f ||
+        gtraj[0][1] != 7.f) {
+      return false;
+    }
+    geometric.num_interpolation_points = 4;
+    geometric.geometric_solve(
+        gpairs, gvalid, gtraj,
+        [&](const std::vector<float *> &states, std::vector<bool> &results) {
+          mark(states, results, true);
+        },
+        1, 2);
+    if (!gvalid[0] || gtraj[0].size() != 2 || gtraj[0][0] != 1.f) {
+      return false;
+    }
+    geometric.geometric_solve(
+        gpairs, gvalid, gtraj,
+        [&](const std::vector<float *> &states, std::vector<bool> &results) {
+          mark(states, results, false);
+        },
+        1, 2);
+    if (gvalid[0] || !gtraj[0].empty()) {
+      return false;
+    }
+  }
+  parent->pose[0] = 1.f;
+  u->pose[0] = 5.f;
   NearMeet2PBVP solver;
   solver.n_dims = 1;
   solver.num_perturbations = 0;
@@ -537,7 +587,7 @@ inline bool mpc_shooting_self_check() {
   };
   float tol[1] = {1e-3f};
   shoot(step, 1, 2, tol);
-  if (!valid[0] || !called || seen_state != u->pose[0] ||
+  if (!valid[0] || !called || seen_state != parent->pose[0] ||
       trajectories[0].size() != 2 || trajectories[0][0] != 1.f ||
       trajectories[0][1] != 1.f) {
     return false;
