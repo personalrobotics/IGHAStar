@@ -9,6 +9,7 @@ larger library. Curves pool every run that started with the same library size.
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import importlib.util
 import pickle
@@ -100,7 +101,7 @@ def library_size(planner) -> int:
     return len(planner.export_trajectory_library())
 
 
-def write_run(goal, donor, n_traj, curve, ok, cost, wall, first):
+def write_run(goal, donor, n_traj, curve, ok, cost, wall, first, shard_id=0, num_shards=1):
     OUT.mkdir(parents=True, exist_ok=True)
     name = f"g{goal:03d}_d{donor:03d}.pkl" if n_traj else f"g{goal:03d}_d{donor:03d}_n0.pkl"
     path = OUT / name
@@ -118,7 +119,8 @@ def write_run(goal, donor, n_traj, curve, ok, cost, wall, first):
             },
             f,
         )
-    csv_path = OUT / "runs.csv"
+    csv_name = "runs.csv" if num_shards == 1 else f"runs_shard{shard_id}.csv"
+    csv_path = OUT / csv_name
     new = not csv_path.is_file()
     with open(csv_path, "a", newline="") as f:
         w = csv.DictWriter(
@@ -143,9 +145,24 @@ def write_run(goal, donor, n_traj, curve, ok, cost, wall, first):
         )
 
 
-def run() -> None:
+def goal_list(data) -> np.ndarray:
+    return choose_goals(np.asarray(data["first_sol_expansions"]))
+
+
+def shard_of(items, shard_id: int, num_shards: int):
+    return [item for i, item in enumerate(items) if i % num_shards == shard_id]
+
+
+def mark_goal(goal: int) -> None:
+    dest = OUT / "goals"
+    dest.mkdir(parents=True, exist_ok=True)
+    np.savez(dest / f"p{int(goal):03d}.npz", goal=np.int32(goal))
+
+
+def run(shard_id: int = 0, num_shards: int = 1) -> None:
     data = np.load(PROBLEMS, allow_pickle=True)
-    goals = choose_goals(np.asarray(data["first_sol_expansions"]))
+    goals = goal_list(data)
+    mine = shard_of(list(goals), shard_id, num_shards)
     with open(CONFIG) as f:
         cfg = yaml.safe_load(f)
     info = cfg["experiment_info_default"]
@@ -153,14 +170,22 @@ def run() -> None:
     hyst = int(info["hysteresis"])
     planner = create_planner(cfg, bidirectional=False)
     rng = np.random.RandomState(SEED)
-    print(f"goals {len(goals)} limit {limit}", flush=True)
+    print(f"goals {len(goals)} mine {len(mine)} limit {limit}", flush=True)
     OUT.mkdir(parents=True, exist_ok=True)
-    for stale in OUT.glob("g*_d*.pkl"):
-        stale.unlink()
-    csv_path = OUT / "runs.csv"
-    if csv_path.is_file():
-        csv_path.unlink()
-    for goal in goals:
+    if num_shards == 1:
+        for stale in OUT.glob("g*_d*.pkl"):
+            if not stale.name.endswith("_n0.pkl"):
+                stale.unlink()
+        csv_path = OUT / "runs.csv"
+        if csv_path.is_file():
+            csv_path.unlink()
+    for goal in mine:
+        for stale in OUT.glob(f"g{int(goal):03d}_d*.pkl"):
+            if not stale.name.endswith("_n0.pkl"):
+                stale.unlink()
+        marker = OUT / "goals" / f"p{int(goal):03d}.npz"
+        if marker.is_file():
+            marker.unlink()
         picked = donors_for(planner, data, int(goal), rng)
         print(
             f"goal p{int(goal)} side={data['slot_side'][goal]} donors={len(picked)}",
@@ -173,6 +198,7 @@ def run() -> None:
         )
         print(f"  seed ok={ok} cost={cost:.3f} {wall:.1f}s", flush=True)
         if not ok:
+            mark_goal(int(goal))
             continue
         planner.record_solution_trajectory()
         for donor in picked:
@@ -182,7 +208,10 @@ def run() -> None:
                 data["obstacles"][goal], limit, hyst,
             )
             first = first_sol(curve)
-            write_run(int(goal), int(donor), n_traj, curve, ok, cost, wall, first)
+            write_run(
+                int(goal), int(donor), n_traj, curve, ok, cost, wall, first,
+                shard_id, num_shards,
+            )
             if ok:
                 planner.record_solution_trajectory()
             print(
@@ -190,6 +219,7 @@ def run() -> None:
                 f"cost={cost:.3f} {wall:.1f}s",
                 flush=True,
             )
+        mark_goal(int(goal))
 
 
 def group_cost(rows, max_exp):
@@ -213,14 +243,7 @@ def group_cost(rows, max_exp):
     return mean, ci
 
 
-def baseline() -> None:
-    """Same goal/donor pairs, searched with an empty library."""
-    data = np.load(PROBLEMS, allow_pickle=True)
-    with open(CONFIG) as f:
-        cfg = yaml.safe_load(f)
-    info = cfg["experiment_info_default"]
-    limit = int(info["max_expansions"])
-    hyst = int(info["hysteresis"])
+def baseline_pairs():
     pairs = []
     for path in sorted(OUT.glob("g*_d*.pkl")):
         if path.name.endswith("_n0.pkl"):
@@ -228,25 +251,43 @@ def baseline() -> None:
         with open(path, "rb") as f:
             row = pickle.load(f)
         pairs.append((int(row["goal_id"]), int(row["donor_id"])))
-    pairs = list(dict.fromkeys(pairs))
+    return list(dict.fromkeys(pairs))
+
+
+def mark_baseline(index: int) -> None:
+    dest = OUT / "baseline"
+    dest.mkdir(parents=True, exist_ok=True)
+    np.savez(dest / f"p{index:03d}.npz", pair=np.int32(index))
+
+
+def baseline(shard_id: int = 0, num_shards: int = 1) -> None:
+    """Same goal/donor pairs, searched with an empty library."""
+    data = np.load(PROBLEMS, allow_pickle=True)
+    with open(CONFIG) as f:
+        cfg = yaml.safe_load(f)
+    info = cfg["experiment_info_default"]
+    limit = int(info["max_expansions"])
+    hyst = int(info["hysteresis"])
+    pairs = baseline_pairs()
+    mine = [(i, pair) for i, pair in enumerate(pairs) if i % num_shards == shard_id]
     planner = create_planner(cfg, bidirectional=False)
     planner.import_trajectory_library([])
-    print(f"baseline pairs {len(pairs)}", flush=True)
-    for i, (goal, donor) in enumerate(pairs):
+    print(f"baseline pairs {len(pairs)} mine {len(mine)}", flush=True)
+    for n_done, (i, (goal, donor)) in enumerate(mine):
         out = OUT / f"g{goal:03d}_d{donor:03d}_n0.pkl"
-        if out.is_file():
-            continue
-        ok, curve, cost, wall = search(
-            planner, data["starts"][donor], data["goals"][goal],
-            data["obstacles"][goal], limit, hyst,
-        )
-        first = first_sol(curve)
-        write_run(goal, donor, 0, curve, ok, cost, wall, first)
-        print(
-            f"  {i + 1}/{len(pairs)} goal p{goal} start p{donor} "
-            f"ok={ok} first={first} cost={cost:.3f} {wall:.1f}s",
-            flush=True,
-        )
+        if not out.is_file():
+            ok, curve, cost, wall = search(
+                planner, data["starts"][donor], data["goals"][goal],
+                data["obstacles"][goal], limit, hyst,
+            )
+            first = first_sol(curve)
+            write_run(goal, donor, 0, curve, ok, cost, wall, first, shard_id, num_shards)
+            print(
+                f"  {n_done + 1}/{len(mine)} goal p{goal} start p{donor} "
+                f"ok={ok} first={first} cost={cost:.3f} {wall:.1f}s",
+                flush=True,
+            )
+        mark_baseline(i)
 
 
 def curve_color(size: int, largest: int):
@@ -316,15 +357,48 @@ def plot() -> None:
 
 
 def main() -> None:
-    if "--baseline" in sys.argv:
-        baseline()
+    global CONFIG, PROBLEMS, OUT
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=Path, default=CONFIG)
+    parser.add_argument("--problems", type=Path, default=PROBLEMS)
+    parser.add_argument("--out", type=Path, default=OUT)
+    parser.add_argument("--shard-id", type=int, default=0)
+    parser.add_argument("--num-shards", type=int, default=1)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--warmup", action="store_true")
+    parser.add_argument("--baseline", action="store_true")
+    parser.add_argument("--plot-only", action="store_true")
+    args = parser.parse_args()
+    CONFIG = args.config
+    PROBLEMS = args.problems
+    OUT = args.out
+    if args.num_shards < 1 or not (0 <= args.shard_id < args.num_shards):
+        raise SystemExit(
+            f"bad shard: shard-id={args.shard_id} num-shards={args.num_shards}"
+        )
+    if args.dry_run:
+        if args.baseline:
+            n = len(baseline_pairs())
+        else:
+            data = np.load(PROBLEMS, allow_pickle=True)
+            n = len(goal_list(data))
+        print(f"TOTAL {n}", flush=True)
+        return
+    if args.warmup:
+        with open(CONFIG) as f:
+            cfg = yaml.safe_load(f)
+        create_planner(cfg, bidirectional=False)
+        print("warmup ok", flush=True)
+        return
+    if args.plot_only:
         plot()
         return
-    if "--plot-only" in sys.argv:
+    if args.baseline:
+        baseline(args.shard_id, args.num_shards)
+    else:
+        run(args.shard_id, args.num_shards)
+    if args.num_shards == 1:
         plot()
-        return
-    run()
-    plot()
 
 
 if __name__ == "__main__":
