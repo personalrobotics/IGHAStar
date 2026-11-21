@@ -72,37 +72,29 @@ std::shared_ptr<SearchTree> export_search_tree(
   tree->poses.resize(N * n_dims);
   tree->g.resize(N);
   tree->f.resize(N);
-  tree->time.resize(N);
-  tree->hash.resize(N);
   tree->parents.resize(N);
   tree->levels.resize(N);
   tree->time_direction.resize(N);
   tree->discover_index.resize(N);
   tree->expand_index.resize(N);
   tree->has_edge.assign(N, 0);
-  tree->has_times.assign(N, 0);
   tree->edges.assign(static_cast<size_t>(N) * T * n_dims, 0.f);
   tree->edge_controls.assign(static_cast<size_t>(N) * T * n_cont, 0.f);
-  tree->intermediate_times.assign(static_cast<size_t>(N) * T, 0.f);
   for (int64_t i = 0; i < N; i++) {
     const Node &node = *nodes[i];
     std::copy(node.pose, node.pose + n_dims, tree->poses.begin() + i * n_dims);
     tree->g[i] = node.g;
     tree->f[i] = node.f;
-    tree->time[i] = node.time;
-    static_assert(sizeof(node.hash) == sizeof(tree->hash[i]), "hash is 8 bytes");
-    std::memcpy(&tree->hash[i], &node.hash, sizeof(tree->hash[i]));
     tree->levels[i] = node.level;
     tree->time_direction[i] = node.time_direction;
     tree->discover_index[i] = node.discover_index;
     tree->expand_index[i] = node.expand_index;
     tree->parents[i] = node.parent ? index.at(node.parent.get()) : -1;
     const size_t row = static_cast<size_t>(i) * T;
-    // The node stores a backward edge flipped. Parent-to-vertex order is the
-    // generator order, which is also the control order, so flip poses and
-    // clocks back together.
-    const bool backward = node.time_direction < 0;
     if (node.parent && node.intermediate_poses && T > 0) {
+      // The node stores a backward edge flipped. Parent-to-vertex order is the
+      // generator order, which is also the control order, so flip the poses back.
+      const bool backward = node.time_direction < 0;
       for (int t = 0; t < T; t++) {
         const int src = backward ? T - 1 - t : t;
         std::copy(node.intermediate_poses + src * n_dims,
@@ -115,14 +107,6 @@ std::shared_ptr<SearchTree> export_search_tree(
                   tree->edge_controls.begin() + row * n_cont);
       }
       tree->has_edge[i] = 1;
-    }
-    if (node.intermediate_times && T > 0) {
-      for (int t = 0; t < T; t++) {
-        const int src = backward ? T - 1 - t : t;
-        tree->intermediate_times[row + static_cast<size_t>(t)] =
-            node.intermediate_times[src];
-      }
-      tree->has_times[i] = 1;
     }
   }
   tree->best_cost = best_cost;
@@ -958,12 +942,6 @@ void bind_search_tree(py::module_ &m) {
       .def_property_readonly("f", [to_tensor](const SearchTree &t) {
         return to_tensor(t.f, {t.num_nodes}, torch::kFloat32);
       })
-      .def_property_readonly("time", [to_tensor](const SearchTree &t) {
-        return to_tensor(t.time, {t.num_nodes}, torch::kFloat32);
-      })
-      .def_property_readonly("hash", [to_tensor](const SearchTree &t) {
-        return to_tensor(t.hash, {t.num_nodes}, torch::kInt64);
-      })
       .def_property_readonly("levels", [to_tensor](const SearchTree &t) {
         return to_tensor(t.levels, {t.num_nodes}, torch::kInt32);
       })
@@ -990,13 +968,6 @@ void bind_search_tree(py::module_ &m) {
         return to_tensor(t.edge_controls,
                          {t.num_nodes, t.timesteps, t.control_dim},
                          torch::kFloat32);
-      })
-      .def_property_readonly("intermediate_times", [to_tensor](const SearchTree &t) {
-        return to_tensor(t.intermediate_times, {t.num_nodes, t.timesteps},
-                         torch::kFloat32);
-      })
-      .def_property_readonly("has_times", [to_tensor](const SearchTree &t) {
-        return to_tensor(t.has_times, {t.num_nodes}, torch::kUInt8).to(torch::kBool);
       })
       .def("path_to", &SearchTree::path_to, py::arg("index"),
            "Node indices from the root to `index`.")

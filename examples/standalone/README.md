@@ -148,8 +148,6 @@ Call `get_search_tree()` after `search()` returns. A later `search()` on the sam
 
 A unidirectional export is one `SearchTree`. Vertex `i` has state `poses[i]`. `parents[i]` is the index of the parent. The root parent is `-1`. `edges[i]` holds the poses from the parent to vertex `i` when `has_edge[i]` is true.
 
-`time[i]` is the arrival clock. It can differ from `g[i]`. `hash[i]` is the vertex hash. `hash[parents[i]]` is the parent hash. `intermediate_times[i]` holds one clock per pose in `edges[i]` when `has_times[i]` is true. A geometric edge has `has_times[i]` false, and that row of clocks is zero.
-
 `time_direction[i]` is `1` for a forward edge and `-1` for a backward edge. `discover_index[i]` is the expansion count when the search found vertex `i`. Draw the edge when `discover_index[i]` is less than or equal to the slider value.
 
 `path_to(best_index)` returns the indices from the root to the best goal vertex.
