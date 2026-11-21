@@ -36,16 +36,16 @@ inline const char *meet_config_error() {
 }
 
 // Search entry only. The self-check calls mpc_solve directly and does not warn.
+// The function-local static is initialized once, including across threads.
 inline void warn_mpc_solve_untested() {
-  static bool shown = false;
-  if (shown) {
-    return;
-  }
-  shown = true;
-  std::cerr << "\033[1;31m"
-            << "MPC_SOLVE IS UNTESTED AND SHOULD NOT BE USED. "
-            << "https://github.com/personalrobotics/IGHAStar/issues/57\n"
-            << "\033[0m";
+  static const bool shown = [] {
+    std::cerr << "\033[1;31m"
+              << "MPC_SOLVE IS UNTESTED AND SHOULD NOT BE USED. "
+              << "https://github.com/personalrobotics/IGHAStar/issues/57\n"
+              << "\033[0m";
+    return true;
+  }();
+  (void)shown;
 }
 
 enum class MeetSolver { geometric, mpc };
@@ -280,10 +280,10 @@ struct NearMeet2PBVP {
 
   // CEM over every meet that has a parent control. One rollout call per
   // iteration covers n_shoot x mpc_num_rollouts samples. The held action is
-  // repeated across timesteps while the controls are packed. The stored
-  // control is the lowest-cost sample of the last iteration's topk that is
-  // also inside tolerance. A parentless u is a meet only when its pose is
-  // already inside tolerance.
+  // repeated across timesteps while the controls are packed. topk refits the
+  // next distribution. The stored control is the lowest-cost sample of every
+  // last-iteration rollout that is also inside tolerance. A parentless u is a
+  // meet only when its pose is already inside tolerance.
   // shortcut: diagonal covariance, fixed seed, std may collapse to 0.
   // Upgrade path is a full covariance or an MPPI weight if topk shows up hot.
   template <typename NodeT, typename Rollout>
@@ -418,8 +418,7 @@ struct NearMeet2PBVP {
         const auto &target = pairs[static_cast<size_t>(shoot_ids[m])].second;
         int winner = -1;
         float best = no_cost;
-        for (int e = 0; e < k; ++e) {
-          const int r = rank[e];
+        for (int r = 0; r < n_rollouts; ++r) {
           const size_t s = static_cast<size_t>(m) * n_rollouts + r;
           if (!ok[s] ||
               !within_tolerance(finals.data() + s * n_dims, target->pose,
@@ -567,13 +566,13 @@ inline bool mpc_shooting_self_check() {
   if (valid[0]) {
     return false;
   }
-  // Lower cost outside the tolerance box, higher cost inside it. The winner
-  // is the last iteration's topk, so both samples have to be elite. One
-  // rollout sees only the outside sample.
+  // Lower cost outside the tolerance box, higher cost inside it. topk is 1,
+  // so the inside sample is not elite. It still wins because every
+  // last-iteration rollout is checked. One rollout sees only the outside sample.
   solver.n_dims = 2;
   solver.angular_dims.clear();
   solver.mpc_num_rollouts = 2;
-  solver.topk = 2;
+  solver.topk = 1;
   solver.cost_weights = {1.f, 100.f};
   u->parent = parent;
   u->intermediate_controls = warm;
