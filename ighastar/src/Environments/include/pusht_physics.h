@@ -5,6 +5,7 @@
 #include <chipmunk/chipmunk.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstring>
 
@@ -16,10 +17,32 @@ constexpr cpFloat kV = 20.0;
 constexpr cpFloat kAgentRadius = 15.0;
 constexpr cpFloat kTeeScale = 30.0;
 constexpr cpFloat kTeeLength = 4.0;
-// gym-pusht / Chipmunk: every shape uses this; contact μ = fa * fb.
-constexpr cpFloat kShapeFriction = 1.0;
+// Per-shape Chipmunk friction. Contact μ = fa * fb, and every shape uses this.
+// Default 1 keeps historical IGHA* PushT plans.
+// gym-pusht writes body.friction = 1, which pymunk ignores. Shapes stay at the
+// Chipmunk default of 0, so gym-pusht contacts are frictionless (μ = 0).
+// Set node_info.shape_friction to 0 to match gym-pusht.
+// ponytail: one process-wide value; the last pusht Environment constructed wins.
+// Each edge rebuilds the space, so a set before search is what the steps see.
+inline cpFloat &shape_friction_value() {
+  static cpFloat v = 1.0;
+  return v;
+}
+inline void set_shape_friction(cpFloat v) { shape_friction_value() = v; }
+inline cpFloat shape_friction() { return shape_friction_value(); }
 inline float contact_friction_mu() {
-  return static_cast<float>(kShapeFriction * kShapeFriction);
+  const cpFloat f = shape_friction();
+  return static_cast<float>(f * f);
+}
+inline void shape_friction_self_check() {
+  static const bool ok = [] {
+    set_shape_friction(0);
+    assert(contact_friction_mu() == 0.f);
+    set_shape_friction(1);
+    assert(contact_friction_mu() == 1.f);
+    return true;
+  }();
+  (void)ok;
 }
 constexpr int kStateDim = 10; // ax ay bx by ang avx avy bvx bvy bw
 constexpr int kDefaultSubsteps = 10;
@@ -50,7 +73,7 @@ inline void install_pen_handler(World &w) {
 
 inline void add_segment(cpSpace *space, cpVect a, cpVect b, cpFloat radius) {
   cpShape *shape = cpSegmentShapeNew(cpSpaceGetStaticBody(space), a, b, radius);
-  cpShapeSetFriction(shape, kShapeFriction);
+  cpShapeSetFriction(shape, shape_friction());
   cpSpaceAddShape(space, shape);
 }
 
@@ -68,7 +91,7 @@ inline World make_world() {
   w.agent = cpBodyNewKinematic();
   cpSpaceAddBody(w.space, w.agent);
   cpShape *agent_shape = cpCircleShapeNew(w.agent, kAgentRadius, cpvzero);
-  cpShapeSetFriction(agent_shape, kShapeFriction);
+  cpShapeSetFriction(agent_shape, shape_friction());
   cpSpaceAddShape(w.space, agent_shape);
 
   const cpFloat s = kTeeScale;
@@ -86,8 +109,8 @@ inline World make_world() {
 
   cpShape *sh1 = cpPolyShapeNew(w.block, 4, v1, cpTransformIdentity, 0.0);
   cpShape *sh2 = cpPolyShapeNew(w.block, 4, v2, cpTransformIdentity, 0.0);
-  cpShapeSetFriction(sh1, kShapeFriction);
-  cpShapeSetFriction(sh2, kShapeFriction);
+  cpShapeSetFriction(sh1, shape_friction());
+  cpShapeSetFriction(sh2, shape_friction());
   cpSpaceAddShape(w.space, sh1);
   cpSpaceAddShape(w.space, sh2);
 

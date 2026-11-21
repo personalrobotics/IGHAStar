@@ -149,6 +149,14 @@ public:
     qs_support_radius = node_info.contains("qs_support_radius")
                             ? node_info["qs_support_radius"].cast<float>()
                             : pusht_qs::kDefaultSupportRadius;
+    // First call checks 0 and 1, then leaves the default of 1.
+    pusht_physics::shape_friction_self_check();
+    const float shape_friction =
+        node_info.contains("shape_friction")
+            ? node_info["shape_friction"].cast<float>()
+            : 1.0f;
+    TORCH_CHECK(shape_friction >= 0.f, "shape_friction must be >= 0");
+    pusht_physics::set_shape_friction(shape_friction);
     n_succ = n_directions * int(action_radii.size()) + 1;
   }
 

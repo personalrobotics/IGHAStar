@@ -43,7 +43,8 @@ constexpr float kPi = 3.14159265358979323846f;
 
 // Equivalent circular support radius for ellipsoidal LS (px). Default ~ tee half-span.
 constexpr float kDefaultSupportRadius = 60.f;
-// Coulomb μ for agent–tee = Chipmunk fa*fb with fa=fb=kShapeFriction(=1).
+// Default Coulomb μ when shape_friction is omitted: fa*fb with fa=fb=1.
+// gym-pusht's effective shape friction is 0, so that μ is 0.
 constexpr float kContactFrictionMu = 1.f;
 
 // Device-safe float math (std:: variants are host-only under nvcc).
