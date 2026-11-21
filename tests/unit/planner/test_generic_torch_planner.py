@@ -439,6 +439,13 @@ def test_search_tree_holds_the_best_path_and_a_consistent_tree():
     parents, g, st = tree.parents, tree.g, tree.status
     assert n > tree.expansions > 0 and not tree.budget_exhausted
     assert tree.parents.shape == (n,) and tree.poses.shape == (n, 2)
+    assert tree.time.shape == (n,) and tree.hash.shape == (n,)
+    assert tree.intermediate_times.shape == (n, tree.timesteps)
+    assert tree.has_times.shape == (n,)
+    # Geometric successors carry no clocks. A zero row with a false mask is
+    # the whole contract; a shape check would pass for a filled clock too.
+    assert not bool(tree.has_times.any())
+    assert bool(torch.all(tree.intermediate_times == 0))
     # One root; every other parent is an expanded node, with a lower cost-to-come.
     assert int((parents == -1).sum()) == 1
     children = parents >= 0
@@ -464,6 +471,58 @@ def test_search_tree_holds_the_best_path_and_a_consistent_tree():
     has_edge = tree.has_edge
     assert bool(has_edge[children].all()) and not bool(has_edge[~children].any())
     torch.testing.assert_close(tree.edges[has_edge][:, -1], tree.poses[has_edge])
+
+
+def _assert_timed_edges(tree, dt):
+    """Exported clocks are generator order: one step of dt per substep, and the
+    last clock is the vertex time. Backward nodes store that row reversed, so
+    this fails if export forgets to unflip."""
+    timed = tree.has_times
+    assert tree.timesteps > 1 and int(timed.sum()) > 0
+    assert bool(torch.all(tree.intermediate_times[~timed] == 0))
+    clocks = tree.intermediate_times[timed]
+    step = clocks[:, 1:] - clocks[:, :-1]
+    torch.testing.assert_close(step, torch.full_like(step, dt))
+    torch.testing.assert_close(clocks[:, -1], tree.time[timed])
+    parents = tree.parents[timed]
+    assert bool((parents >= 0).all())
+    torch.testing.assert_close(clocks[:, 0], tree.time[parents] + dt)
+    torch.testing.assert_close(tree.edges[timed][:, -1], tree.poses[timed])
+    assert bool((tree.time_direction[timed] == (1 if dt > 0 else -1)).all())
+
+
+def test_search_tree_clocks_match_substeps_in_both_directions():
+    import yaml
+
+    standalone = HERE.parent.parent.parent / "examples" / "standalone"
+    sys.path.insert(0, str(standalone))
+    from utils import get_map, resolve_map_dir
+
+    with open(standalone / "Configs" / "kinematic_example.yml") as f:
+        configs = yaml.safe_load(f)
+    info = configs["experiment_info_default"]
+    info["max_expansions"] = 40
+    info["hysteresis"] = 40
+    case = configs["map"]["test_cases"]["case1"]
+    bitmap = get_map(
+        configs["map"]["name"],
+        map_dir=resolve_map_dir(configs["map"]["dir"]),
+        map_size=configs["map"]["size"],
+        node_info=info["node_info"],
+    )
+    planner = create_planner(configs, bidirectional=True)
+    planner.search(
+        torch.tensor(case["start"]),
+        torch.tensor(case["goal"]),
+        bitmap,
+        40,
+        40,
+        False,
+    )
+    exported = planner.get_search_tree()
+    dt = float(info["node_info"]["dt"])
+    _assert_timed_edges(exported["forward"], dt)
+    _assert_timed_edges(exported["backward"], -dt)
 
 
 def test_search_tree_of_a_budget_limited_search_keeps_its_open_vertices():
