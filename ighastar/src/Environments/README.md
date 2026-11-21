@@ -15,6 +15,7 @@ Four paths exist:
 Environments/
 ├── include/           # Header files (.h)
 │   ├── node.h             # Node and NodePtrCompare, included by every env
+│   ├── solve_2pbvp.h      # shared near-meet solver, geometric or mpc
 │   ├── trajectory_export.h # path and control tensors for get_best_path
 │   ├── lazy_index.h
 │   ├── kinematic.h
@@ -131,7 +132,17 @@ elevation representation only and rejects 4D tensors.
       std::vector<bool> &valid,
       std::vector<std::vector<float>> &trajectories);
   ```
-  2-point boundary-value solver for bidirectional near-meet checks. `pairs[i]` is a source node and a target node (the nodes, not just their coordinates, so the solver can use parent state). `valid[i]` is true when that connection is usable. `trajectories[i]` is the connecting states, row-major `[n_states * n_dims]` (empty if the solver does not return one). A single connection is a batch of size 1. `near_meet_config.solver` is `geometric` or `mpc`. An omitted solver is geometric. A near-meet call without `LCR` throws. `mpc` is the CEM rollout and requires its five parameters.
+  Solves one batch of near-meet pairs. `pairs[i]` holds the source node and the target node. The solver reads the source parent and the edge into the source. `valid[i]` is true when that pair is usable. One pair is a batch of size 1.
+
+  Call `near_meet_.load` from the constructor. Pass the state dimension, the controllability radius, the angular dimensions, and the control dimension.
+
+  Call `solve_near_meet` from this method when the environment has no rollout. `solver: mpc` then throws. An environment with a rollout calls `near_meet_.solve` and passes that rollout. `pusht_multi` does this. It also defines `realize_meet`. The trajectory library calls `realize_meet` only when `solver` is `mpc`.
+
+  `near_meet_config.solver` is `geometric` or `mpc`. An omitted solver is geometric. A near-meet call with no `LCR` key throws. The first `mpc` solve in a process prints a warning. Tests do not cover that solver.
+
+  For `geometric`, `trajectories[i]` is the control on the edge from the source parent to the source. Its length is `timesteps * n_cont`. The vector is empty when that edge does not exist. It is also empty when `solve_near_meet` passes a zero timestep count and a zero control dimension. Interpolation and perturbation only accept or reject the pair. They do not fill the vector. Set both counts to 0 to accept the pair and skip the segment check.
+
+  For `mpc`, `trajectories[i]` is a new control of the same length. The rollout starts at the source parent. The arrival must lie inside tolerance of the target. Set `mpc_num_rollouts`, `action_noise`, `num_iters`, `topk`, and `cost_function_weights`. `action_noise` has one entry per control. `cost_function_weights` has one entry per state dimension. A geometric config that sets any of those keys throws. A weight of -1 means `1/tolerance` on that dimension only.
 
 **sample_goals**
   ```cpp
@@ -171,6 +182,7 @@ elevation representation only and rejects 4D tensors.
 - `float resolution[n_dims];` - Resolution for each dimension.
 - `float tolerance[n_dims];` - Tolerance for each dimension.
 - `float division_factor;` - How much finer each search level is. `Node` reads it when building `index`.
+- `NearMeet2PBVP near_meet_;` - The shared near-meet solver. `solve_near_meet` and the library splice read it. Define `IGHASTAR_MEET_ANGULAR_DIMS(env)` as `env->near_meet_.angular_dims` when poses have angular dimensions. Without that macro, the parentless geometric shortcut does not wrap angles.
 
 ## Node Structure Requirements
 
@@ -180,7 +192,7 @@ Do not define `Node` in the environment header. Define `n_dims`, `n_cont`, `hash
 
 - `float pose[n_dims];` // State vector (e.g., [x, y, ...])
 - `float *intermediate_poses;` // States between the parent and this node, `timesteps * n_dims`. Reversed when `time_direction` is `-1`.
-- `float *intermediate_times;` // Clock of each of those states, `timesteps` values, reversed with the poses. Written when the edge is integrated (`fill_substep_times`). Null on a geometric edge.
+- `float *intermediate_times;` // One clock per intermediate pose, `timesteps` values. Reversed with the poses on a backward edge. The integrator calls `fill_substep_times` to write them. A geometric library meet copies the clocks already stored on the source. The parentless shortcut stamps every sample with the source time.
 - `float *intermediate_controls;` // Controls for that edge, `timesteps * n_cont`. `control[n_cont]` holds the first sample.
 - `float g, f;` // Cost-to-come and total cost
 - `float time;` // Arrival clock of this node. Set from the last generated substep. If no substep times were passed, it stays equal to `g`.
@@ -202,10 +214,12 @@ Node(const float *pose_in, const float *intermediate_poses_,
      const float *resolution_, const float *tolerance,
      float division_factor, int timesteps, const float *LCR_,
      int time_direction_ = 1,
-     const float *intermediate_controls_ = nullptr);
+     const float *intermediate_controls_ = nullptr,
+     const float *intermediate_times_ = nullptr, float time_in = 0.f,
+     bool time_is_set = false);
 ```
 
-The destructor frees `intermediate_poses` and `intermediate_controls`.
+The destructor frees `intermediate_poses`, `intermediate_times`, and `intermediate_controls`.
 
 `Node::g` is a cost plus the pose hash. `a->g < b->g` orders by cost, then hash. Comparisons with a bare float (`get_G`, `Omega`) use the cost only. `NodePtrCompare` orders the open set as a min-heap on `f`, then pose hash (`Node::f_before`).
 
