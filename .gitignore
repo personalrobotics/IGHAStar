@@ -238,6 +238,8 @@ test_*.cpp
 !tests/unit/environments/test_generic.cpp
 !tests/unit/environments/test_external_env.py
 !tests/unit/planner/test_generic_torch_planner.py
+!tests/unit/planner/test_resolution_switch.py
+!tests/unit/planner/test_cross_process_determinism.py
 
 # Large data files
 *.npz
