@@ -835,13 +835,12 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
   if (found == library.lcr.end()) {
     return out;
   }
-  // Every LCR hit goes into one solve. A failed connection must not hide
-  // another vertex of the same trajectory; the valid hit with the smallest
-  // spliced cost is the meet. A failed connection leaves the trajectory unused.
+  // Every LCR hit goes into one solve, then one edge build. Rank by the cost
+  // that edge actually stores. A failed edge leaves the trajectory free for
+  // another hit.
   struct Cand {
     int traj;
     int idx;
-    float spliced;
   };
   std::vector<Cand> cands;
   std::vector<std::pair<std::shared_ptr<Node>, std::shared_ptr<Node>>> pairs;
@@ -866,9 +865,7 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
     if (path.empty() || idx < 0 || idx >= static_cast<int>(path.size())) {
       continue;
     }
-    float dist = env->compute_near_meet_distance(u->pose, path[idx]->pose);
-    cands.push_back(
-        {traj, idx, u->g + dist + (path[0]->g - path[idx]->g)});
+    cands.push_back({traj, idx});
     pairs.emplace_back(u, path[idx]);
   }
   if (cands.empty()) {
@@ -880,33 +877,38 @@ attach_nearmeets(Library &library, const std::shared_ptr<Node> &u,
   struct Best {
     int idx;
     float spliced;
-    int pair;
+    MeetLink link;
   };
   igha::unordered_map<int, Best> best;
   for (size_t n = 0; n < cands.size(); ++n) {
     if (n >= valid.size() || !valid[n]) {
       continue;
     }
-    auto it = best.find(cands[n].traj);
-    if (it == best.end() || cands[n].spliced < it->second.spliced) {
-      best[cands[n].traj] = Best{cands[n].idx, cands[n].spliced,
-                                 static_cast<int>(n)};
+    const auto &path = library.trajs[cands[n].traj].path;
+    const int idx = cands[n].idx;
+    MeetLink link = connect_meet(env, u, path[idx], connections[n], 0);
+    if (!link.edge.ok) {
+      continue;
     }
+    const float base =
+        (link.from_parent && u->parent) ? u->parent->g : u->g;
+    const float spliced =
+        base + link.edge.cost + (path[0]->g - path[idx]->g);
+    auto it = best.find(cands[n].traj);
+    if (it != best.end() && !(spliced < it->second.spliced)) {
+      continue;
+    }
+    best[cands[n].traj] = Best{idx, spliced, std::move(link)};
   }
   for (const auto &kv : best) {
     const int traj = kv.first;
     const int k = kv.second.idx;
     const auto &path = library.trajs[traj].path;
-    const std::vector<float> &conn =
-        connections[static_cast<size_t>(kv.second.pair)];
     // Both solvers prefix the library vertex with u->parent. mpc integrates a
     // new edge from there. geometric reuses the edge that already reached u.
     // A parentless u keeps the interpolated shortcut under u.
-    MeetLink link = connect_meet(env, u, path[k], conn, 0);
+    const MeetLink &link = kv.second.link;
     const MeetEdge &edge = link.edge;
-    if (!edge.ok) {
-      continue;
-    }
     library.used[traj] = 1;
     const int stored = buffer_steps(library.trajs[traj].steps, env->timesteps);
     const std::shared_ptr<Node> meet_parent =

@@ -350,6 +350,10 @@ struct NearMeet2PBVP {
       const auto &u = pairs[static_cast<size_t>(shoot_ids[m])].first;
       // The stored control replaces the edge into u, so the rollout starts
       // where that edge starts.
+      // TODO: the trajectory library installs this replacement edge.
+      // Bidirectional search only reads valid and concatenates the original
+      // nodes. Unify them when ighastar.cpp can install the edge and adjust
+      // the cost. Until then the two callers stay different.
       std::copy(u->parent->pose, u->parent->pose + n_dims,
                 states.begin() + static_cast<size_t>(m) * n_dims);
       for (int c = 0; c < n_cont; ++c) {
