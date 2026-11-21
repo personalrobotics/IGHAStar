@@ -45,6 +45,7 @@ class Environment {
   float edge_cost;
   float max_agent_vel; // px/s; clamps PD; heuristic = block_dist / this
   float max_penetration_px; // invalidate Succ if pen deepens by more than this
+  float shape_friction = 1.f; // per-shape Chipmunk friction; contact μ = this squared
   bool use_quasistatic;     // Mason/Lynch QS (pusht_qs) vs Chipmunk
   float qs_support_radius;  // ellipsoidal LS ℓ = (2/3) R
 
@@ -149,14 +150,10 @@ public:
     qs_support_radius = node_info.contains("qs_support_radius")
                             ? node_info["qs_support_radius"].cast<float>()
                             : pusht_qs::kDefaultSupportRadius;
-    // First call checks 0 and 1, then leaves the default of 1.
-    pusht_physics::shape_friction_self_check();
-    const float shape_friction =
-        node_info.contains("shape_friction")
-            ? node_info["shape_friction"].cast<float>()
-            : 1.0f;
+    shape_friction = node_info.contains("shape_friction")
+                         ? node_info["shape_friction"].cast<float>()
+                         : 1.0f;
     TORCH_CHECK(shape_friction >= 0.f, "shape_friction must be >= 0");
-    pusht_physics::set_shape_friction(shape_friction);
     n_succ = n_directions * int(action_radii.size()) + 1;
   }
 
@@ -269,10 +266,10 @@ public:
     // (same sampling for Chipmunk and QS).
     std::vector<float> actions;
     actions.reserve(n_succ * n_cont);
+    const float mu = pusht_physics::contact_friction_mu(shape_friction);
     for (float r : action_radii) {
       pusht_qs::append_qs_ring_targets(node->pose, r, n_directions,
-                                       workspace_lo, workspace_hi,
-                                       pusht_physics::contact_friction_mu(),
+                                       workspace_lo, workspace_hi, mu,
                                        actions);
     }
     actions.push_back(node->pose[2]);
@@ -292,11 +289,11 @@ public:
         pusht_qs::step_from_snapshot(
             node->pose, actions[i * n_cont], actions[i * n_cont + 1], out,
             n_substeps, inter, max_agent_vel, &pen_inc, qs_support_radius,
-            workspace_lo, workspace_hi, pusht_physics::contact_friction_mu());
+            workspace_lo, workspace_hi, mu);
       } else {
         pusht_physics::step_from_snapshot(
             node->pose, actions[i * n_cont], actions[i * n_cont + 1], out,
-            n_substeps, inter, max_agent_vel, &pen_inc);
+            n_substeps, inter, max_agent_vel, &pen_inc, shape_friction);
       }
       memcpy(&next_states[i * n_dims], out, n_dims * sizeof(float));
       // Reject edges that deepen contact penetration by > max_penetration_px.
