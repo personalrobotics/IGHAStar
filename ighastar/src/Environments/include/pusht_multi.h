@@ -122,6 +122,9 @@ class Environment {
   float edge_cost;
   float max_agent_vel;
   float max_penetration_px;
+  // Contact overlap (px) the start and goal check allows. See start_overlap_px
+  // in the constructor.
+  float start_overlap_px;
   bool rearrange;     // pose goal per tee. Clear uses the exit box.
   bool close_right;   // fourth wall. Rearrange closes it. Clear leaves it open.
   // Two-agent constraints. Agent 0 keeps y >= agent_y_split (top half, y is up)
@@ -280,6 +283,16 @@ public:
     max_penetration_px = node_info.contains("max_penetration_px")
                              ? node_info["max_penetration_px"].cast<float>()
                              : 1.f;
+    // A state reached in contact overlaps by Chipmunk's contact slop and more
+    // while pushing. Over 450,401 nodes of a 20,000-expansion two-T search at
+    // max_penetration_px 1, the deepest pusher-T overlap was 1.82 px and the
+    // deepest T-T 1.62 px. Deeper overlap at the start or goal is refused.
+    // 0 refuses any overlap.
+    start_overlap_px = node_info.contains("start_overlap_px")
+                           ? node_info["start_overlap_px"].cast<float>()
+                           : 2.f;
+    if (!(start_overlap_px >= 0.f))
+      throw std::invalid_argument("pusht_multi start_overlap_px must be non-negative");
     // One agent moves per successor. The others are commanded to hold.
     n_succ = kNumAgents * (n_directions * int(action_radii.size()) + 1);
   }
@@ -660,7 +673,7 @@ public:
       }
     }
     return !pusht_multi_physics::overlaps_forbidden(pose, walls, n_walls,
-                                                   close_right);
+                                                   close_right, start_overlap_px);
   }
 
   bool check_validity_single(float *pose) {
