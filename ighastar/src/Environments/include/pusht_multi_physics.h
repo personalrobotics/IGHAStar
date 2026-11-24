@@ -386,12 +386,19 @@ inline void control_step(World &w, const float *target, int n_substeps,
   }
 }
 
-inline bool shapes_overlap(cpShape *a, cpShape *b) {
+// True when a and b overlap by more than allowed (pixels).
+// The depth is computed from the contact points: Chipmunk 7.0.3's
+// cpShapesCollide returns the distance with the wrong sign when it swaps the
+// shapes internally (a sorts after b by shape type, as a polygon before a
+// circle does), so a tee overlapping the pusher would read as separated.
+inline bool shapes_overlap(cpShape *a, cpShape *b, cpFloat allowed = 0.0) {
   if (!a || !b)
     return false;
   const cpContactPointSet set = cpShapesCollide(a, b);
   for (int i = 0; i < set.count; i++) {
-    if (set.points[i].distance < 0.0)
+    const cpFloat distance = cpvdot(
+        cpvsub(set.points[i].pointB, set.points[i].pointA), set.normal);
+    if (distance < -allowed)
       return true;
   }
   return false;
@@ -453,31 +460,39 @@ inline bool poly_hits_capsule(cpShape *poly, cpVect a, cpVect b, cpFloat radius)
   return best < radius;
 }
 
-inline bool shape_hits_segment(cpShape *shape, cpShape *segment) {
+// True when shape reaches more than allowed (pixels) into the segment's
+// capsule. The allowance is at most the capsule's radius, so a shape that
+// reaches the segment itself always hits.
+inline bool shape_hits_segment(cpShape *shape, cpShape *segment,
+                               cpFloat allowed = 0.0) {
   if (!shape || !segment)
     return false;
+  const cpFloat radius = cpSegmentShapeGetRadius(segment);
   return poly_hits_capsule(shape, cpSegmentShapeGetA(segment),
                            cpSegmentShapeGetB(segment),
-                           cpSegmentShapeGetRadius(segment));
+                           radius > allowed ? radius - allowed : 0.0);
 }
 
-// Start-state filter: overlapping shapes are invalid. Contact during a push
-// is allowed. Tee–tee overlap at the start is not.
+// Start-state filter: shapes overlapping by more than allowed (pixels) are
+// invalid. Chipmunk holds every contact at a small overlap, so a state the
+// search reaches while a push is in contact overlaps by up to about 2 px
+// (pusht_multi's start_overlap_px). Contact during a push is allowed.
 inline bool overlaps_forbidden(const float *s, const WallSpec *walls, int n_walls,
-                               bool include_right_wall = false) {
+                               bool include_right_wall = false,
+                               cpFloat allowed = 0.0) {
   thread_local World w{};
   load_snapshot(w, s, walls, n_walls, include_right_wall);
   for (int a = 0; a < kNumAgents; a++) {
     for (int i = 0; i < w.n_walls; i++) {
-      if (shapes_overlap(w.agent_shape[a], w.wall[i]))
+      if (shapes_overlap(w.agent_shape[a], w.wall[i], allowed))
         return true;
     }
     for (int i = 0; i < w.n_cut; i++) {
-      if (shapes_overlap(w.agent_shape[a], w.cut[i]))
+      if (shapes_overlap(w.agent_shape[a], w.cut[i], allowed))
         return true;
     }
     for (int b = a + 1; b < kNumAgents; b++) {
-      if (shapes_overlap(w.agent_shape[a], w.agent_shape[b]))
+      if (shapes_overlap(w.agent_shape[a], w.agent_shape[b], allowed))
         return true;
     }
   }
@@ -485,15 +500,15 @@ inline bool overlaps_forbidden(const float *s, const WallSpec *walls, int n_wall
     for (int k = 0; k < 2; k++) {
       cpShape *sh = w.tee_shape[t][k];
       for (int a = 0; a < kNumAgents; a++) {
-        if (shapes_overlap(sh, w.agent_shape[a]))
+        if (shapes_overlap(sh, w.agent_shape[a], allowed))
           return true;
       }
       for (int i = 0; i < w.n_walls; i++) {
-        if (shape_hits_segment(sh, w.wall[i]))
+        if (shape_hits_segment(sh, w.wall[i], allowed))
           return true;
       }
       for (int i = 0; i < w.n_cut; i++) {
-        if (shape_hits_segment(sh, w.cut[i]))
+        if (shape_hits_segment(sh, w.cut[i], allowed))
           return true;
       }
     }
@@ -502,7 +517,7 @@ inline bool overlaps_forbidden(const float *s, const WallSpec *walls, int n_wall
     for (int u = t + 1; u < kNumTees; u++) {
       for (int k = 0; k < 2; k++) {
         for (int m = 0; m < 2; m++) {
-          if (shapes_overlap(w.tee_shape[t][k], w.tee_shape[u][m]))
+          if (shapes_overlap(w.tee_shape[t][k], w.tee_shape[u][m], allowed))
             return true;
         }
       }
