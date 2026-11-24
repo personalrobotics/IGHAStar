@@ -16,6 +16,7 @@
 #include <pusht_physics.h>
 #include <pusht_qs.h>
 #include "lazy_index.h"
+#include "pusht_goal.h"
 
 using namespace std;
 
@@ -187,37 +188,20 @@ public:
     return sampling::default_sample_goals(this, std::move(start), std::move(goal));
   }
 
-  // Block xy (+ mild angle) distance — planning objective is seating the tee.
+  // Block xy distance. Yaw stays out; pusht_goal::block_distance is the one copy.
   float block_distance(float *pose, float *goal) {
-    float dx = pose[2] - goal[2];
-    float dy = pose[3] - goal[3];
-    // float dth = pose[4] - goal[4];
-    // while (dth > float(M_PI))
-    //   dth -= 2.f * float(M_PI);
-    // while (dth < -float(M_PI))
-    //   dth += 2.f * float(M_PI);
-    return std::sqrt(dx * dx + dy * dy);// + 40.0f * std::fabs(dth);
+    return pusht_goal::block_distance(pose, goal);
   }
 
   float distance(float *pose, float *goal) { return block_distance(pose, goal); }
 
   float heuristic(float *pose, float *goal) {
-    // Time lower bound when speed is capped; uncapped (vmax<=0) → no guidance.
-    return max_agent_vel > 0.f ? block_distance(pose, goal) / max_agent_vel
-                               : 0.f;
+    return pusht_goal::heuristic(pose, goal, max_agent_vel);
   }
 
   bool reached_goal_region(std::shared_ptr<Node> v,
                            std::shared_ptr<Node> goal) {
-    float dx = v->pose[2] - goal->pose[2];
-    float dy = v->pose[3] - goal->pose[3];
-    float dth = v->pose[4] - goal->pose[4];
-    while (dth > float(M_PI))
-      dth -= 2.f * float(M_PI);
-    while (dth < -float(M_PI))
-      dth += 2.f * float(M_PI);
-    return std::fabs(dx) < epsilon[2] && std::fabs(dy) < epsilon[3] &&
-           std::fabs(dth) < epsilon[4];
+    return pusht_goal::reached_goal(v->pose, goal->pose, epsilon);
   }
 
   bool in_workspace(float *pose) {
