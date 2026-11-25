@@ -4,6 +4,7 @@
 // Do not compile this file as a separate translation unit.
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -81,9 +82,13 @@ std::shared_ptr<SearchTree> export_search_tree(
   tree->expand_index.resize(N);
   tree->has_edge.assign(N, 0);
   tree->has_times.assign(N, 0);
-  tree->edges.assign(static_cast<size_t>(N) * T * n_dims, 0.f);
-  tree->edge_controls.assign(static_cast<size_t>(N) * T * n_cont, 0.f);
-  tree->intermediate_times.assign(static_cast<size_t>(N) * T, 0.f);
+  // PUSHT_SKIP_EDGES: poses and parents only. A 100-tick tree copies another
+  // full edge per node, and that second copy does not fit at 600k expansions.
+  const bool keep_edges = std::getenv("PUSHT_SKIP_EDGES") == nullptr;
+  const size_t edge_n = keep_edges ? static_cast<size_t>(N) * T : 0;
+  tree->edges.assign(edge_n * n_dims, 0.f);
+  tree->edge_controls.assign(edge_n * n_cont, 0.f);
+  tree->intermediate_times.assign(edge_n, 0.f);
   for (int64_t i = 0; i < N; i++) {
     const Node &node = *nodes[i];
     std::copy(node.pose, node.pose + n_dims, tree->poses.begin() + i * n_dims);
@@ -102,7 +107,7 @@ std::shared_ptr<SearchTree> export_search_tree(
     // generator order, which is also the control order, so flip poses and
     // clocks back together.
     const bool backward = node.time_direction < 0;
-    if (node.parent && node.intermediate_poses && T > 0) {
+    if (keep_edges && node.parent && node.intermediate_poses && T > 0) {
       for (int t = 0; t < T; t++) {
         const int src = backward ? T - 1 - t : t;
         std::copy(node.intermediate_poses + src * n_dims,
@@ -116,7 +121,7 @@ std::shared_ptr<SearchTree> export_search_tree(
       }
       tree->has_edge[i] = 1;
     }
-    if (node.intermediate_times && T > 0) {
+    if (keep_edges && node.intermediate_times && T > 0) {
       for (int t = 0; t < T; t++) {
         const int src = backward ? T - 1 - t : t;
         tree->intermediate_times[row + static_cast<size_t>(t)] =

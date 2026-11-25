@@ -572,18 +572,31 @@ public:
     return d;
   }
 
-  // Body xy plus a small angle term (40 px per radian), same scale single-T used.
-  // Without the angle term the search sits near the goal pose and misses epsilon.
+  // Per T: time to reach its body origin, plus time to its goal. The guess is
+  // the better T. Goal distance is body xy plus 40 px per radian of yaw.
+  // ponytail: straight line to the body origin, not a contact point. A T already
+  // at its goal still adds the travel back to it. Upgrade: nearest contact, and
+  // drop a T that already passes tee_at_goal.
   float h_rearrange(const float *pose, const float *goal) const {
-    float dist = 0.f;
+    float best = std::numeric_limits<float>::infinity();
     for (int i = 0; i < kNumTees; i++) {
       const int b = pusht_multi_physics::tee_pose(i);
       const float dx = pose[b] - goal[b];
       const float dy = pose[b + 1] - goal[b + 1];
       const float dth = wrap_angle(pose[b + 2] - goal[b + 2]);
-      dist += std::sqrt(dx * dx + dy * dy) + 40.f * std::fabs(dth);
+      const float goal_dist = std::sqrt(dx * dx + dy * dy) + 40.f * std::fabs(dth);
+      float approach = std::numeric_limits<float>::infinity();
+      for (int a = 0; a < kNumAgents; a++) {
+        const int ap = pusht_multi_physics::agent_pose(a);
+        const float ax = pose[ap] - pose[b];
+        const float ay = pose[ap + 1] - pose[b + 1];
+        approach = std::min(approach, std::sqrt(ax * ax + ay * ay));
+      }
+      best = std::min(best, approach + goal_dist);
     }
-    return max_agent_vel > 0.f ? dist / max_agent_vel : 0.f;
+    if (best == std::numeric_limits<float>::infinity())
+      best = 0.f;
+    return max_agent_vel > 0.f ? best / max_agent_vel : 0.f;
   }
 
   bool tee_at_goal(const float *pose, const float *goal, int tee) const {
